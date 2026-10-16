@@ -1,0 +1,17 @@
+# 비밀키
+.env
+*.env
+
+# 전사 원본과 실행 결과 (개인 대화 포함)
+*.jsonl
+meeting1_*
+out*/
+llm_raw/
+qa/
+data/
+
+# 파이썬, 맥
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

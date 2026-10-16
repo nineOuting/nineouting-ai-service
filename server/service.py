@@ -99,10 +99,10 @@ class Registry:
         with m.lock:
             if m.status == "ended":
                 log.warning("종료된 회의의 묶음 무시 meeting=%s batch=%s", m.meeting_id, n)
-                return {"result": "ignored", "reason": "ended", "batch": n}
+                return {"accepted": False, "result": "ignored", "reason": "ended", "batch": n}
             if n in m.seen_batches:
                 log.info("중복 묶음 무시 meeting=%s batch=%s", m.meeting_id, n)
-                return {"result": "duplicate", "batch": n}
+                return {"accepted": True, "result": "duplicate", "batch": n}
             gap = None
             if n > m.max_batch + 1:
                 gap = (m.max_batch + 1, n - 1)
@@ -119,7 +119,7 @@ class Registry:
             m.queue.put(("batch", a))
             self._ensure_worker(m)
             log.info("묶음 수신 meeting=%s batch=%s lines=%s edits=%s", m.meeting_id, n, len(a["lines"]), len(a["edits"]))
-        out = {"result": "accepted", "batch": n}
+        out = {"accepted": True, "result": "accepted", "batch": n}
         if gap:
             out["gap"] = {"from": gap[0], "to": gap[1]}
         return out
@@ -132,7 +132,7 @@ class Registry:
         with m.lock:
             if (name, at_ms) in m.seen_events:
                 log.info("중복 알림 무시 meeting=%s event=%s", m.meeting_id, name)
-                return {"result": "duplicate", "event": name}
+                return {"accepted": True, "result": "duplicate", "event": name}
             warning = self._transition_warning(m, name)
             m.seen_events.add((name, at_ms))
             m.events.append({"event": name, "atMs": at_ms})
@@ -148,7 +148,7 @@ class Registry:
                 m.warnings += 1
                 log.warning("알림 순서가 이상함 meeting=%s event=%s: %s", m.meeting_id, name, warning)
             log.info("알림 수신 meeting=%s event=%s atMs=%s", m.meeting_id, name, at_ms)
-        out = {"result": "accepted", "event": name}
+        out = {"accepted": True, "result": "accepted", "event": name}
         if warning:
             out["warning"] = warning
         return out

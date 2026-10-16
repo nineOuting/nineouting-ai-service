@@ -70,6 +70,7 @@ class TranscriptStore:
         self.lines = {}
         self.rev = {}
         self.deleted = set()
+        self.pending = {}                 # 아직 안 온 줄에 대한 수정 (줄이 오면 적용)
 
     def apply_batch(self, batch):
         for ln in batch.get("lines", []):
@@ -78,10 +79,20 @@ class TranscriptStore:
                 continue
             self.lines[i] = dict(ln)
             self.rev.setdefault(i, 0)
+            pe = self.pending.pop(i, None)    # 줄보다 수정이 먼저 왔던 경우
+            if pe and pe["rev"] > self.rev[i]:
+                self.rev[i] = pe["rev"]
+                self.lines[i]["text"] = pe["text"]
+                self.lines[i]["text_marked"] = pe.get("text_marked", pe["text"])
+                self.lines[i]["low_confidence"] = False
         for e in batch.get("edits", []):
             i = e["id"]
             if not e.get("deleted") and "text" not in e:
                 continue                      # 글자는 안 바뀐 edit(예: 화자 표시만 바뀜)은 무시
+            if not e.get("deleted") and i not in self.lines and i not in self.deleted:
+                if e["rev"] > self.pending.get(i, {}).get("rev", 0):
+                    self.pending[i] = dict(e)  # 줄이 아직 안 왔다: 보관
+                continue
             if e["rev"] <= self.rev.get(i, 0):
                 continue
             self.rev[i] = e["rev"]
@@ -657,6 +668,13 @@ def selftest():
     assert l12["text"] == "고침" and l12["low_confidence"] is False
     st.apply_batch({"lines": [], "edits": [{"id": 13, "rev": 1, "deleted": True}]})
     assert [l["id"] for l in st.snapshot()] == [12]
+    # 1-2) 줄보다 수정이 먼저 오면 보관했다가, 줄이 올 때 적용 (높은 rev만)
+    st.apply_batch({"lines": [], "edits": [{"id": 20, "rev": 1, "text": "옛 수정"}, {"id": 20, "rev": 2, "text": "새 수정"}]})
+    assert 20 not in [l["id"] for l in st.snapshot()]
+    st.apply_batch({"lines": [{"id": 20, "start_ms": 30000, "end_ms": 31000, "type": "final", "kind": None,
+                               "low_confidence": True, "text": "원본", "text_marked": "⟨원본⟩"}], "edits": []})
+    l20 = [l for l in st.snapshot() if l["id"] == 20][0]
+    assert l20["text"] == "새 수정" and l20["low_confidence"] is False and 20 not in st.pending
     # 2) 한글 숫자
     assert kor_to_int("삼십 오만 칠천 삼백 오십 팔") == 357358
     assert kor_to_int("만 원") == 10000 and kor_to_int("이백 명") == 200

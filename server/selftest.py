@@ -101,14 +101,14 @@ def test_api(cap):
     assert c.get("/health").json() == {"status": "ok"}
     mid = "m_1234"
     ev, bt = f"/internal/meetings/{mid}/events", f"/internal/meetings/{mid}/batches"
-    assert c.post(ev, json=load("meeting-event-start.json")).status_code == 202
+    assert c.post(ev, json=load("meeting-event-start.json")).status_code == 200
     r = c.post(bt, json=load("lines-batch-basic.json"))
-    assert r.status_code == 202 and r.json()["result"] == "accepted", r.text
+    assert r.status_code == 200 and r.json()["accepted"] is True and r.json()["batch"] == 7, r.text
     assert c.post(bt, json=load("lines-batch-basic.json")).json()["result"] == "duplicate"
     r = c.post(bt, json={"meetingId": mid, "batch": "x", "lines": []})
-    assert r.status_code == 422 and "batch" in r.json()["detail"], r.text
-    assert c.post(bt.replace(mid, "other"), json=load("lines-batch-basic.json")).status_code == 422
-    assert c.post(bt, content="not json", headers={"content-type": "application/json"}).status_code == 422
+    assert r.status_code == 400 and r.json()["error"] == "INVALID_INPUT" and "batch" in r.json()["detail"], r.text
+    assert c.post(bt.replace(mid, "other"), json=load("lines-batch-basic.json")).status_code == 400
+    assert c.post(bt, content="not json", headers={"content-type": "application/json"}).json()["error"] == "INVALID_INPUT"
     assert c.get(f"/internal/meetings/{mid}/status").json()["lastBatch"] == 7
     assert c.get("/internal/meetings/none/status").status_code == 404
 

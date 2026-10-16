@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-회의 전사 요약 (나): 회의 중 주기 요약.
+회의 중 주기 요약.
 
-(가) meeting_summary.py 와 같은 폴더에 두고 쓴다 (전사 저장소, 입력 정리, 검증기, 모델 호출을 가져다 쓴다).
+끝난 회의 요약(meeting_summary.py)과 같은 폴더에 두고 쓴다 (전사 저장소, 입력 정리, 검증기, 모델 호출을 가져다 쓴다).
 
 흐름
   1) 전사를 말이 끝난 시각(end_ms) 기준으로 고정 길이 창(기본 120초)으로 나눈다.
@@ -786,7 +786,7 @@ def selftest():
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description="회의 전사 요약 (나): 회의 중 주기 요약")
+    ap = argparse.ArgumentParser(description="회의 중 주기 요약")
     ap.add_argument("--selftest", action="store_true", help="자체 시험만 실행 (비용 없음)")
     sub = ap.add_subparsers(dest="cmd")
 

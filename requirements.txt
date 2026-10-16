@@ -1,0 +1,4 @@
+fastapi==0.143.2
+uvicorn==0.54.0
+# 시험(server/selftest.py)의 HTTP 부분에만 필요
+httpx==0.28.1

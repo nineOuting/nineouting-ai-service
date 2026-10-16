@@ -9,5 +9,11 @@ MODEL_SHA256 = {
     "model.safetensors": "44f418d707a01d4fb443823f5df26757f905cedf450a4c9c48860ade42d0630b",
     "tokenizer.json": "ef04f2b385d1514f500e779207ace0f53e30895ce37563179e29f4022d28ca38",
 }
+# fetch_model 이 받을 파일. 레포의 다른 파일(변환본 등)은 받지 않는다
+MODEL_FILES = [
+    "config.json", "config_sentence_transformers.json", "modules.json", "sentence_bert_config.json",
+    "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json", "model.safetensors",
+    "1_Pooling/*",
+]
 EMBED_DIM = 384
 MAX_TOKENS = 512          # 조각 하나의 임베딩 입력 상한 (접두어·특수 토큰 포함)

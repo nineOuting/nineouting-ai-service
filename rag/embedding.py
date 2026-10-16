@@ -33,8 +33,12 @@ class E5Embedder:
 
         if threads:
             torch.set_num_threads(threads)
-        self._model = SentenceTransformer(name, revision=revision, device=device,
-                                          local_files_only=local_files_only)
+        try:
+            self._model = SentenceTransformer(name, revision=revision, device=device,
+                                              local_files_only=local_files_only)
+        except OSError as e:
+            raise OSError(f"캐시에 모델 없음 ({name}@{revision[:7]}). "
+                          "`.venv/bin/python -m rag.fetch_model` 로 받는다") from e
         self._tokenizer = self._model.tokenizer
         if self._model.max_seq_length < MAX_TOKENS:
             raise RuntimeError(f"모델 입력 상한 {self._model.max_seq_length} 이 {MAX_TOKENS} 보다 작음")

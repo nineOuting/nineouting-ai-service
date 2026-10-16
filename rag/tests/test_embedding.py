@@ -1,5 +1,7 @@
-"""실제 모델을 쓰는 시험. 캐시에 모델이 없으면 건너뛴다 (내려받지 않는다)."""
+"""실제 모델을 쓰는 시험. 캐시에 모델이 없으면 건너뛴다 (내려받지 않는다).
+RAG_REQUIRE_MODEL=1 이면 건너뛰지 않고 실패시킨다 (CI 용)."""
 import math
+import os
 
 import pytest
 
@@ -8,13 +10,20 @@ from rag.config import EMBED_DIM, MAX_TOKENS
 from rag.models import Piece
 
 
+def _no_model(e):
+    msg = f"모델 없음: `.venv/bin/python -m rag.fetch_model` 로 받는다 ({type(e).__name__})"
+    if os.environ.get("RAG_REQUIRE_MODEL") == "1":
+        pytest.fail(msg)
+    pytest.skip(msg)
+
+
 @pytest.fixture(scope="module")
 def embedder():
     from rag.embedding import E5Embedder
     try:
         return E5Embedder(threads=2)
     except OSError as e:
-        pytest.skip(f"캐시에 모델 없음: {type(e).__name__}")
+        _no_model(e)
 
 
 def test_모델_파일_체크섬():
@@ -22,7 +31,7 @@ def test_모델_파일_체크섬():
     try:
         verify_model_files()
     except OSError as e:
-        pytest.skip(f"캐시에 모델 없음: {type(e).__name__}")
+        _no_model(e)
 
 
 def test_차원과_정규화와_결정성(embedder):

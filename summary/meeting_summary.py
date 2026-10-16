@@ -80,6 +80,8 @@ class TranscriptStore:
             self.rev.setdefault(i, 0)
         for e in batch.get("edits", []):
             i = e["id"]
+            if not e.get("deleted") and "text" not in e:
+                continue                      # 글자는 안 바뀐 edit(예: 화자 표시만 바뀜)은 무시
             if e["rev"] <= self.rev.get(i, 0):
                 continue
             self.rev[i] = e["rev"]

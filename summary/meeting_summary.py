@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-회의 전사 요약 (가): 끝난 회의의 전사 전체를 LLM에 한 번 넣어 summary[]를 만든다.
+끝난 회의 요약: 끝난 회의의 전사 전체를 LLM에 한 번 넣어 summary[]를 만든다.
 
 흐름
   1) TranscriptStore  : STT 전송 묶음(lines / edits)을 받아 최신 전사 상태를 유지
@@ -80,6 +80,8 @@ class TranscriptStore:
             self.rev.setdefault(i, 0)
         for e in batch.get("edits", []):
             i = e["id"]
+            if not e.get("deleted") and "text" not in e:
+                continue                      # 글자는 안 바뀐 edit(예: 화자 표시만 바뀜)은 무시
             if e["rev"] <= self.rev.get(i, 0):
                 continue
             self.rev[i] = e["rev"]
@@ -684,7 +686,7 @@ def selftest():
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description="회의 전사 요약 (가)")
+    ap = argparse.ArgumentParser(description="끝난 회의 요약")
     ap.add_argument("--input", default="meeting1_full_transcript.jsonl", help="STT 전사 jsonl")
     ap.add_argument("--out", default="out", help="결과 폴더")
     ap.add_argument("--provider", default="mock", choices=["mock", "gemini", "anthropic", "openai"])

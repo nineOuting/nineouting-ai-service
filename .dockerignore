@@ -1,0 +1,12 @@
+.git
+.env
+.vscode
+__pycache__
+*.pyc
+*.jsonl
+data/
+qa/
+out*/
+llm_raw/
+docs/
+examples/

@@ -11,6 +11,8 @@ import logging
 import os
 
 from fastapi import Body, FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from .service import Registry, ConfigError, AdapterError, cfg_from_env
 
@@ -24,25 +26,35 @@ app = FastAPI(title="nineouting ai-service")
 registry = Registry(cfg_from_env())          # 잘못된 설정이면 서버가 뜨지 않는다
 
 
+def invalid(detail):
+    """형식 오류 응답: 400 + INVALID_INPUT (입력 형식 문서 7장)"""
+    return JSONResponse(status_code=400, content={"error": "INVALID_INPUT", "detail": detail})
+
+
+@app.exception_handler(RequestValidationError)
+def on_bad_body(request, exc):
+    return invalid("요청 본문이 JSON 객체가 아님")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-@app.post(EVENTS_PATH, status_code=202)
+@app.post(EVENTS_PATH)
 def post_event(meeting_id: str, msg: dict = Body(...)):
     try:
         return registry.receive_event(meeting_id, msg)
     except AdapterError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        return invalid(str(e))
 
 
-@app.post(BATCHES_PATH, status_code=202)
+@app.post(BATCHES_PATH)
 def post_batch(meeting_id: str, msg: dict = Body(...)):
     try:
         return registry.receive_batch(meeting_id, msg)
     except AdapterError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        return invalid(str(e))
 
 
 @app.get("/internal/meetings/{meeting_id}/status")

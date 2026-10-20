@@ -28,6 +28,7 @@ EVENTS_PATH = "/internal/meetings/{meeting_id}/events"
 BATCHES_PATH = "/internal/meetings/{meeting_id}/batches"
 AGENDAS_PATH = "/internal/meetings/{meeting_id}/agendas"                    # 안건 목록 전체 (PUT)
 CORRECTIONS_PATH = "/internal/meetings/{meeting_id}/agenda-corrections"    # 사람이 고친 분류 (POST)
+SUMMARY_EDITS_PATH = "/internal/meetings/{meeting_id}/agenda-summary-edits"  # 사람이 고친 요약 문장 (POST)
 
 metrics = Metrics(default_readers(os.environ))
 meeting_summary.USAGE_HOOK = metrics.record_token_usage          # 모델을 부를 때마다 토큰 사용량을 지표로 남긴다
@@ -112,6 +113,16 @@ def put_agendas(meeting_id: str, msg: dict = Body(...)):
 def post_corrections(meeting_id: str, msg: dict = Body(...)):
     try:
         return registry.receive_corrections(meeting_id, msg)
+    except NotReady as e:
+        return not_ready(str(e))
+    except AdapterError as e:
+        return invalid(str(e))
+
+
+@app.post(SUMMARY_EDITS_PATH)
+def post_summary_edits(meeting_id: str, msg: dict = Body(...)):
+    try:
+        return registry.receive_summary_edits(meeting_id, msg)
     except NotReady as e:
         return not_ready(str(e))
     except AdapterError as e:

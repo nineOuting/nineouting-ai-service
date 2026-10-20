@@ -31,10 +31,12 @@ SUMMARY_DIR = os.path.abspath(os.path.join(HERE, "..", "summary"))
 if SUMMARY_DIR not in sys.path:
     sys.path.insert(0, SUMMARY_DIR)
 
-from input_adapter import adapt_batch, adapt_event, adapt_agendas, adapt_corrections, AdapterError  # noqa: E402
+from input_adapter import (adapt_batch, adapt_event, adapt_agendas, adapt_corrections, adapt_summary_edits,  # noqa: E402
+                           AdapterError)
 from meeting_live_summary_v2 import LiveSummarizer, Cfg  # noqa: E402
 from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
-from .publisher import AGENDA_CLASSIFICATION  # noqa: E402
+from agenda_summarizer import AgendaSummarizer, SummarizeCfg  # noqa: E402
+from .publisher import AGENDA_CLASSIFICATION, AGENDA_BOARD  # noqa: E402
 
 log = logging.getLogger("ai-service")
 
@@ -97,11 +99,29 @@ def classify_cfg_from_env(env=None, cfg=None):
     return ClassifyCfg(**kw)
 
 
+def summarize_cfg_from_env(env=None, cfg=None):
+    """환경변수 -> 안건별 요약 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
+    AGENDA_SUMMARY_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), MAX_AGENDA_SUMMARY_CALLS_PER_MEETING(회의당 호출 상한, 기본 300)
+    """
+    env = os.environ if env is None else env
+    cfg = cfg or cfg_from_env(env)
+    kw = {"provider": cfg.provider, "model": cfg.model}
+    for name, key in (("refresh_sec", "AGENDA_SUMMARY_REFRESH_SEC"), ("max_calls", "MAX_AGENDA_SUMMARY_CALLS_PER_MEETING")):
+        if env.get(key):
+            try:
+                kw[name] = int(env[key])
+            except ValueError:
+                raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+    return SummarizeCfg(**kw)
+
+
 class MeetingState:
-    def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None):
+    def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None, summarize_cfg=None, summarize_llm=None):
         self.meeting_id = meeting_id
+        self.id_raw = meeting_id            # 백엔드가 보낸 meetingId 의 원래 값(숫자일 수 있음). 돌려보내는 본문에 쓴다
         self.summarizer = LiveSummarizer(meeting_id, cfg, llm=llm, verbose=False)
         self.classifier = AgendaClassifier(meeting_id, classify_cfg, llm=classify_llm)
+        self.agenda_summarizer = AgendaSummarizer(self.classifier, summarize_cfg, llm=summarize_llm)   # 분류 결과를 읽어 안건별로 요약
         self.cls_version = 0                # 백엔드로 보낸 안건 분류 결과의 마지막 version
         self.status = "new"                 # new -> running <-> paused -> ended
         self.lock = threading.Lock()
@@ -119,13 +139,16 @@ class MeetingState:
 
 
 class Registry:
-    def __init__(self, cfg, llm=None, publisher=None, env=None, classify_cfg=None, classify_llm=None):
+    def __init__(self, cfg, llm=None, publisher=None, env=None, classify_cfg=None, classify_llm=None,
+                 summarize_cfg=None, summarize_llm=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
         self.publisher = publisher
         self.env = os.environ if env is None else env
         self.classify_cfg = classify_cfg or classify_cfg_from_env(self.env, cfg)
         self.classify_llm = classify_llm    # 시험용: 안건 분류에서 모델 호출 대신 쓸 함수
+        self.summarize_cfg = summarize_cfg or summarize_cfg_from_env(self.env, cfg)
+        self.summarize_llm = summarize_llm  # 시험용: 안건별 요약에서 모델 호출 대신 쓸 함수
         self.shutting_down = False
         self.meetings = {}
         self.lock = threading.Lock()
@@ -146,11 +169,14 @@ class Registry:
             raise NotReady(why)
 
     # ---------------- 받기 ----------------
-    def _get(self, meeting_id):
+    def _get(self, meeting_id, raw_id=None):
         with self.lock:
             m = self.meetings.get(meeting_id)
             if m is None:
-                m = self.meetings[meeting_id] = MeetingState(meeting_id, self.cfg, self.llm, self.classify_cfg, self.classify_llm)
+                m = self.meetings[meeting_id] = MeetingState(meeting_id, self.cfg, self.llm, self.classify_cfg, self.classify_llm,
+                                                             self.summarize_cfg, self.summarize_llm)
+                if raw_id is not None:
+                    m.id_raw = raw_id
             return m
 
     @staticmethod
@@ -162,7 +188,7 @@ class Registry:
         self._require_ready()
         a = adapt_batch(msg)                                   # 형식이 틀리면 AdapterError
         self._check_same_id(path_meeting_id, a["meeting_id"])
-        m = self._get(a["meeting_id"])
+        m = self._get(a["meeting_id"], a.get("meeting_id_raw"))
         n = a["seq"]
         with m.lock:
             if m.status == "ended":
@@ -191,7 +217,7 @@ class Registry:
         self._require_ready()
         ev = adapt_event(msg)
         self._check_same_id(path_meeting_id, ev["meeting_id"])
-        m = self._get(ev["meeting_id"])
+        m = self._get(ev["meeting_id"], ev.get("meeting_id_raw"))
         name, at_ms = ev["event"], ev["at_ms"]
         with m.lock:
             if (name, at_ms) in m.seen_events:
@@ -222,7 +248,7 @@ class Registry:
         self._require_ready()
         a = adapt_agendas(msg)
         self._check_same_id(path_meeting_id, a["meeting_id"])
-        m = self._get(a["meeting_id"])
+        m = self._get(a["meeting_id"], a.get("meeting_id_raw"))
         with m.lock:
             if m.status == "ended":
                 return {"accepted": False, "result": "ignored", "reason": "ended"}
@@ -239,7 +265,7 @@ class Registry:
         self._require_ready()
         c = adapt_corrections(msg)
         self._check_same_id(path_meeting_id, c["meeting_id"])
-        m = self._get(c["meeting_id"])
+        m = self._get(c["meeting_id"], c.get("meeting_id_raw"))
         with m.lock:
             if m.status == "ended":
                 return {"accepted": False, "result": "ignored", "reason": "ended"}
@@ -249,6 +275,21 @@ class Registry:
             m.queue.put(("tick", None))
             self._ensure_worker(m)
         return {"accepted": True, "result": "accepted" if applied else "stale", "applied": applied}
+
+    def receive_summary_edits(self, path_meeting_id, msg):
+        """사람이 고친 요약 문장 (agenda-summary-contract.md 5장)."""
+        self._require_ready()
+        e = adapt_summary_edits(msg)
+        self._check_same_id(path_meeting_id, e["meeting_id"])
+        m = self._get(e["meeting_id"], e.get("meeting_id_raw"))
+        with m.lock:
+            if m.status == "ended":
+                return {"accepted": False, "result": "ignored", "reason": "ended"}
+        r = m.agenda_summarizer.apply_edits(e["edits"])
+        if r["applied"]:
+            m.queue.put(("tick", None))                         # 고친 안건은 기다리지 않고 다음 주기에 다시 요약한다
+            self._ensure_worker(m)
+        return {"accepted": True, "result": "accepted" if r["applied"] else "stale", "applied": r["applied"], "ignored": r["ignored"]}
 
     @staticmethod
     def _transition_warning(m, name):
@@ -275,6 +316,7 @@ class Registry:
                 if kind == "batch":
                     self._step(m, "batch", lambda: (m.summarizer.receive(payload), self._maybe_publish(m, final=False)))
                     self._step(m, "classify", lambda: self._classify(m, batch=payload))
+                    self._step(m, "agenda_summary", lambda: self._agenda_summary(m))
                 elif kind == "end":
                     def finish_summary():
                         m.summarizer.now_ms = max(m.summarizer.now_ms, payload["at_ms"])
@@ -282,8 +324,10 @@ class Registry:
                         self._maybe_publish(m, final=True)
                     self._step(m, "end", finish_summary)
                     self._step(m, "classify", lambda: self._classify(m, end_ms=payload["at_ms"], final=True))
+                    self._step(m, "agenda_summary", lambda: self._agenda_summary(m, final=True))
                 elif kind == "tick":
                     self._step(m, "classify", lambda: self._classify(m))
+                    self._step(m, "agenda_summary", lambda: self._agenda_summary(m))
             finally:
                 m.queue.task_done()
 
@@ -311,9 +355,18 @@ class Registry:
         if r is None:
             return
         m.cls_version = max(m.cls_version + 1, int(time.time() * 1000))     # 재시작해도 줄어들지 않도록 시각(밀리초) 이상으로
-        payload = {"schemaVersion": r["schemaVersion"], "meetingId": r["meetingId"], "version": m.cls_version,
+        payload = {"schemaVersion": r["schemaVersion"], "meetingId": m.id_raw, "version": m.cls_version,
                    **{k: v for k, v in r.items() if k not in ("schemaVersion", "meetingId")}}
         self.publisher.submit(m.meeting_id, payload, kind=AGENDA_CLASSIFICATION)
+
+    def _agenda_summary(self, m, final=False):
+        """분류를 마친 직후 안건별 요약을 갱신하고, 바뀐 안건 보드 전체 상태를 백엔드로 보낸다."""
+        m.agenda_summarizer.process(final=final)
+        if self.publisher is None or not self.publisher.enabled:
+            return
+        board = m.agenda_summarizer.take_board()
+        if board is not None:
+            self.publisher.submit(m.meeting_id, board, kind=AGENDA_BOARD)
 
     def _maybe_publish(self, m, final):
         """요약이 바뀌었으면(또는 종료이면) 백엔드로 보낼 목록에 올린다."""
@@ -327,7 +380,7 @@ class Registry:
         m.version = max(m.version + 1, int(time.time() * 1000))   # 재시작해도 줄어들지 않도록 시각(밀리초) 이상으로
         self.publisher.submit(m.meeting_id, {
             "schemaVersion": "0.1",
-            "meetingId": m.meeting_id,
+            "meetingId": m.id_raw,
             "version": m.version,
             "atMs": m.summarizer.now_ms,
             "final": final,
@@ -367,5 +420,6 @@ class Registry:
                 "provider": self.cfg.provider,
                 "summaryVersion": m.version,
                 "agendaClassification": {**m.classifier.info(), "version": m.cls_version},
+                "agendaSummary": m.agenda_summarizer.info(),
                 "publisher": self.publisher.info() if self.publisher else {"enabled": False},
             }

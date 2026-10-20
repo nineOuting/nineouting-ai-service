@@ -8,8 +8,11 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 |---|---|
 | 회의록 로더, 512토큰 나누기, 임베딩 | 구현 |
 | 저장(pgvector, 버전 교체), 검색(workspaceId + docIds) | 구현 (함수까지, HTTP 없음) |
-| 대기열·작업자, 완료 콜백 | 구현 (접수는 `jobs.submit()`, HTTP 없음) |
-| API, PDF·워드·엑셀, 답변 | 예정 |
+| 대기열·작업자, 완료 콜백 | 구현 |
+| 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
+| 업로드 문서(PDF·워드·엑셀), 답변 | 예정 |
+
+원본 명세는 노션 "RAG 인터페이스 명세".
 
 ## 준비 (저장소 루트에서)
 
@@ -80,6 +83,36 @@ set -a; . rag/.env; set +a                # 환경변수로 불러오기 (현재
 
 - 앱 계정 `rag_app` 은 관리자 권한이 없다 (운영의 전용 계정과 같은 조건)
 
+## 내부 API (백엔드 → AI 서버)
+
+`server/main.py` 에 라우터로 붙는다. `RAG_DATABASE_URL` 이 있을 때만 붙고, 없으면 요약만 뜬다.
+
+**아래는 모두 같은 터미널에서 한다.** `rag/.env` 를 불러오지 않은 터미널에서 서버를 띄우면 RAG 가 꺼진 채로 떠서 RAG 주소가 `404 Not Found` 가 된다.
+
+```bash
+cd <저장소 루트> && set -a && . rag/.env && set +a
+.venv/bin/pip install -r requirements.txt       # 요약 서버 의존성 (처음 한 번)
+# DB 띄우기 (Homebrew 기준, 위 "DB" 참고). pg_ctl 은 전체 경로로 쓴다
+/opt/homebrew/opt/postgresql@17/bin/pg_ctl -D /opt/homebrew/var/postgresql@17 -l /opt/homebrew/var/log/postgresql@17.log start
+.venv/bin/python -m rag.migrate                 # 새 마이그레이션이 있을 때마다
+.venv/bin/uvicorn server.main:app --port 8000   # 로그에 "RAG 작업자 시작" 이 나오면 준비 끝
+```
+
+- 브라우저로 http://127.0.0.1:8000/docs 를 열면 주소별 설명·필드·예시가 있고, "Try it out" 으로 직접 호출할 수 있다
+- `RAG_WORKER_IN_PROCESS=0` 이면 작업자는 띄우지 않는다 (`python -m rag.worker` 로 따로)
+
+| 주소 | 응답 |
+|---|---|
+| `POST /internal/rag/documents` | 202 `{docId, docVersion, status: "accepted"}` |
+| `GET /internal/rag/documents/{docId}` | 200 `{docId, docVersion, status, errorCode, chunkCount}`, 없으면 404 |
+| `DELETE /internal/rag/documents/{docId}` | 204 (없어도) |
+| `DELETE /internal/rag/workspaces/{workspaceId}` | 204 |
+
+- 상태 값은 `accepted` / `processing` / `ready` / `failed` (DB 의 `queued` 를 `accepted` 로 보여 줌)
+- 명세에 없어서 AI 쪽이 정한 것 (확인 필요): 입력 오류 400 `{"error": "INVALID_INPUT"}`, 같은 `docId` 가 다른 워크스페이스로 오면 409 `CONFLICT`, DB 를 쓸 수 없으면 503 `NOT_READY`, 넣기 응답 코드 202
+- 지금은 `sourceType=minutes` 만 받는다. `upload` 는 400 (준비 중)
+- 서버 간 인증은 `api.verify_internal_request` 자리만 있다 (CN팀 방식 대기)
+
 ## 작업자
 
 접수(`jobs.submit()`)는 문서를 `queued` 로 두고 작업 표(`rag_jobs`)에 적기만 한다. 작업자가 꺼내서 로더 → 나누기 → 임베딩 → 저장을 하고 완료 콜백을 보낸다.
@@ -112,6 +145,10 @@ set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면
 | `RAG_TEST_DATABASE_URL` | 시험 DB 주소. 시험마다 표를 비우므로 개발 DB 주소를 넣지 않는다 |
 | `RAG_REQUIRE_DB=1` | 시험 DB 에 접속할 수 없으면 건너뛰지 않고 실패시킨다 (CI 용) |
 | `RAG_REQUIRE_MODEL=1` | 모델이 없으면 임베딩 시험을 건너뛰지 않고 실패시킨다 (CI 용) |
+| `RAG_WORKER_IN_PROCESS` | `0` 이면 API 서버 안에서 작업자를 띄우지 않음 (`python -m rag.worker` 로 따로). 기본 `1` |
+| `RAG_API_PREFIX` | 주소 앞부분 (기본 `/internal/rag`). CN팀 내부 주소 규칙에 맞출 때 |
+| `RAG_REQUEST_ID_HEADER` | 요청 추적 헤더 이름 (기본 `X-Request-Id`) |
+| `RAG_DB_POOL_MAX`, `RAG_DB_POOL_TIMEOUT_S` | API 의 DB 연결 풀 최대 개수(기본 5), 연결을 기다리는 시간(기본 5초, 넘으면 503) |
 | `RAG_CALLBACK_ALLOWED_HOSTS` | 콜백을 보내도 되는 호스트 (`host` 또는 `host:port`, 쉼표로). 비어 있으면 모두 허용(개발용, 경고 로그). 운영에서는 반드시 설정 |
 | `RAG_TORCH_THREADS` | 작업자의 임베딩 스레드 수 (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |
 | `RAG_DB_STATEMENT_TIMEOUT_MS`, `RAG_DB_IDLE_TX_TIMEOUT_MS` | 작업자 DB 연결의 시간 제한 (기본 30000, 60000) |

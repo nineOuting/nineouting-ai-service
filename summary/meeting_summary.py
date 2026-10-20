@@ -213,7 +213,38 @@ SYSTEM_PROMPT = """너는 회의 전사에서 요약 항목을 뽑는 도구야.
 # --------------------------------------------------------------------------------------
 # 4. LLM 호출
 # --------------------------------------------------------------------------------------
-def call_llm(provider, model, system, user, mock_file=None):
+USAGE_HOOK = None    # 서버가 지정한다: fn(provider, model, task, input_tokens, output_tokens). 토큰 사용량 지표용
+
+
+def usage_of(provider, r):
+    """모델 응답 객체에서 (입력 토큰, 출력 토큰). 알 수 없으면 (None, None)"""
+    try:
+        if provider == "gemini":
+            u = r.usage_metadata
+            return u.prompt_token_count, (u.candidates_token_count or 0) + (getattr(u, "thoughts_token_count", 0) or 0)
+        if provider == "anthropic":
+            return r.usage.input_tokens, r.usage.output_tokens
+        if provider == "openai":
+            return r.usage.prompt_tokens, r.usage.completion_tokens
+    except AttributeError:
+        pass
+    return None, None
+
+
+def report_usage(provider, model, task, r):
+    if USAGE_HOOK is None:
+        return
+    tin, tout = usage_of(provider, r)
+    if tin is None and tout is None:
+        return
+    try:
+        USAGE_HOOK(provider, model, task, tin or 0, tout or 0)
+    except Exception:
+        pass                                # 지표 오류가 요약을 막으면 안 된다
+
+
+def call_llm(provider, model, system, user, mock_file=None, task=None):
+    """task: 작업 종류(예: live_summary). 토큰 사용량 지표의 속성으로 쓴다."""
     if provider == "mock":
         path = mock_file or os.path.join(HERE, "mock_llm_output.json")
         with open(path, encoding="utf-8") as f:
@@ -225,12 +256,14 @@ def call_llm(provider, model, system, user, mock_file=None):
         r = client.models.generate_content(
             model=model, contents=user,
             config=types.GenerateContentConfig(system_instruction=system, response_mime_type="application/json"))
+        report_usage(provider, model, task, r)
         return r.text
     if provider == "anthropic":
         import anthropic
         client = anthropic.Anthropic()   # ANTHROPIC_API_KEY 환경변수
         r = client.messages.create(model=model, max_tokens=8000, system=system,
                                    messages=[{"role": "user", "content": user}])
+        report_usage(provider, model, task, r)
         return "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
     if provider == "openai":
         from openai import OpenAI
@@ -238,6 +271,7 @@ def call_llm(provider, model, system, user, mock_file=None):
         r = client.chat.completions.create(
             model=model, response_format={"type": "json_object"},
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+        report_usage(provider, model, task, r)
         return r.choices[0].message.content
     raise ValueError(f"알 수 없는 provider: {provider}")
 
@@ -698,7 +732,24 @@ def selftest():
     got, _ = verify_items("mock", None, validate_items([good, good], kept), kept, tf.name)
     os.unlink(tf.name)
     assert len(got) == 1 and "수출 호황" in got[0], got
-    print("자체 시험 통과 (전송 규격 처리, 한글 숫자 변환, 검증기)")
+    # 5) 토큰 사용량 읽기와 보고
+    from types import SimpleNamespace as NS
+    assert usage_of("gemini", NS(usage_metadata=NS(prompt_token_count=100, candidates_token_count=20, thoughts_token_count=5))) == (100, 25)
+    assert usage_of("anthropic", NS(usage=NS(input_tokens=7, output_tokens=3))) == (7, 3)
+    assert usage_of("openai", NS(usage=NS(prompt_tokens=9, completion_tokens=4))) == (9, 4)
+    assert usage_of("gemini", NS()) == (None, None)
+    global USAGE_HOOK
+    got = []
+    USAGE_HOOK = lambda *a: got.append(a)
+    try:
+        report_usage("openai", "m", "live_summary", NS(usage=NS(prompt_tokens=9, completion_tokens=4)))
+        report_usage("openai", "m", "live_summary", NS())                  # 사용량이 없으면 보고하지 않음
+        USAGE_HOOK = lambda *a: 1 / 0
+        report_usage("openai", "m", "t", NS(usage=NS(prompt_tokens=1, completion_tokens=1)))   # 지표 오류는 삼킴
+    finally:
+        USAGE_HOOK = None
+    assert got == [("openai", "m", "live_summary", 9, 4)], got
+    print("자체 시험 통과 (전송 규격 처리, 한글 숫자 변환, 검증기, 토큰 사용량)")
 
 
 def main():

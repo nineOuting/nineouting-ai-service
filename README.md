@@ -13,11 +13,12 @@ flowchart LR
     A["브라우저"] -->|"음성 (WebSocket)"| B["STT 서버"]
     B -->|"전사 줄 0.5초"| C["백엔드"]
     C -->|"회의 알림: 즉시<br>줄 묶음: 10초"| D["AI 서비스<br>(이 저장소)"]
-    D -.->|"요약 결과: 전달 방식 협의 예정"| C
+    D -->|"회의 중 요약: PUT"| C
 ```
 
 - 백엔드가 AI 서비스로 **밀어 주는(push)** 방식이다. 요청은 받는 즉시 응답하고, 요약은 뒤에서 처리한다.
-- 요약 결과를 백엔드로 돌려주는 방식은 아직 정하지 않았다 (점선).
+- 회의 중 요약은 AI 서비스가 백엔드로 `PUT`으로 보낸다 (요약이 바뀔 때마다). 형식은 `docs/api/output-contract.md`에 있다.
+- 안건 보드, 오늘 회의 요약, 회의록 초안, 챗봇은 백엔드와 합의한 연동 API 초안을 따르며 이 저장소에는 아직 없다.
 
 ## 현재 상태
 
@@ -27,9 +28,12 @@ flowchart LR
 | 입력 변환 | 구현 | 백엔드 형식(camelCase)을 요약 코드 내부 형식으로 변환 |
 | 끝난 회의 요약 | 구현, 1차 평가 완료 | 회의가 끝난 뒤 전사 전체를 요약 |
 | 회의 중 주기 요약 | 구현, 1차 평가 완료 | 회의 중 2분 구간을 1분마다 갱신 |
-| 요약 결과 전달 | 미정 | 백엔드와 방식 협의 예정 |
+| 회의 중 요약 전달 | 구현 | 요약이 바뀔 때마다 백엔드로 PUT. 실패하면 재시도 3회 (`BACKEND_BASE_URL`을 설정했을 때) |
+| 묶음 번호 확인과 재시작 복구 | 구현 | 번호가 이어지지 않으면 `409` + `expectedBatch`, 백엔드가 그 번호부터 다시 보냄 |
+| 토큰 사용량 지표 | 구현 | OpenTelemetry `gen_ai.client.token.usage`, `GET /metrics` |
 | Bedrock 호출 | 미구현 | 리전·모델 ID 확인 후 추가 |
 | 안건 분류·안건별 요약·안건 상태 판정 | 미구현 | PRD AI-02 ~ AI-04 |
+| 안건 보드, 오늘 회의 요약, 회의록 초안, 챗봇 | 미구현 | 연동 API 초안 기준 |
 
 현재 LLM은 기본값이 `echo`(모델을 부르지 않는 테스트용)이고, 실제 요약은 Gemini로 시험했다.
 
@@ -37,12 +41,13 @@ flowchart LR
 
 | 경로 | 내용 |
 |---|---|
-| `server/` | 수신 서버. `main.py`는 주소, `service.py`는 회의별 상태·중복 처리, `selftest.py`는 자체 시험 |
+| `server/` | 수신 서버. `main.py`는 주소, `service.py`는 회의별 상태·묶음 번호 확인, `publisher.py`는 요약 전송, `metrics.py`는 토큰 지표, `selftest.py`는 자체 시험 |
 | `summary/meeting_summary.py` | 끝난 회의 요약 |
 | `summary/meeting_live_summary_v2.py` | 회의 중 주기 요약 |
 | `summary/input_adapter.py` | 입력 변환 |
 | `docs/api/input-contract.md` | **백엔드 → AI 서비스 입력 형식** (필드, 규칙, 협의 상태) |
-| `examples/api/` | 입력 형식 예시 JSON |
+| `docs/api/output-contract.md` | **AI 서비스 → 백엔드 회의 중 요약 형식** |
+| `examples/api/` | 입력·출력 형식 예시 JSON |
 | `Dockerfile`, `requirements.txt`, `.env.example` | 실행·배포용 |
 
 ## 다른 팀이 알아야 할 것
@@ -59,13 +64,24 @@ flowchart LR
 | 수신 현황 (전사 내용 없음) | `GET /internal/meetings/{meetingId}/status` |
 | 상태 확인 | `GET /health` |
 
-- 정상 접수는 `200` + `{"accepted": true}`, 형식 오류와 주소·본문의 `meetingId` 불일치는 `400` + `{"error": "INVALID_INPUT"}`로 응답한다. 자세한 응답은 입력 형식 문서 7장에 있다.
-- 같은 `batch` 번호를 다시 보내면 무시한다. `end` 알림 뒤에 도착한 줄 묶음도 무시하므로, 마지막 줄 묶음을 먼저 보낸 뒤 `end`를 보낸다.
+- 응답 (자세한 내용은 입력 형식 문서 7장)
+
+| 상황 | 응답 |
+|---|---|
+| 정상 접수 | `200` + `{"accepted": true}` |
+| `batch` 번호가 이어지지 않음, 재시작해서 모르는 회의 | `409` + `{"expectedBatch": N}`. N번부터 보냈던 그대로 다시 보낸다 |
+| 형식 오류, 주소와 본문의 `meetingId` 불일치 | `400` + `{"error": "INVALID_INPUT"}` |
+| 아직 받을 수 없음 (종료 중, LLM 설정 누락) | `503`. 10초 뒤 다시 보낸다 |
+
+- `batch` 번호는 1부터 빠짐없이 이어져야 한다. 같은 번호를 다시 보내면 무시한다.
+- `end` 알림 뒤에 도착한 줄 묶음은 무시하므로, 마지막 줄 묶음을 먼저 보낸 뒤 `end`를 보낸다.
+- 회의 중 요약은 AI 서비스가 `PUT {백엔드 주소}/internal/meetings/{meetingId}/live-summary`로 보낸다 (`docs/api/output-contract.md`).
 
 ### 클라우드
 
 - 이미지는 `Dockerfile`로 만들고 포트는 `8000`이다. 배포 설정은 클라우드 팀이 맡는다.
 - 설정은 환경변수로 주입한다 (아래 표). 비밀키는 이미지에 넣지 않는다.
+- 토큰 사용량 지표는 `GET /metrics`(Prometheus 형식)로 열려 있고, `OTEL_EXPORTER_OTLP_ENDPOINT`를 설정하면 OTLP로도 보낸다. 작업 종류는 `ai.task` 속성(`live_summary`)이다.
 - CPU·메모리 요구량은 측정 전이다.
 
 | 환경변수 | 설명 | 기본값 |
@@ -75,8 +91,11 @@ flowchart LR
 | `WINDOW_SEC` | 요약 구간 길이(초) | 120 |
 | `REFRESH_SEC` | 구간 갱신 주기(초) | 60 |
 | `MAX_CALLS_PER_MEETING` | 회의당 모델 호출 상한 | 60 |
+| `BACKEND_BASE_URL` | 회의 중 요약을 보낼 백엔드 주소. 비우면 보내지 않음 | 없음 |
+| `LIVE_SUMMARY_PATH` | 요약을 보낼 경로 | `/internal/meetings/{meeting_id}/live-summary` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | 토큰 지표를 OTLP(HTTP)로도 보낼 주소 | 없음 |
 | `LOG_LEVEL` | 로그 수준 | `INFO` |
-| `GEMINI_API_KEY` | `LLM_PROVIDER=gemini`일 때만 필요 | 없음 |
+| `GEMINI_API_KEY` | `LLM_PROVIDER=gemini`일 때 필요. 없으면 `503` | 없음 |
 
 ### 로그와 개인정보
 
@@ -107,9 +126,17 @@ curl localhost:8000/health
 # 예시 요청 보내기
 curl -X POST localhost:8000/internal/meetings/m_1234/events \
   -H 'content-type: application/json' -d @examples/api/meeting-event-start.json
-curl -X POST localhost:8000/internal/meetings/m_1234/batches \
+
+# 예시 묶음의 번호는 7이라 처음 보내면 409 + {"expectedBatch": 1} 로 답한다
+curl -i -X POST localhost:8000/internal/meetings/m_1234/batches \
   -H 'content-type: application/json' -d @examples/api/lines-batch-basic.json
+
+# 번호를 1로 바꿔 보내면 받는다
+sed 's/"batch": 7/"batch": 1/' examples/api/lines-batch-basic.json | curl -X POST \
+  localhost:8000/internal/meetings/m_1234/batches -H 'content-type: application/json' -d @-
+
 curl localhost:8000/internal/meetings/m_1234/status
+curl localhost:8000/metrics
 ```
 
 ## 브랜치와 PR 규칙

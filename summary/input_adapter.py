@@ -43,7 +43,8 @@ def adapt_line(ln):
     where = f"line seq={ln.get('seq', '?')}"
     seq = _need(ln, "seq", int, where)
     start_ms = _need(ln, "startMs", int, where)
-    end_ms = _need(ln, "endMs", int, where)
+    # 백엔드 타입이 Long(null 가능)이라 endMs가 비어 오면 startMs로 대신한다 (문서 5.1)
+    end_ms = start_ms if ln.get("endMs") is None else _need(ln, "endMs", int, where)
     text = _need(ln, "text", str, where)
     if end_ms < start_ms:
         raise AdapterError(f"{where}: endMs가 startMs보다 작음")
@@ -134,7 +135,11 @@ def selftest():
                                adapt_line({"seq": 43, "startMs": 129000, "endMs": 130400, "text": "네", "kind": "backchannel"})],
                      "edits": []})
     e = adapt_batch(load("lines-batch-with-edits.json"))
-    assert e["lines"][0]["type"] == "manual" and e["lines"][0]["manual"] is True
+    assert e["lines"][0]["type"] == "final" and e["lines"][0]["manual"] is False
+    nul = adapt_line({"seq": 62, "startMs": 5000, "endMs": None, "text": "끝 시각 없음"})
+    assert nul["end_ms"] == 5000 and nul["arrival_ms"] == 5000
+    man = adapt_line({"seq": 61, "startMs": 1, "endMs": 2, "text": "직접 추가", "manual": True})   # 지금은 오지 않지만 오더라도 처리
+    assert man["type"] == "manual" and man["manual"] is True
     assert [x["id"] for x in e["edits"]] == [40, 38]
     st2.apply_batch(e)
     snap = st2.snapshot()

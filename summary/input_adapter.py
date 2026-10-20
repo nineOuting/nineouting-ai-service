@@ -12,6 +12,8 @@
           arrival_ms = endMs (recovered는 +2초). 백엔드가 도착 시각을 주지 않아 추정한 값
   edits   seq -> id. text나 deleted가 없는 edit(speakerLabel만 바뀐 경우 등)은 무시
   event   meetingId -> meeting_id, atMs -> at_ms
+  agendas      안건 목록 전체 (agenda-contract.md 4장). agendaId 는 문자열이나 정수, key 는 문자열
+  corrections  사람이 고친 분류 (agenda-contract.md 7장). agendaId 가 null 이면 해당 없음
 
 표준 라이브러리만 쓴다. 외부 호출 없음.
 """
@@ -96,6 +98,52 @@ def adapt_event(msg):
     return {"meeting_id": meeting_id, "event": event, "at_ms": at_ms, "wall": msg.get("wall")}
 
 
+def adapt_agendas(msg):
+    """안건 목록 전체 (docs/api/agenda-contract.md 4장) -> {"meeting_id", "version", "agendas"}.
+    agendaId 는 문자열이나 정수. 결과를 돌려줄 때 같은 타입을 쓰도록 받은 값(id)과 문자열 key 를 함께 둔다."""
+    meeting_id = _need(msg, "meetingId", str, "agendas")
+    version = _need(msg, "version", int, "agendas")
+    items = _need(msg, "agendas", list, "agendas")
+    out, seen = [], set()
+    for a in items:
+        if not isinstance(a, dict):
+            raise AdapterError("agendas: 항목이 객체가 아님")
+        where = f"agenda {a.get('agendaId', '?')}"
+        aid = _need(a, "agendaId", (str, int), where)
+        key = str(aid)
+        if not key.strip():
+            raise AdapterError(f"{where}: agendaId가 비어 있음")
+        if key in seen:
+            raise AdapterError(f"{where}: agendaId가 겹침")
+        seen.add(key)
+        title = _need(a, "title", str, where)
+        if not title.strip():
+            raise AdapterError(f"{where}: title이 비어 있음")
+        out.append({"id": aid, "key": key, "position": _need(a, "position", int, where), "title": title,
+                    "decision_point": _need(a, "decisionPoint", str, where),
+                    "added": bool(a.get("addedDuringMeeting", False))})
+    return {"meeting_id": meeting_id, "version": version, "agendas": out}
+
+
+def adapt_corrections(msg):
+    """사람이 고친 분류 (agenda-contract.md 7장) -> {"meeting_id", "corrections"}.
+    agendaId 가 null 이면 '해당 없음'으로 고친 것이다. 키가 아예 없으면 실수로 보고 거절한다."""
+    meeting_id = _need(msg, "meetingId", str, "corrections")
+    items = _need(msg, "corrections", list, "corrections")
+    out = []
+    for c in items:
+        if not isinstance(c, dict):
+            raise AdapterError("corrections: 항목이 객체가 아님")
+        where = f"correction seq={c.get('seq', '?')}"
+        seq = _need(c, "seq", int, where)
+        rev = _need(c, "rev", int, where)
+        if "agendaId" not in c:
+            raise AdapterError(f"{where}: 'agendaId' 가 없음 (해당 없음이면 null)")
+        aid = c["agendaId"] if c["agendaId"] is None else _need(c, "agendaId", (str, int), where)
+        out.append({"seq": seq, "agenda_id": aid, "rev": rev})
+    return {"meeting_id": meeting_id, "corrections": out}
+
+
 # --------------------------------------------------------------------------------------
 def selftest():
     from meeting_summary import TranscriptStore, build_input
@@ -162,7 +210,44 @@ def selftest():
             raise SystemExit(f"잘못된 입력을 못 잡음: {bad}")
         except AdapterError:
             pass
-    print("입력 어댑터 자체 시험 통과 (이벤트 4종, 줄 변환, edits, manual, speakerLabel, 잘못된 입력)")
+    # 6) 안건 목록: 예시 파일, 타입 그대로, 거절할 입력
+    g = adapt_agendas(load("agendas-put.json"))
+    assert g["meeting_id"] == "m_1234" and g["version"] == 3 and [a["key"] for a in g["agendas"]] == ["a_101", "a_102", "a_103"]
+    assert g["agendas"][2]["added"] is True and g["agendas"][0]["decision_point"].startswith("1차 배포")
+    gi = adapt_agendas({"meetingId": "m", "version": 1, "agendas": [
+        {"agendaId": 7, "position": 1, "title": "t", "decisionPoint": ""}]})
+    assert gi["agendas"][0]["id"] == 7 and gi["agendas"][0]["key"] == "7" and gi["agendas"][0]["added"] is False
+    assert adapt_agendas({"meetingId": "m", "version": 1, "agendas": []})["agendas"] == []
+    ok = {"agendaId": "a", "position": 1, "title": "t", "decisionPoint": "d"}
+    for bad in [{"meetingId": "m", "version": "1", "agendas": []},
+                {"meetingId": "m", "agendas": []},
+                {"meetingId": "m", "version": 1, "agendas": {}},
+                {"meetingId": "m", "version": 1, "agendas": ["x"]},
+                {"meetingId": "m", "version": 1, "agendas": [ok, dict(ok)]},                     # agendaId 겹침
+                {"meetingId": "m", "version": 1, "agendas": [dict(ok, title="  ")]},
+                {"meetingId": "m", "version": 1, "agendas": [dict(ok, agendaId=True)]},
+                {"meetingId": "m", "version": 1, "agendas": [dict(ok, agendaId="")]},
+                {"meetingId": "m", "version": 1, "agendas": [{k: v for k, v in ok.items() if k != "decisionPoint"}]},
+                {"meetingId": "m", "version": 1, "agendas": [dict(ok, position="1")]}]:
+        try:
+            adapt_agendas(bad)
+            raise SystemExit(f"잘못된 안건 목록을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    # 7) 고친 분류: 예시 파일, null 은 해당 없음, agendaId 키 없음은 거절
+    k = adapt_corrections(load("agenda-corrections-post.json"))
+    assert k["corrections"] == [{"seq": 45, "agenda_id": "a_102", "rev": 1}, {"seq": 46, "agenda_id": None, "rev": 2}], k
+    for bad in [{"meetingId": "m", "corrections": [{"seq": 1, "rev": 1}]},
+                {"meetingId": "m", "corrections": [{"seq": "1", "agendaId": "a", "rev": 1}]},
+                {"meetingId": "m", "corrections": [{"seq": 1, "agendaId": "a"}]},
+                {"meetingId": "m", "corrections": [{"seq": 1, "agendaId": True, "rev": 1}]},
+                {"meetingId": "m", "corrections": None}]:
+        try:
+            adapt_corrections(bad)
+            raise SystemExit(f"잘못된 고침을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    print("입력 어댑터 자체 시험 통과 (이벤트 4종, 줄 변환, edits, manual, speakerLabel, 잘못된 입력, 안건 목록, 고친 분류)")
 
 
 if __name__ == "__main__":

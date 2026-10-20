@@ -1,0 +1,7 @@
+{
+  "meetingId": "m_1234",
+  "corrections": [
+    { "seq": 45, "agendaId": "a_102", "rev": 1 },
+    { "seq": 46, "agendaId": null, "rev": 2 }
+  ]
+}

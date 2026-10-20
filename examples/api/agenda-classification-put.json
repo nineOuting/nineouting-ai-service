@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "0.1",
+  "meetingId": "m_1234",
+  "version": 1792455707432,
+  "atMs": 134200,
+  "final": false,
+  "currentAgendaId": "a_101",
+  "lines": [
+    { "seq": 42, "agendaId": "a_101" },
+    { "seq": 45, "agendaId": "a_101" },
+    { "seq": 46, "agendaId": null }
+  ]
+}

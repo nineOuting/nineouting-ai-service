@@ -115,11 +115,30 @@ def get_status(conn, doc_id: int) -> dict | None:
     return {"docId": doc_id, "docVersion": row[0], "status": row[1], "errorCode": row[2], "chunkCount": row[3]}
 
 
+def mark_processing(conn, doc_id: int, doc_version: str) -> bool:
+    """작업자가 처리를 시작할 때. 그 버전이 아직 현재 버전이면 processing 으로 바꾸고 True."""
+    cur = conn.execute("UPDATE rag_documents SET status = 'processing', updated_at = now() "
+                       "WHERE doc_id = %s AND doc_version = %s AND status IN ('queued', 'processing')",
+                       (doc_id, doc_version))
+    return cur.rowcount == 1
+
+
+def is_current(conn, doc_id: int, doc_version: str) -> bool:
+    """문서가 남아 있고 그 버전이 현재 버전인가."""
+    return conn.execute("SELECT 1 FROM rag_documents WHERE doc_id = %s AND doc_version = %s",
+                        (doc_id, doc_version)).fetchone() is not None
+
+
 def delete_document(conn, doc_id: int) -> None:
-    """문서와 조각을 지운다. 없어도 오류가 아니다."""
-    conn.execute("DELETE FROM rag_documents WHERE doc_id = %s", (doc_id,))
+    """문서와 조각, 그 문서의 작업을 지운다. 없어도 오류가 아니다.
+    처리 중인 작업은 저장할 때 StaleJob 으로 버려진다."""
+    with conn.transaction():
+        conn.execute("DELETE FROM rag_jobs WHERE doc_id = %s", (doc_id,))
+        conn.execute("DELETE FROM rag_documents WHERE doc_id = %s", (doc_id,))
 
 
 def delete_workspace(conn, workspace_id: int) -> int:
-    """워크스페이스의 문서와 조각을 지운다. 지운 문서 수를 돌려준다."""
-    return conn.execute("DELETE FROM rag_documents WHERE workspace_id = %s", (workspace_id,)).rowcount
+    """워크스페이스의 문서와 조각, 작업을 지운다. 지운 문서 수를 돌려준다."""
+    with conn.transaction():
+        conn.execute("DELETE FROM rag_jobs WHERE workspace_id = %s", (workspace_id,))
+        return conn.execute("DELETE FROM rag_documents WHERE workspace_id = %s", (workspace_id,)).rowcount

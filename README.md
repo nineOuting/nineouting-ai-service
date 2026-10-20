@@ -1,9 +1,9 @@
 # nineouting-ai-service
 
-AI 회의 중재 어시스턴트의 **AI 서비스**. 백엔드가 보내는 회의 전사 줄을 받아 회의 요약을 만들고, 이후 안건 분류·안건별 요약·안건 상태 판정으로 확장한다.
+AI 회의 중재 어시스턴트의 **AI 서비스**. 백엔드가 보내는 회의 전사 줄을 받아 회의 요약을 만들고, 안건에 줄을 자동 분류한다. 이후 안건별 요약·안건 상태 판정으로 확장한다.
 
 - 언어와 프레임워크: Python, FastAPI
-- 이 저장소의 역할: 전사 입력 수신, 요약 생성, (예정) 안건 기능
+- 이 저장소의 역할: 전사 입력 수신, 요약 생성, 안건 자동 분류, (예정) 안건별 요약·상태 판정
 - 이 저장소가 하지 않는 것: 음성 인식(STT 서버), 회의·사용자 데이터 저장(백엔드), 배포 설정(클라우드)
 
 ## 서비스 안에서의 위치
@@ -13,11 +13,13 @@ flowchart LR
     A["브라우저"] -->|"음성 (WebSocket)"| B["STT 서버"]
     B -->|"전사 줄 0.5초"| C["백엔드"]
     C -->|"회의 알림: 즉시<br>줄 묶음: 10초"| D["AI 서비스<br>(이 저장소)"]
-    D -->|"회의 중 요약: PUT"| C
+    C -->|"안건 목록·고친 분류"| D
+    D -->|"회의 중 요약, 안건 분류: PUT"| C
 ```
 
 - 백엔드가 AI 서비스로 **밀어 주는(push)** 방식이다. 요청은 받는 즉시 응답하고, 요약은 뒤에서 처리한다.
 - 회의 중 요약은 AI 서비스가 백엔드로 `PUT`으로 보낸다 (요약이 바뀔 때마다). 형식은 `docs/api/output-contract.md`에 있다.
+- 안건 목록(전체)과 사람이 고친 분류는 백엔드가 AI 서비스로 보내고, 줄별 안건 분류 결과는 AI 서비스가 백엔드로 `PUT`한다. 형식은 `docs/api/agenda-contract.md`(v0.1 초안, 백엔드 확인 전)에 있다.
 - 안건 보드, 오늘 회의 요약, 회의록 초안, 챗봇은 백엔드와 합의한 연동 API 초안을 따르며 이 저장소에는 아직 없다.
 
 ## 현재 상태
@@ -32,10 +34,11 @@ flowchart LR
 | 묶음 번호 확인과 재시작 복구 | 구현 | 번호가 이어지지 않으면 `409` + `expectedBatch`, 백엔드가 그 번호부터 다시 보냄 |
 | 토큰 사용량 지표 | 구현 | OpenTelemetry `gen_ai.client.token.usage`, `GET /metrics` |
 | Bedrock 호출 | 미구현 | 리전·모델 ID 확인 후 추가 |
-| 안건 분류·안건별 요약·안건 상태 판정 | 미구현 | PRD AI-02 ~ AI-04 |
+| 안건 자동 분류 | 구현, 1차 평가 완료 | 줄마다 안건 하나 또는 해당 없음. 직전 대화와 사람이 고친 예를 함께 보여 줌. 사람이 고친 줄은 고정. 결과는 새로 분류했거나 바뀐 줄만 PUT (`docs/eval/agenda-classification-eval-v1.md`) |
+| 안건별 요약·안건 상태 판정 | 미구현 | PRD AI-03, AI-04 |
 | 안건 보드, 오늘 회의 요약, 회의록 초안, 챗봇 | 미구현 | 연동 API 초안 기준 |
 
-현재 LLM은 기본값이 `echo`(모델을 부르지 않는 테스트용)이고, 실제 요약은 Gemini로 시험했다.
+현재 LLM은 기본값이 `echo`(모델을 부르지 않는 테스트용)이고, 실제 요약과 안건 분류는 Gemini로 시험했다.
 
 ## 폴더 구조
 
@@ -44,9 +47,13 @@ flowchart LR
 | `server/` | 수신 서버. `main.py`는 주소, `service.py`는 회의별 상태·묶음 번호 확인, `publisher.py`는 요약 전송, `metrics.py`는 토큰 지표, `selftest.py`는 자체 시험 |
 | `summary/meeting_summary.py` | 끝난 회의 요약 |
 | `summary/meeting_live_summary_v2.py` | 회의 중 주기 요약 |
-| `summary/input_adapter.py` | 입력 변환 |
+| `summary/agenda_classifier.py` | 안건 자동 분류 |
+| `summary/eval_agenda.py` | 안건 분류 평가 (기본은 비용 0, 유료 호출은 옵션을 켜야 함) |
+| `summary/input_adapter.py` | 입력 변환 (전사 줄, 안건 목록, 고친 분류) |
 | `docs/api/input-contract.md` | **백엔드 → AI 서비스 입력 형식** (필드, 규칙, 협의 상태) |
 | `docs/api/output-contract.md` | **AI 서비스 → 백엔드 회의 중 요약 형식** |
+| `docs/api/agenda-contract.md` | **안건 목록·분류 결과·고친 분류 형식** (v0.1 초안) |
+| `docs/eval/` | 평가 결과 |
 | `examples/api/` | 입력·출력 형식 예시 JSON |
 | `Dockerfile`, `requirements.txt`, `.env.example` | 실행·배포용 |
 
@@ -62,6 +69,8 @@ flowchart LR
 | 회의 알림 | `POST /internal/meetings/{meetingId}/events` |
 | 줄 묶음 | `POST /internal/meetings/{meetingId}/batches` |
 | 수신 현황 (전사 내용 없음) | `GET /internal/meetings/{meetingId}/status` |
+| 안건 목록 전체 (덮어쓰기) | `PUT /internal/meetings/{meetingId}/agendas` |
+| 사람이 고친 분류 | `POST /internal/meetings/{meetingId}/agenda-corrections` |
 | 상태 확인 | `GET /health` |
 
 - 응답 (자세한 내용은 입력 형식 문서 7장)
@@ -76,12 +85,14 @@ flowchart LR
 - `batch` 번호는 1부터 빠짐없이 이어져야 한다. 같은 번호를 다시 보내면 무시한다.
 - `end` 알림 뒤에 도착한 줄 묶음은 무시하므로, 마지막 줄 묶음을 먼저 보낸 뒤 `end`를 보낸다.
 - 회의 중 요약은 AI 서비스가 `PUT {백엔드 주소}/internal/meetings/{meetingId}/live-summary`로 보낸다 (`docs/api/output-contract.md`).
+- 줄별 안건 분류 결과는 `PUT {백엔드 주소}/internal/meetings/{meetingId}/agenda-classification`으로 보낸다. 새로 분류했거나 바뀐 줄만 담고, 회의 종료 뒤에는 `final: true` 결과를 보낸다. 안건 목록이 아직 없으면 줄을 모아 두었다가 목록이 오면 분류한다 (`docs/api/agenda-contract.md`).
+- 일시적 실패(408, 429, 5xx, 연결 오류)는 1, 2, 4초 간격으로 3번 다시 보내고, 그 밖의 4xx는 버린다. 백엔드가 어떤 4xx를 돌려주는지는 연동 때 확인한다.
 
 ### 클라우드
 
 - 이미지는 `Dockerfile`로 만들고 포트는 `8000`이다. 배포 설정은 클라우드 팀이 맡는다.
 - 설정은 환경변수로 주입한다 (아래 표). 비밀키는 이미지에 넣지 않는다.
-- 토큰 사용량 지표는 `GET /metrics`(Prometheus 형식)로 열려 있고, `OTEL_EXPORTER_OTLP_ENDPOINT`를 설정하면 OTLP로도 보낸다. 작업 종류는 `ai.task` 속성(`live_summary`)이다.
+- 토큰 사용량 지표는 `GET /metrics`(Prometheus 형식)로 열려 있고, `OTEL_EXPORTER_OTLP_ENDPOINT`를 설정하면 OTLP로도 보낸다. 작업 종류는 `ai.task` 속성이며 `live_summary`(회의 중 요약), `draft`(끝난 회의 요약), `agenda_classification`(안건 분류) 세 가지다.
 - CPU·메모리 요구량은 측정 전이다.
 
 | 환경변수 | 설명 | 기본값 |
@@ -93,6 +104,9 @@ flowchart LR
 | `MAX_CALLS_PER_MEETING` | 회의당 모델 호출 상한 | 60 |
 | `BACKEND_BASE_URL` | 회의 중 요약을 보낼 백엔드 주소. 비우면 보내지 않음 | 없음 |
 | `LIVE_SUMMARY_PATH` | 요약을 보낼 경로 | `/internal/meetings/{meeting_id}/live-summary` |
+| `AGENDA_CLASSIFICATION_PATH` | 안건 분류 결과를 보낼 경로 (`BACKEND_BASE_URL`과 같은 주소로) | `/internal/meetings/{meeting_id}/agenda-classification` |
+| `CLASSIFY_REFRESH_SEC` | 안건 분류 모델 호출 간격(음성 시간 초) | 30 |
+| `MAX_CLASSIFY_CALLS_PER_MEETING` | 회의당 안건 분류 호출 상한 | 200 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 토큰 지표를 OTLP(HTTP)로도 보낼 주소 | 없음 |
 | `LOG_LEVEL` | 로그 수준 | `INFO` |
 | `GEMINI_API_KEY` | `LLM_PROVIDER=gemini`일 때 필요. 없으면 `503` | 없음 |

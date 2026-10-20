@@ -37,13 +37,23 @@ registry = Registry(cfg_from_env(), publisher=publisher)          # 잘못된 �
 
 @asynccontextmanager
 async def lifespan(app):
+    if rag_runtime:
+        rag_runtime.start()                 # RAG: 연결 풀 열기, 작업자 스레드 시작
     yield
     registry.shutting_down = True           # 종료 중에는 503 으로 답해 백엔드가 나중에 다시 보내게 한다
     publisher.wait_idle(5.0)
+    if rag_runtime:
+        rag_runtime.stop()                  # RAG: 처리 중인 작업을 마치고 멈춤
     metrics.shutdown()
 
 
 app = FastAPI(title="nineouting ai-service", lifespan=lifespan)
+
+# RAG (rag/): RAG_DATABASE_URL 이 있을 때만 붙인다. 없으면 rag 를 불러오지도 않아 요약만 쓰는 환경은 그대로다
+rag_runtime = None
+if os.environ.get("RAG_DATABASE_URL"):
+    from rag.runtime import setup as rag_setup
+    rag_runtime = rag_setup(app, os.environ)
 
 
 def invalid(detail):

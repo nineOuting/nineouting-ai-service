@@ -3,3 +3,5 @@ transformers==5.19.0
 torch==2.14.1
 psycopg[binary]==3.3.6
 pgvector==0.5.1
+psycopg-pool==3.3.3
+fastapi==0.143.2

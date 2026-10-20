@@ -114,7 +114,7 @@ def echo_llm(user):
 def make_llm(cfg):
     if cfg.provider == "echo":
         return echo_llm
-    return lambda user: call_llm(cfg.provider, cfg.model, LIVE_SYSTEM_PROMPT, user)
+    return lambda user: call_llm(cfg.provider, cfg.model, LIVE_SYSTEM_PROMPT, user, task="live_summary")
 
 
 def _sha(s):

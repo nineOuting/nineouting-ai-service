@@ -5,30 +5,60 @@ ai-service 수신 서버 (FastAPI)
 실행(개발): uvicorn server.main:app --reload   (저장소 루트에서)
 설정: 환경변수 (.env.example 참고)
 
-주소는 임시다. 백엔드 초안이 정해지면 아래 두 상수만 바꾼다.
+주소는 임시다. 백엔드 초안이 정해지면 아래 상수 네 개만 바꾼다.
 """
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from .service import Registry, ConfigError, AdapterError, cfg_from_env
+from .service import Registry, ConfigError, AdapterError, BatchOutOfOrder, NotReady, cfg_from_env
+from .publisher import Publisher
+from .metrics import Metrics, default_readers
+import meeting_summary                      # summary/ 는 service.py 가 경로에 넣어 둔다
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 EVENTS_PATH = "/internal/meetings/{meeting_id}/events"
 BATCHES_PATH = "/internal/meetings/{meeting_id}/batches"
+AGENDAS_PATH = "/internal/meetings/{meeting_id}/agendas"                    # 안건 목록 전체 (PUT)
+CORRECTIONS_PATH = "/internal/meetings/{meeting_id}/agenda-corrections"    # 사람이 고친 분류 (POST)
 
-app = FastAPI(title="nineouting ai-service")
-registry = Registry(cfg_from_env())          # 잘못된 설정이면 서버가 뜨지 않는다
+metrics = Metrics(default_readers(os.environ))
+meeting_summary.USAGE_HOOK = metrics.record_token_usage          # 모델을 부를 때마다 토큰 사용량을 지표로 남긴다
+publisher = Publisher.from_env(os.environ)
+registry = Registry(cfg_from_env(), publisher=publisher)          # 잘못된 설정이면 서버가 뜨지 않는다
+
+
+@asynccontextmanager
+async def lifespan(app):
+    yield
+    registry.shutting_down = True           # 종료 중에는 503 으로 답해 백엔드가 나중에 다시 보내게 한다
+    publisher.wait_idle(5.0)
+    metrics.shutdown()
+
+
+app = FastAPI(title="nineouting ai-service", lifespan=lifespan)
 
 
 def invalid(detail):
     """형식 오류 응답: 400 + INVALID_INPUT (입력 형식 문서 7장)"""
     return JSONResponse(status_code=400, content={"error": "INVALID_INPUT", "detail": detail})
+
+
+def not_ready(detail):
+    """준비 안 됨: 503. 백엔드는 보낼 것을 남겨 두고 10초 뒤 다시 보낸다."""
+    return JSONResponse(status_code=503, content={"error": "NOT_READY", "detail": detail})
+
+
+def out_of_order(expected):
+    """묶음 번호가 이어지지 않음: 409 + expectedBatch. 백엔드가 그 번호부터 다시 보낸다."""
+    return JSONResponse(status_code=409, content={"expectedBatch": expected})
 
 
 @app.exception_handler(RequestValidationError)
@@ -41,10 +71,17 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/metrics")
+def get_metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.post(EVENTS_PATH)
 def post_event(meeting_id: str, msg: dict = Body(...)):
     try:
         return registry.receive_event(meeting_id, msg)
+    except NotReady as e:
+        return not_ready(str(e))
     except AdapterError as e:
         return invalid(str(e))
 
@@ -53,6 +90,30 @@ def post_event(meeting_id: str, msg: dict = Body(...)):
 def post_batch(meeting_id: str, msg: dict = Body(...)):
     try:
         return registry.receive_batch(meeting_id, msg)
+    except NotReady as e:
+        return not_ready(str(e))
+    except BatchOutOfOrder as e:
+        return out_of_order(e.expected)
+    except AdapterError as e:
+        return invalid(str(e))
+
+
+@app.put(AGENDAS_PATH)
+def put_agendas(meeting_id: str, msg: dict = Body(...)):
+    try:
+        return registry.receive_agendas(meeting_id, msg)
+    except NotReady as e:
+        return not_ready(str(e))
+    except AdapterError as e:
+        return invalid(str(e))
+
+
+@app.post(CORRECTIONS_PATH)
+def post_corrections(meeting_id: str, msg: dict = Body(...)):
+    try:
+        return registry.receive_corrections(meeting_id, msg)
+    except NotReady as e:
+        return not_ready(str(e))
     except AdapterError as e:
         return invalid(str(e))
 

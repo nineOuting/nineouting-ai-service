@@ -1,4 +1,7 @@
 fastapi==0.143.2
 uvicorn==0.54.0
+opentelemetry-sdk==1.45.1
+opentelemetry-exporter-prometheus==0.66b1
+opentelemetry-exporter-otlp-proto-http==1.45.1
 # 시험(server/selftest.py)의 HTTP 부분에만 필요
 httpx==0.28.1

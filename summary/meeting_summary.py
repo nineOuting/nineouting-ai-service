@@ -244,7 +244,8 @@ def report_usage(provider, model, task, r):
 
 
 def call_llm(provider, model, system, user, mock_file=None, task=None):
-    """task: 작업 종류(예: live_summary). 토큰 사용량 지표의 속성으로 쓴다."""
+    """task: 작업 종류. 토큰 사용량 지표의 ai.task 속성으로 쓴다. live_summary(회의 중 요약), draft(끝난 회의 요약),
+    agenda_classification(안건 분류)"""
     if provider == "mock":
         path = mock_file or os.path.join(HERE, "mock_llm_output.json")
         with open(path, encoding="utf-8") as f:
@@ -392,7 +393,7 @@ def verify_items(provider, model, results, kept, mock_file=None):
         parts.append(f"[항목 {n}]\n요약: {it.get('text')}\n근거 줄:\n{ev}")
     if not parts:
         return [], ""
-    raw = call_llm(provider, model, VERIFY_PROMPT, "\n\n".join(parts), mock_file)
+    raw = call_llm(provider, model, VERIFY_PROMPT, "\n\n".join(parts), mock_file, task="draft")
     issues = []
     for c in parse_llm_json(raw).get("checks", []):
         bad = c.get("unsupported") or []
@@ -620,7 +621,7 @@ def run(args):
     attempts = 1 if args.provider == "mock" else 1 + args.retries
     current_user = user
     for attempt in range(1, attempts + 1):
-        raw = call_llm(args.provider, args.model, SYSTEM_PROMPT, current_user, args.mock_file)
+        raw = call_llm(args.provider, args.model, SYSTEM_PROMPT, current_user, args.mock_file, task="draft")
         raws.append(raw)
         try:
             parsed = parse_llm_json(raw)

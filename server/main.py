@@ -5,7 +5,7 @@ ai-service 수신 서버 (FastAPI)
 실행(개발): uvicorn server.main:app --reload   (저장소 루트에서)
 설정: 환경변수 (.env.example 참고)
 
-주소는 임시다. 백엔드 초안이 정해지면 아래 두 상수만 바꾼다.
+주소는 임시다. 백엔드 초안이 정해지면 아래 상수 네 개만 바꾼다.
 """
 import logging
 import os
@@ -26,6 +26,8 @@ logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
 
 EVENTS_PATH = "/internal/meetings/{meeting_id}/events"
 BATCHES_PATH = "/internal/meetings/{meeting_id}/batches"
+AGENDAS_PATH = "/internal/meetings/{meeting_id}/agendas"                    # 안건 목록 전체 (PUT)
+CORRECTIONS_PATH = "/internal/meetings/{meeting_id}/agenda-corrections"    # 사람이 고친 분류 (POST)
 
 metrics = Metrics(default_readers(os.environ))
 meeting_summary.USAGE_HOOK = metrics.record_token_usage          # 모델을 부를 때마다 토큰 사용량을 지표로 남긴다
@@ -92,6 +94,26 @@ def post_batch(meeting_id: str, msg: dict = Body(...)):
         return not_ready(str(e))
     except BatchOutOfOrder as e:
         return out_of_order(e.expected)
+    except AdapterError as e:
+        return invalid(str(e))
+
+
+@app.put(AGENDAS_PATH)
+def put_agendas(meeting_id: str, msg: dict = Body(...)):
+    try:
+        return registry.receive_agendas(meeting_id, msg)
+    except NotReady as e:
+        return not_ready(str(e))
+    except AdapterError as e:
+        return invalid(str(e))
+
+
+@app.post(CORRECTIONS_PATH)
+def post_corrections(meeting_id: str, msg: dict = Body(...)):
+    try:
+        return registry.receive_corrections(meeting_id, msg)
+    except NotReady as e:
+        return not_ready(str(e))
     except AdapterError as e:
         return invalid(str(e))
 

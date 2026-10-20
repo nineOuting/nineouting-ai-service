@@ -31,8 +31,10 @@ SUMMARY_DIR = os.path.abspath(os.path.join(HERE, "..", "summary"))
 if SUMMARY_DIR not in sys.path:
     sys.path.insert(0, SUMMARY_DIR)
 
-from input_adapter import adapt_batch, adapt_event, AdapterError  # noqa: E402
+from input_adapter import adapt_batch, adapt_event, adapt_agendas, adapt_corrections, AdapterError  # noqa: E402
 from meeting_live_summary_v2 import LiveSummarizer, Cfg  # noqa: E402
+from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
+from .publisher import AGENDA_CLASSIFICATION  # noqa: E402
 
 log = logging.getLogger("ai-service")
 
@@ -79,10 +81,28 @@ def cfg_from_env(env=None):
     return Cfg(**kw)
 
 
+def classify_cfg_from_env(env=None, cfg=None):
+    """환경변수 -> 안건 분류 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
+    CLASSIFY_REFRESH_SEC(모델을 부르는 간격, 기본 30초), MAX_CLASSIFY_CALLS_PER_MEETING(회의당 호출 상한, 기본 200)
+    """
+    env = os.environ if env is None else env
+    cfg = cfg or cfg_from_env(env)
+    kw = {"provider": cfg.provider, "model": cfg.model}
+    for name, key in (("refresh_sec", "CLASSIFY_REFRESH_SEC"), ("max_calls", "MAX_CLASSIFY_CALLS_PER_MEETING")):
+        if env.get(key):
+            try:
+                kw[name] = int(env[key])
+            except ValueError:
+                raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+    return ClassifyCfg(**kw)
+
+
 class MeetingState:
-    def __init__(self, meeting_id, cfg, llm=None):
+    def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None):
         self.meeting_id = meeting_id
         self.summarizer = LiveSummarizer(meeting_id, cfg, llm=llm, verbose=False)
+        self.classifier = AgendaClassifier(meeting_id, classify_cfg, llm=classify_llm)
+        self.cls_version = 0                # 백엔드로 보낸 안건 분류 결과의 마지막 version
         self.status = "new"                 # new -> running <-> paused -> ended
         self.lock = threading.Lock()
         self.queue = queue.Queue()
@@ -99,11 +119,13 @@ class MeetingState:
 
 
 class Registry:
-    def __init__(self, cfg, llm=None, publisher=None, env=None):
+    def __init__(self, cfg, llm=None, publisher=None, env=None, classify_cfg=None, classify_llm=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
         self.publisher = publisher
         self.env = os.environ if env is None else env
+        self.classify_cfg = classify_cfg or classify_cfg_from_env(self.env, cfg)
+        self.classify_llm = classify_llm    # 시험용: 안건 분류에서 모델 호출 대신 쓸 함수
         self.shutting_down = False
         self.meetings = {}
         self.lock = threading.Lock()
@@ -128,7 +150,7 @@ class Registry:
         with self.lock:
             m = self.meetings.get(meeting_id)
             if m is None:
-                m = self.meetings[meeting_id] = MeetingState(meeting_id, self.cfg, self.llm)
+                m = self.meetings[meeting_id] = MeetingState(meeting_id, self.cfg, self.llm, self.classify_cfg, self.classify_llm)
             return m
 
     @staticmethod
@@ -195,6 +217,39 @@ class Registry:
             out["warning"] = warning
         return out
 
+    def receive_agendas(self, path_meeting_id, msg):
+        """안건 목록 전체 (agenda-contract.md 4장). 받으면 바로 응답하고 분류는 뒤에서 한다."""
+        self._require_ready()
+        a = adapt_agendas(msg)
+        self._check_same_id(path_meeting_id, a["meeting_id"])
+        m = self._get(a["meeting_id"])
+        with m.lock:
+            if m.status == "ended":
+                return {"accepted": False, "result": "ignored", "reason": "ended"}
+        result = m.classifier.set_agendas(a["version"], a["agendas"])
+        log.info("안건 목록 수신 meeting=%s version=%s agendas=%s result=%s", m.meeting_id, a["version"], len(a["agendas"]), result)
+        if result == "stale":
+            return {"accepted": True, "result": "stale"}
+        m.queue.put(("tick", None))                             # 모아 둔 줄을 분류하고, 안건 삭제로 바뀐 줄을 내보낸다
+        self._ensure_worker(m)
+        return {"accepted": True, "result": "accepted", "version": a["version"]}
+
+    def receive_corrections(self, path_meeting_id, msg):
+        """사람이 고친 분류 (agenda-contract.md 7장)."""
+        self._require_ready()
+        c = adapt_corrections(msg)
+        self._check_same_id(path_meeting_id, c["meeting_id"])
+        m = self._get(c["meeting_id"])
+        with m.lock:
+            if m.status == "ended":
+                return {"accepted": False, "result": "ignored", "reason": "ended"}
+        applied = m.classifier.apply_corrections(c["corrections"])
+        log.info("고친 분류 수신 meeting=%s corrections=%s applied=%s", m.meeting_id, len(c["corrections"]), applied)
+        if applied:
+            m.queue.put(("tick", None))
+            self._ensure_worker(m)
+        return {"accepted": True, "result": "accepted" if applied else "stale", "applied": applied}
+
     @staticmethod
     def _transition_warning(m, name):
         started = any(e["event"] == "start" for e in m.events)
@@ -216,18 +271,49 @@ class Registry:
         while True:
             kind, payload = m.queue.get()
             try:
+                # 요약과 안건 분류는 서로 실패해도 영향을 주지 않는다
                 if kind == "batch":
-                    m.summarizer.receive(payload)
-                    self._maybe_publish(m, final=False)
+                    self._step(m, "batch", lambda: (m.summarizer.receive(payload), self._maybe_publish(m, final=False)))
+                    self._step(m, "classify", lambda: self._classify(m, batch=payload))
                 elif kind == "end":
-                    m.summarizer.now_ms = max(m.summarizer.now_ms, payload["at_ms"])
-                    m.summarizer.finish()
-                    self._maybe_publish(m, final=True)
-            except Exception as e:                              # 한 건이 실패해도 일꾼은 계속 돈다
-                m.errors += 1
-                log.error("처리 실패 meeting=%s kind=%s error=%s", m.meeting_id, kind, type(e).__name__)
+                    def finish_summary():
+                        m.summarizer.now_ms = max(m.summarizer.now_ms, payload["at_ms"])
+                        m.summarizer.finish()
+                        self._maybe_publish(m, final=True)
+                    self._step(m, "end", finish_summary)
+                    self._step(m, "classify", lambda: self._classify(m, end_ms=payload["at_ms"], final=True))
+                elif kind == "tick":
+                    self._step(m, "classify", lambda: self._classify(m))
             finally:
                 m.queue.task_done()
+
+    @staticmethod
+    def _step(m, name, fn):
+        try:
+            fn()
+        except Exception as e:                                  # 한 건이 실패해도 일꾼은 계속 돈다
+            m.errors += 1
+            log.error("처리 실패 meeting=%s kind=%s error=%s", m.meeting_id, name, type(e).__name__)
+
+    def _classify(self, m, batch=None, end_ms=None, final=False):
+        """줄 묶음을 분류기에 넘기고, 분류할 때가 되었으면 분류한 뒤 바뀐 것을 백엔드로 보낸다."""
+        if batch is not None:
+            m.classifier.receive(batch)
+        if end_ms is not None:
+            m.classifier.advance(end_ms)
+        m.classifier.process(final=final)
+        self._publish_classification(m, final)
+
+    def _publish_classification(self, m, final):
+        if self.publisher is None or not self.publisher.enabled:
+            return
+        r = m.classifier.take_result(final=final)
+        if r is None:
+            return
+        m.cls_version = max(m.cls_version + 1, int(time.time() * 1000))     # 재시작해도 줄어들지 않도록 시각(밀리초) 이상으로
+        payload = {"schemaVersion": r["schemaVersion"], "meetingId": r["meetingId"], "version": m.cls_version,
+                   **{k: v for k, v in r.items() if k not in ("schemaVersion", "meetingId")}}
+        self.publisher.submit(m.meeting_id, payload, kind=AGENDA_CLASSIFICATION)
 
     def _maybe_publish(self, m, final):
         """요약이 바뀌었으면(또는 종료이면) 백엔드로 보낼 목록에 올린다."""
@@ -280,5 +366,6 @@ class Registry:
                 "llmCalls": m.summarizer.calls,
                 "provider": self.cfg.provider,
                 "summaryVersion": m.version,
+                "agendaClassification": {**m.classifier.info(), "version": m.cls_version},
                 "publisher": self.publisher.info() if self.publisher else {"enabled": False},
             }

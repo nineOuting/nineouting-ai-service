@@ -1,0 +1,17 @@
+{
+  "schema_version": "0.1",
+  "meeting_id": "m_test_001",
+  "date": "2026-10-16",
+  "summary": [
+    {"text": "다음 스프린트부터 일정 관리는 Jira로 옮기기로 함", "topic": "도구", "evidence": [{"start": 312.5, "end": 340.0}]},
+    {"text": "디자인 시안 검토는 금요일 오전으로 정함", "topic": "일정", "evidence": [{"start": 905.0, "end": 921.3}, {"start": 600.04, "end": 615.0}]},
+    {"text": "   ", "topic": "잡담", "evidence": [{"start": 10.0, "end": 12.0}]},
+    {"text": "근거가 없는 항목", "topic": null, "evidence": []},
+    {"text": "회의 막바지에 다음 안건을 정리함", "topic": "", "evidence": [{"start": 3723.0, "end": 3730.9}]}
+  ],
+  "decisions": [
+    {"text": "외부 발표 자료는 다음 주까지 초안을 공유함", "evidence": [{"start": 1200, "end": 1230}]}
+  ],
+  "action_items": [],
+  "extensions": null
+}

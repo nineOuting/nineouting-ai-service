@@ -519,6 +519,279 @@ def test_api_agenda():
         main.registry.shutting_down = False
 
 
+def test_agenda_summary_flow(cap):
+    """안건 보드: 안건별 요약이 전체 상태로 가고, 고친 문장은 고정되며, 종료에서 마지막 상태를 보낸다 (AI-03)"""
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+    reg = Registry(cfg_from_env({}), publisher=pub)
+    mid = "m_sum"
+    board_url = f"http://backend/internal/meetings/{mid}/agenda-board"
+    boards = lambda: [p for u, p in sent if u == board_url]
+    reg.receive_event(mid, {"meetingId": mid, "event": "start", "atMs": 0})
+    ag = dict(load("agendas-put.json"), meetingId=mid)
+    reg.receive_agendas(mid, ag)
+    assert reg.wait_idle(mid) and pub.wait_idle()
+    assert len(boards()) == 1 and all(a["summary"] == [] for a in boards()[0]["agendas"]), "목록을 받으면 빈 요약으로 한 번 보냄"
+    assert [a["agendaId"] for a in boards()[0]["agendas"]] == ["a_101", "a_102", "a_103"]
+    batches, total = agenda_batches(mid)
+    edited = False
+    for k, b in enumerate(batches, 1):
+        reg.receive_batch(mid, b)
+        reg.wait_idle(mid)
+        pub.wait_idle()
+        if k == 12 and not edited:                          # 요약이 하나 나온 뒤에 사람이 고친다
+            first = boards()[-1]["agendas"][0]["summary"]
+            assert first, "12번째 묶음까지 첫 안건의 요약이 나와야 함"
+            r = reg.receive_summary_edits(mid, {"meetingId": mid, "edits": [
+                {"agendaId": "a_101", "itemId": first[0]["id"], "action": "edit", "text": "사람이 쓴 요약 문장",
+                 "evidenceSeqs": first[0]["evidenceSeqs"], "rev": 1}]})
+            assert r == {"accepted": True, "result": "accepted", "applied": 1, "ignored": []}, r
+            r = reg.receive_summary_edits(mid, {"meetingId": mid, "edits": [
+                {"agendaId": "a_101", "itemId": first[0]["id"], "action": "edit", "text": "낡은 글", "evidenceSeqs": [1], "rev": 1},
+                {"agendaId": "a_101", "itemId": "nope", "action": "confirm", "rev": 1}]})
+            assert r == {"accepted": True, "result": "stale", "applied": 0,
+                         "ignored": [{"itemId": first[0]["id"], "reason": "stale"}, {"itemId": "nope", "reason": "not_edited"}]}, r
+            edited, edited_id = True, first[0]["id"]
+            assert reg.wait_idle(mid) and pub.wait_idle()
+            shown = boards()[-1]["agendas"][0]["summary"]            # 다음 묶음을 기다리지 않고 바로 반영된다
+            assert any(x["id"] == edited_id and x["edited"] and x["text"] == "사람이 쓴 요약 문장" for x in shown), shown
+    reg.receive_event(mid, {"meetingId": mid, "event": "end", "atMs": 360000})
+    assert reg.wait_idle(mid) and pub.wait_idle()
+    bs = boards()
+    assert len(bs) >= 3, f"안건 보드를 여러 번 보내야 함: {len(bs)}번"
+    vs = [p["version"] for p in bs]
+    assert vs == sorted(set(vs)) and vs[0] > 10 ** 12, vs
+    assert all("meetingId" not in p and "final" not in p and p["offTopic"] is None for p in bs), "연동 API 초안 3.2에 없는 필드"
+    assert all(len(p["agendas"]) == 3 and all(a["status"] is None and a["opinions"] == [] for a in p["agendas"]) for p in bs)
+    last = bs[-1]
+    a1, a2, a3 = last["agendas"]
+    assert a1["summary"] and a2["summary"] and a3["summary"] == [], last
+    assert last["currentAgendaId"] == "a_102"
+    mine = [x for x in a1["summary"] if x["id"] == edited_id]
+    assert mine == [{"id": edited_id, "text": "사람이 쓴 요약 문장", "evidenceSeqs": mine[0]["evidenceSeqs"], "edited": True,
+                     "needsCheck": False}], a1["summary"]
+    assert all(x["evidenceSeqs"] and all(1 <= s <= total for s in x["evidenceSeqs"]) for a in last["agendas"] for x in a["summary"])
+    assert all(max(x["evidenceSeqs"]) <= 60 for x in a1["summary"]), "앞 절반(배포 일정) 이야기에 뒷부분 줄이 근거로 들어감"
+    assert min(x["evidenceSeqs"][0] for x in a2["summary"]) >= 46, "예산 이야기 안건에 앞부분 줄이 근거로 들어감"
+    ids = [x["id"] for a in last["agendas"] for x in a["summary"]]
+    assert len(ids) == len(set(ids))
+    assert last["basedOnSeq"] >= total - 6, last["basedOnSeq"]
+    st = reg.status(mid)["agendaSummary"]
+    assert st["sentences"] == len(ids) and st["edited"] == 1 and st["halted"] is None and st["errors"] == 0, st
+    dump = json.dumps(reg.status(mid), ensure_ascii=False) + "\n".join(cap.rows)
+    for secret in ("배포 일정 이야기", "예산 한도 이야기", "사람이 쓴 요약 문장", "낡은 글", "QA 담당 정하기", "1차 배포 날짜"):
+        assert secret not in dump, f"로그나 상태에 내용이 있음: {secret}"
+    # 끝난 회의에는 더 받지 않는다. 형식이 틀리면 거절
+    assert reg.receive_summary_edits(mid, {"meetingId": mid, "edits": []})["result"] == "ignored"
+    for bad in ({"meetingId": mid}, {"meetingId": "other", "edits": []},
+                {"meetingId": mid, "edits": [{"agendaId": "a_101", "itemId": "x", "action": "edit", "rev": 1}]}):
+        try:
+            reg.receive_summary_edits(mid, bad)
+            raise SystemExit(f"잘못된 요청을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    # 끈 상태(BACKEND_BASE_URL 없음): 요약은 하되 보내지 않는다
+    off = Registry(cfg_from_env({}), publisher=Publisher(None))
+    off.receive_agendas("y", dict(ag, meetingId="y"))
+    off.receive_batch("y", empty_batch("y", 1))
+    off.wait_idle("y")
+    assert off.status("y")["publisher"]["enabled"] is False and off.status("y")["agendaSummary"]["errors"] == 0
+
+
+def test_summary_config():
+    from .service import summarize_cfg_from_env
+    d = summarize_cfg_from_env({})
+    assert (d.provider, d.refresh_sec, d.max_calls, d.min_new_lines, d.max_sentences) == ("echo", 60, 300, 2, 3)
+    c = summarize_cfg_from_env({"LLM_PROVIDER": "gemini", "LLM_MODEL": "m", "AGENDA_SUMMARY_REFRESH_SEC": "45",
+                                "MAX_AGENDA_SUMMARY_CALLS_PER_MEETING": "99"})
+    assert (c.provider, c.model, c.refresh_sec, c.max_calls) == ("gemini", "m", 45, 99)
+    for key in ("AGENDA_SUMMARY_REFRESH_SEC", "MAX_AGENDA_SUMMARY_CALLS_PER_MEETING"):
+        try:
+            summarize_cfg_from_env({key: "x"})
+            raise SystemExit(f"잘못된 설정을 못 잡음: {key}")
+        except ConfigError:
+            pass
+
+
+def test_agenda_summary_end():
+    """회의가 끝나면 기다리던 마지막 줄까지 요약해 마지막 상태를 보낸다"""
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+    reg = Registry(cfg_from_env({}), publisher=pub)
+    mid = "m_end"
+    reg.receive_event(mid, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(mid, dict(load("agendas-put.json"), meetingId=mid))
+    line = {"seq": 1, "startMs": 0, "endMs": 3500, "text": "배포 일정 이야기 0번", "kind": None, "lowConfidence": False,
+            "recovered": False, "manual": False}
+    reg.receive_batch(mid, {"meetingId": mid, "batch": 1, "lines": [line], "edits": []})
+    assert reg.wait_idle(mid) and pub.wait_idle()
+    boards = lambda: [p for u, p in sent if u.endswith("/agenda-board")]
+    assert all(a["summary"] == [] for a in boards()[-1]["agendas"]), "줄이 1개이고 30초가 안 지났으면 아직 요약하지 않음"
+    reg.receive_event(mid, {"meetingId": mid, "event": "end", "atMs": 5000})
+    assert reg.wait_idle(mid) and pub.wait_idle()
+    first = boards()[-1]["agendas"][0]["summary"]
+    assert len(first) == 1 and first[0]["evidenceSeqs"] == [1], boards()[-1]
+
+
+def test_agenda_summary_isolated():
+    """요약 단계가 실패해도 분류는 계속되고, 분류가 실패해도 요약 단계는 돈다"""
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+
+    def boom(user):
+        raise RuntimeError("summary down")
+    reg = Registry(cfg_from_env({}), publisher=pub, summarize_llm=boom)
+    mid = "m_iso"
+    reg.receive_event(mid, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(mid, dict(load("agendas-put.json"), meetingId=mid))
+    batches, total = agenda_batches(mid, minutes=3)
+    for b in batches:
+        reg.receive_batch(mid, b)
+        reg.wait_idle(mid)
+    reg.receive_event(mid, {"meetingId": mid, "event": "end", "atMs": 180000})
+    assert reg.wait_idle(mid) and pub.wait_idle()
+    cls = [p for u, p in sent if u.endswith("/agenda-classification")]
+    assert sorted(x["seq"] for p in cls for x in p["lines"]) == list(range(1, total + 1)), "요약이 막혀도 분류는 끝까지 가야 함"
+    st = reg.status(mid)
+    assert st["agendaSummary"]["halted"] == "연속 실패" and st["agendaSummary"]["errors"] == 3 and st["errors"] == 0, st
+    assert all(a["summary"] == [] for u, p in sent if u.endswith("/agenda-board") for a in p["agendas"])
+    # 분류 단계가 예외를 내도 요약 단계는 돈다 (분류는 마쳤지만 그 뒤에서 예외가 난 경우)
+    reg3 = Registry(cfg_from_env({}), publisher=pub)
+    m3 = reg3._get("w")
+    real = m3.classifier.process
+
+    def label_then_fail(final=False):
+        real(final=final)
+        raise RuntimeError("classify tail failed")
+    m3.classifier.process = label_then_fail
+    reg3.receive_agendas("w", dict(load("agendas-put.json"), meetingId="w"))
+    for b in agenda_batches("w", minutes=2)[0]:
+        reg3.receive_batch("w", b)
+    assert reg3.wait_idle("w") and pub.wait_idle()
+    wb = [p for u, p in sent if u.endswith("/meetings/w/agenda-board")]
+    assert wb and any(a["summary"] for a in wb[-1]["agendas"]), "분류 단계 예외 때문에 요약 단계가 멈춤"
+    # 요약 쪽이 예외를 내도 일꾼은 계속 돈다
+    reg2 = Registry(cfg_from_env({}), publisher=pub)
+    m = reg2._get("z")
+    m.agenda_summarizer.process = lambda final=False: 1 / 0
+    reg2.receive_agendas("z", dict(load("agendas-put.json"), meetingId="z"))
+    for b in agenda_batches("z", minutes=1)[0]:
+        reg2.receive_batch("z", b)
+    assert reg2.wait_idle("z") and reg2.status("z")["errors"] >= 1 and reg2.status("z")["agendaClassification"]["classified"] > 0
+
+
+def test_publisher_board():
+    """안건 보드: 가장 큰 version 하나만 남기고, 실패하면 보관했다가 다음에 최신으로 보내고, 1초 간격을 지킨다"""
+    sent, fail = [], [True]
+
+    def sender(u, p):
+        sent.append((u, p["version"]))
+        return (False, True, 503) if fail[0] else (True, False, 204)
+    pub = Publisher("http://backend", sender=sender, sleep=lambda s: None, board_interval=0)
+    pub.submit("m", {"version": 5, "agendas": []}, kind="agenda_board")
+    assert pub.wait_idle()
+    assert [v for _, v in sent] == [5, 5, 5, 5] and sent[0][0] == "http://backend/internal/meetings/m/agenda-board"
+    assert pub.stats["failed"] == 1 and ("m", "agenda_board") in pub.carry
+    fail[0] = False
+    sent.clear()
+    pub.submit("m", {"version": 4, "agendas": []}, kind="agenda_board")        # 보관한 것보다 작은 version 은 이기지 못한다
+    assert pub.wait_idle() and [v for _, v in sent] == [5], sent
+    sent.clear()
+    pub.submit("m", {"version": 9, "agendas": []}, kind="agenda_board")
+    assert pub.wait_idle() and [v for _, v in sent] == [9]
+    # 간격: 같은 회의의 보드는 interval 보다 가깝게 보내지 않는다 (가짜 시계)
+    now, sent2 = [100.0], []
+    pub2 = Publisher("http://backend", sender=lambda u, p: (sent2.append((now[0], p["version"])) or (True, False, 204)),
+                     board_interval=1.0, clock=lambda: now[0])
+    pub2.submit("m", {"version": 1, "agendas": []}, kind="agenda_board")
+    assert pub2.wait_idle() and sent2 == [(100.0, 1)]
+    pub2.submit("m", {"version": 2, "agendas": []}, kind="agenda_board")
+    pub2.submit("m", {"version": 3, "agendas": []}, kind="agenda_board")
+    assert not pub2.wait_idle(0.3), "간격이 지나기 전에 보냄"
+    assert pub2.info()["sent"] == 1
+    now[0] = 101.5
+    assert pub2.wait_idle(3.0) and sent2[-1] == (101.5, 3) and len(sent2) == 2, sent2          # 기다리는 사이 쌓인 것은 최신 하나만
+    pub2.submit("other", {"version": 1, "agendas": []}, kind="agenda_board")          # 다른 회의는 기다리지 않는다
+    assert pub2.wait_idle(3.0) and sent2[-1] == (101.5, 1)
+
+
+def test_numeric_meeting_id():
+    """meetingId 가 숫자로 와도 받는다 (연동 API 초안의 공통 규칙). 주소는 문자열이므로 같은 값인지 비교하고,
+    백엔드로 돌려보내는 본문에는 받은 타입 그대로 쓴다."""
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)))
+    reg = Registry(cfg_from_env({}), publisher=pub)
+    mid = 31
+    path = str(mid)                                                          # 주소의 {meetingId}
+    assert reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})["result"] == "accepted"
+    ag = dict(load("agendas-put.json"), meetingId=mid)
+    assert reg.receive_agendas(path, ag)["result"] == "accepted"
+    batches, _ = agenda_batches(mid, minutes=2)
+    for b in batches:
+        assert reg.receive_batch(path, b)["result"] == "accepted"
+        assert reg.wait_idle(path)
+    assert reg.receive_corrections(path, {"meetingId": mid, "corrections": [{"seq": 5, "agendaId": "a_102", "rev": 1}]})["result"] == "accepted"
+    assert reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": 120000})["result"] == "accepted"
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert path in reg.meetings and len(reg.meetings) == 1, "숫자와 문자열이 다른 회의로 갈라짐"
+    kinds = {u.rsplit("/", 1)[1] for u, _ in sent}
+    assert kinds == {"live-summary", "agenda-classification", "agenda-board"}, kinds
+    assert all("/internal/meetings/31/" in u for u, _ in sent), [u for u, _ in sent]
+    assert all(p["meetingId"] == 31 and isinstance(p["meetingId"], int) for u, p in sent if not u.endswith("/agenda-board")), \
+        "받은 타입 그대로 돌려주지 않음"
+    assert reg.status(path)["meetingId"] in (31, "31")
+    # 같은 회의를 문자열로 보내도 같은 회의로 본다. 주소와 값이 다르면 거절한다
+    assert reg.receive_event(path, {"meetingId": "31", "event": "start", "atMs": 0})["result"] == "duplicate"
+    for bad_path, bad_body in (("32", {"meetingId": 31, "event": "pause", "atMs": 5}),
+                               ("31", {"meetingId": 32, "event": "pause", "atMs": 5}),
+                               ("31", {"meetingId": True, "event": "pause", "atMs": 5}),
+                               ("31", {"meetingId": 31.0, "event": "pause", "atMs": 5})):
+        try:
+            reg.receive_event(bad_path, bad_body)
+            raise SystemExit(f"잘못된 meetingId 를 받아 버림: {bad_path} {bad_body}")
+        except AdapterError:
+            pass
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        return
+    from . import main
+    c = TestClient(main.app)
+    r = c.post("/internal/meetings/77/events", json={"meetingId": 77, "event": "start", "atMs": 0})
+    assert r.status_code == 200 and r.json()["accepted"] is True, r.text
+    assert c.post("/internal/meetings/77/events", json={"meetingId": 78, "event": "pause", "atMs": 1}).status_code == 400
+    assert c.put("/internal/meetings/77/agendas", json={"meetingId": 77, "version": 1, "agendas": []}).status_code == 200
+
+
+def test_api_summary_edits():
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        return
+    from . import main
+    c = TestClient(main.app)
+    mid = "31"
+    url = f"/internal/meetings/{mid}/agenda-summary-edits"
+    body = load("agenda-summary-edits-post.json")
+    r = c.post(url, json=body)
+    assert r.status_code == 200 and r.json() == {"accepted": True, "result": "accepted", "applied": 2, "ignored": []}, r.text   # edit 뒤에 confirm
+    r = c.post(url, json=body)
+    assert r.json() == {"accepted": True, "result": "stale", "applied": 0,
+                        "ignored": [{"itemId": "k3f9a1-2", "reason": "stale"}, {"itemId": "k3f9a1-2", "reason": "stale"}]}, r.text
+    assert c.put(url, json=body).status_code == 405                                      # 고친 요약은 POST 만
+    r = c.post(url, json={"meetingId": 31, "edits": [{"agendaId": 101, "itemId": "x", "action": "edit", "rev": 1}]})
+    assert r.status_code == 400 and r.json()["error"] == "INVALID_INPUT" and "text" in r.json()["detail"], r.text
+    assert c.post(url.replace(mid, "32"), json=body).status_code == 400                  # 주소와 본문의 meetingId 불일치
+    s = c.get(f"/internal/meetings/{mid}/status").json()["agendaSummary"]
+    assert s["edited"] == 1 and s["halted"] is None, s
+    main.registry.shutting_down = True
+    try:
+        assert c.post(url, json=body).status_code == 503
+        assert c.post(url, json=body).json()["error"] == "NOT_READY"
+    finally:
+        main.registry.shutting_down = False
+
+
 def main():
     cap = Capture()
     logging.getLogger("ai-service").addHandler(cap)
@@ -530,6 +803,11 @@ def main():
     test_agenda_flow(cap)
     test_agenda_rejects_and_not_ready()
     test_agenda_worker_isolated()
+    test_summary_config()
+    test_agenda_summary_flow(cap)
+    test_agenda_summary_end()
+    test_agenda_summary_isolated()
+    test_publisher_board()
     test_classify_config()
     test_publisher_classification()
     test_publisher_retry()
@@ -540,8 +818,11 @@ def main():
     test_metrics()
     test_api()
     test_api_agenda()
+    test_api_summary_edits()
+    test_numeric_meeting_id()
     print("수신 서버 자체 시험 통과 (설정, 묶음 번호 409, 요약 전송·재시도, 503, 잘못된 요청, 처리 실패, 토큰 지표, 로그에 전사 내용 없음, HTTP, "
-          "안건 분류: 안건 목록·고친 분류 받기, 바뀐 줄만 전송, 고정, 종료 final, 실패 격리, 합쳐 보내기)")
+          "안건 분류: 안건 목록·고친 분류 받기, 바뀐 줄만 전송, 고정, 종료 final, 실패 격리, 합쳐 보내기, 숫자 meetingId, "
+          "안건 요약: 안건 보드 전송, 고친 요약 받기, 실패 격리, 1초 간격)")
 
 
 if __name__ == "__main__":

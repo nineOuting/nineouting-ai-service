@@ -12,6 +12,8 @@
           arrival_ms = endMs (recovered는 +2초). 백엔드가 도착 시각을 주지 않아 추정한 값
   edits   seq -> id. text나 deleted가 없는 edit(speakerLabel만 바뀐 경우 등)은 무시
   event   meetingId -> meeting_id, atMs -> at_ms
+  meetingId  문자열이나 정수(연동 API 초안의 공통 규칙은 숫자). 내부에서는 문자열(meeting_id)로 통일하고,
+             백엔드로 돌려보낼 때 받은 타입 그대로 쓰도록 받은 값을 meeting_id_raw 에 둔다
   agendas      안건 목록 전체 (agenda-contract.md 4장). agendaId 는 문자열이나 정수, key 는 문자열
   corrections  사람이 고친 분류 (agenda-contract.md 7장). agendaId 가 null 이면 해당 없음
 
@@ -39,6 +41,12 @@ def _need(d, key, types, where):
     if isinstance(v, bool) or not isinstance(v, types):
         raise AdapterError(f"{where}: '{key}' 의 타입이 맞지 않음 ({type(v).__name__})")
     return v
+
+
+def _meeting_id(msg, where):
+    """meetingId 를 (내부용 문자열, 받은 값)으로 돌려준다. 문자열이나 정수만 받고 비어 있는 문자열도 그대로 둔다(기존 동작)."""
+    v = _need(msg, "meetingId", (str, int), where)
+    return str(v), v
 
 
 def adapt_line(ln):
@@ -81,27 +89,27 @@ def adapt_edit(e):
 
 def adapt_batch(msg):
     """백엔드 lines/edits 묶음 -> TranscriptStore.apply_batch 가 받는 dict"""
-    meeting_id = _need(msg, "meetingId", str, "batch")
+    meeting_id, raw_id = _meeting_id(msg, "batch")
     batch_no = _need(msg, "batch", int, "batch")
     lines = [adapt_line(x) for x in msg.get("lines") or []]
     edits = [a for a in (adapt_edit(x) for x in msg.get("edits") or []) if a is not None]
-    return {"meeting_id": meeting_id, "seq": batch_no, "lines": lines, "edits": edits}
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "seq": batch_no, "lines": lines, "edits": edits}
 
 
 def adapt_event(msg):
     """회의 이벤트(start / pause / resume / end)"""
-    meeting_id = _need(msg, "meetingId", str, "event")
+    meeting_id, raw_id = _meeting_id(msg, "event")
     event = _need(msg, "event", str, "event")
     if event not in EVENTS:
         raise AdapterError(f"event: 알 수 없는 값 '{event}' (start, pause, resume, end 중 하나)")
     at_ms = _need(msg, "atMs", int, "event")
-    return {"meeting_id": meeting_id, "event": event, "at_ms": at_ms, "wall": msg.get("wall")}
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "event": event, "at_ms": at_ms, "wall": msg.get("wall")}
 
 
 def adapt_agendas(msg):
     """안건 목록 전체 (docs/api/agenda-contract.md 4장) -> {"meeting_id", "version", "agendas"}.
     agendaId 는 문자열이나 정수. 결과를 돌려줄 때 같은 타입을 쓰도록 받은 값(id)과 문자열 key 를 함께 둔다."""
-    meeting_id = _need(msg, "meetingId", str, "agendas")
+    meeting_id, raw_id = _meeting_id(msg, "agendas")
     version = _need(msg, "version", int, "agendas")
     items = _need(msg, "agendas", list, "agendas")
     out, seen = [], set()
@@ -122,13 +130,13 @@ def adapt_agendas(msg):
         out.append({"id": aid, "key": key, "position": _need(a, "position", int, where), "title": title,
                     "decision_point": _need(a, "decisionPoint", str, where),
                     "added": bool(a.get("addedDuringMeeting", False))})
-    return {"meeting_id": meeting_id, "version": version, "agendas": out}
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "version": version, "agendas": out}
 
 
 def adapt_corrections(msg):
     """사람이 고친 분류 (agenda-contract.md 7장) -> {"meeting_id", "corrections"}.
     agendaId 가 null 이면 '해당 없음'으로 고친 것이다. 키가 아예 없으면 실수로 보고 거절한다."""
-    meeting_id = _need(msg, "meetingId", str, "corrections")
+    meeting_id, raw_id = _meeting_id(msg, "corrections")
     items = _need(msg, "corrections", list, "corrections")
     out = []
     for c in items:
@@ -141,7 +149,38 @@ def adapt_corrections(msg):
             raise AdapterError(f"{where}: 'agendaId' 가 없음 (해당 없음이면 null)")
         aid = c["agendaId"] if c["agendaId"] is None else _need(c, "agendaId", (str, int), where)
         out.append({"seq": seq, "agenda_id": aid, "rev": rev})
-    return {"meeting_id": meeting_id, "corrections": out}
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "corrections": out}
+
+
+def adapt_summary_edits(msg):
+    """사람이 고친 요약 (agenda-summary-contract.md 5장) -> {"meeting_id", "edits"}.
+    edit 은 text 와 evidenceSeqs(1개 이상)가 필수이고, confirm 은 없어도 된다."""
+    meeting_id, raw_id = _meeting_id(msg, "summary-edits")
+    items = _need(msg, "edits", list, "edits")
+    out = []
+    for e in items:
+        if not isinstance(e, dict):
+            raise AdapterError("edits: 항목이 객체가 아님")
+        where = f"summary edit itemId={e.get('itemId', '?')}"
+        aid = _need(e, "agendaId", (str, int), where)
+        iid = _need(e, "itemId", str, where)
+        if not iid:
+            raise AdapterError(f"{where}: 'itemId' 가 비어 있음")
+        action = _need(e, "action", str, where)
+        if action not in ("edit", "confirm"):
+            raise AdapterError(f"{where}: 'action' 은 edit 또는 confirm 이어야 함 ({action})")
+        rev = _need(e, "rev", int, where)
+        row = {"agenda_id": aid, "item_id": iid, "action": action, "rev": rev}
+        if action == "edit":
+            text = _need(e, "text", str, where)
+            if not text.strip():
+                raise AdapterError(f"{where}: 'text' 가 비어 있음")
+            ev = _need(e, "evidenceSeqs", list, where)
+            if not ev or any(isinstance(x, bool) or not isinstance(x, int) for x in ev):
+                raise AdapterError(f"{where}: 'evidenceSeqs' 는 1개 이상의 정수 배열이어야 함")
+            row.update({"text": text, "evidence_seqs": ev})
+        out.append(row)
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "edits": out}
 
 
 # --------------------------------------------------------------------------------------
@@ -247,7 +286,65 @@ def selftest():
             raise SystemExit(f"잘못된 고침을 못 잡음: {bad}")
         except AdapterError:
             pass
-    print("입력 어댑터 자체 시험 통과 (이벤트 4종, 줄 변환, edits, manual, speakerLabel, 잘못된 입력, 안건 목록, 고친 분류)")
+    # 8) meetingId 는 문자열이나 정수. 내부는 문자열, 받은 값은 그대로 보관. 불리언·실수·null·없음은 거절
+    for mid in ("m_1234", 31):
+        want = (str(mid), mid)
+        for got in (adapt_batch({"meetingId": mid, "batch": 1, "lines": []}),
+                    adapt_event({"meetingId": mid, "event": "start", "atMs": 0}),
+                    adapt_agendas({"meetingId": mid, "version": 1, "agendas": []}),
+                    adapt_corrections({"meetingId": mid, "corrections": []})):
+            assert (got["meeting_id"], got["meeting_id_raw"]) == want and isinstance(got["meeting_id"], str), got
+    for bad in (True, 3.5, None):
+        for fn, rest in ((adapt_batch, {"batch": 1, "lines": []}), (adapt_event, {"event": "start", "atMs": 0}),
+                         (adapt_agendas, {"version": 1, "agendas": []}), (adapt_corrections, {"corrections": []})):
+            try:
+                fn(dict(rest, meetingId=bad))
+                raise SystemExit(f"잘못된 meetingId 를 못 잡음: {bad!r} {fn.__name__}")
+            except AdapterError:
+                pass
+    try:
+        adapt_batch({"batch": 1, "lines": []})
+        raise SystemExit("meetingId 가 없는 묶음을 받아 버림")
+    except AdapterError:
+        pass
+    # 9) 사람이 고친 요약: 예시 파일, edit/confirm 필수 필드, 잘못된 입력
+    se = adapt_summary_edits(load("agenda-summary-edits-post.json"))
+    assert se["meeting_id"] == "31" and se["meeting_id_raw"] == 31 and len(se["edits"]) == 2
+    e0, e1 = se["edits"]
+    assert e0["action"] == "edit" and e0["agenda_id"] == 101 and e0["item_id"] == "k3f9a1-2" and e0["rev"] == 3
+    assert e0["evidence_seqs"] == [44, 45] and e0["text"]
+    assert e1["action"] == "confirm" and e1["rev"] == 4 and "text" not in e1 and "evidence_seqs" not in e1
+    ok = {"meetingId": "m", "edits": [{"agendaId": "a", "itemId": "i", "action": "edit", "text": "글", "evidenceSeqs": [1], "rev": 1}]}
+    assert adapt_summary_edits(ok)["edits"][0]["agenda_id"] == "a"
+    assert adapt_summary_edits({"meetingId": "m", "edits": []})["edits"] == []
+
+    def bad_edit(**change):
+        e = dict(ok["edits"][0])
+        for k, v in change.items():
+            if v is _DROP:
+                e.pop(k, None)
+            else:
+                e[k] = v
+        try:
+            adapt_summary_edits({"meetingId": "m", "edits": [e]})
+        except AdapterError:
+            return
+        raise SystemExit(f"잘못된 고친 요약을 못 잡음: {change}")
+    _DROP = object()
+    for change in ({"action": "delete"}, {"text": _DROP}, {"text": "  "}, {"evidenceSeqs": _DROP}, {"evidenceSeqs": []},
+                   {"evidenceSeqs": ["1"]}, {"evidenceSeqs": [True]}, {"rev": "1"}, {"rev": _DROP}, {"itemId": ""},
+                   {"itemId": 5}, {"agendaId": None}, {"agendaId": _DROP}, {"action": _DROP}):
+        bad_edit(**change)
+    for bad in ({"meetingId": "m"}, {"meetingId": "m", "edits": {}}, {"meetingId": "m", "edits": ["x"]}, {"edits": []}):
+        try:
+            adapt_summary_edits(bad)
+            raise SystemExit(f"잘못된 본문을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    c1 = adapt_summary_edits({"meetingId": "m", "edits": [{"agendaId": "a", "itemId": "i", "action": "confirm", "rev": 1}]})
+    assert c1["edits"][0]["action"] == "confirm"
+
+    print("입력 어댑터 자체 시험 통과 (이벤트 4종, 줄 변환, edits, manual, speakerLabel, 잘못된 입력, 안건 목록, 고친 분류, meetingId 문자열·정수, 고친 요약)")
 
 
 if __name__ == "__main__":

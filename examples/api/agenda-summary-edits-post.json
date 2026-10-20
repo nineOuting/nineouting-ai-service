@@ -1,0 +1,19 @@
+{
+  "meetingId": 31,
+  "edits": [
+    {
+      "agendaId": 101,
+      "itemId": "k3f9a1-2",
+      "action": "edit",
+      "text": "목요일은 QA 일정과 겹쳐 금요일로 미루자는 의견이 나옴",
+      "evidenceSeqs": [44, 45],
+      "rev": 3
+    },
+    {
+      "agendaId": 101,
+      "itemId": "k3f9a1-2",
+      "action": "confirm",
+      "rev": 4
+    }
+  ]
+}

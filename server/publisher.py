@@ -4,10 +4,12 @@ AI 서버가 만든 결과를 백엔드로 보낸다 (PUT).
 
   회의 중 요약   PUT {BACKEND_BASE_URL}{LIVE_SUMMARY_PATH}            (기본: /internal/meetings/{meeting_id}/live-summary)
   안건 분류 결과 PUT {BACKEND_BASE_URL}{AGENDA_CLASSIFICATION_PATH}   (기본: /internal/meetings/{meeting_id}/agenda-classification)
+  안건 보드      PUT {BACKEND_BASE_URL}{AGENDA_BOARD_PATH}            (기본: /internal/meetings/{meeting_id}/agenda-board)
 
 규칙
   - 회의마다, 종류마다 가장 최신 것 하나만 보낸다. 보내는 중에 더 새 것이 생기면 옛것은 버린다.
     단, 안건 분류 결과는 바뀐 줄만 담으므로 버리지 않고 줄 번호별 최신 값으로 합쳐서 보낸다 (merge_classification).
+    안건 보드는 전체 상태라서 가장 큰 version 하나만 남긴다 (merge_latest). 같은 회의의 안건 보드는 1초에 한 번보다 자주 보내지 않는다.
   - 2xx 가 아니면 재시도 3회, 간격 1초·2초·4초(지수 백오프). 408·429·5xx·연결 오류만 재시도하고, 그 밖의 4xx 는 바로 포기한다.
   - 안건 분류 결과는 재시도를 다 써도 실패하면(5xx·연결 오류) 보관했다가 다음 결과에 합쳐 보낸다. 4xx 는 다시 보내도 소용없으므로 보관하지 않는다.
   - BACKEND_BASE_URL 이 없으면 보내지 않는다 (개발·시험용).
@@ -24,8 +26,11 @@ log = logging.getLogger("ai-service.publisher")
 
 DEFAULT_PATH = "/internal/meetings/{meeting_id}/live-summary"
 CLASSIFICATION_PATH = "/internal/meetings/{meeting_id}/agenda-classification"
+BOARD_PATH = "/internal/meetings/{meeting_id}/agenda-board"
 LIVE_SUMMARY = "live_summary"
 AGENDA_CLASSIFICATION = "agenda_classification"
+AGENDA_BOARD = "agenda_board"
+BOARD_MIN_INTERVAL_SEC = 1.0           # 연동 API 초안 7장: 안건 보드는 최대 초당 1번
 
 
 def merge_classification(old, new):
@@ -39,15 +44,27 @@ def merge_classification(old, new):
     return out
 
 
-MERGERS = {AGENDA_CLASSIFICATION: merge_classification}      # 이 종류는 버리지 않고 합친다
+def merge_latest(old, new):
+    """전체 상태를 보내는 종류: version 이 큰 쪽이 이긴다 (같으면 new)."""
+    return new if new.get("version", 0) >= old.get("version", 0) else old
+
+
+MERGERS = {AGENDA_CLASSIFICATION: merge_classification,      # 이 종류들은 못 보낸 것을 버리지 않고 보관해 다음에 합친다
+           AGENDA_BOARD: merge_latest}
+MIN_INTERVAL = {AGENDA_BOARD: BOARD_MIN_INTERVAL_SEC}
 
 
 class Publisher:
     def __init__(self, base_url, path=DEFAULT_PATH, timeout=5.0, backoffs=(1.0, 2.0, 4.0), sender=None, sleep=time.sleep,
-                 classification_path=CLASSIFICATION_PATH):
+                 classification_path=CLASSIFICATION_PATH, board_path=BOARD_PATH, board_interval=BOARD_MIN_INTERVAL_SEC,
+                 clock=time.monotonic):
         self.base_url = (base_url or "").rstrip("/")
         self.enabled = bool(self.base_url)
-        self.paths = {LIVE_SUMMARY: path, AGENDA_CLASSIFICATION: classification_path or CLASSIFICATION_PATH}
+        self.paths = {LIVE_SUMMARY: path, AGENDA_CLASSIFICATION: classification_path or CLASSIFICATION_PATH,
+                      AGENDA_BOARD: board_path or BOARD_PATH}
+        self.intervals = dict(MIN_INTERVAL, **{AGENDA_BOARD: board_interval})
+        self.clock = clock
+        self.last_start = {}                       # (회의 번호, 종류) -> 마지막으로 보내기 시작한 시각
         self.timeout = timeout
         self.backoffs = tuple(backoffs)
         self.sender = sender                       # 시험용: fn(url, payload) -> (성공, 재시도 가능, 상태 코드)
@@ -66,7 +83,8 @@ class Publisher:
     @classmethod
     def from_env(cls, env):
         return cls(env.get("BACKEND_BASE_URL"), env.get("LIVE_SUMMARY_PATH") or DEFAULT_PATH,
-                   classification_path=env.get("AGENDA_CLASSIFICATION_PATH") or CLASSIFICATION_PATH)
+                   classification_path=env.get("AGENDA_CLASSIFICATION_PATH") or CLASSIFICATION_PATH,
+                   board_path=env.get("AGENDA_BOARD_PATH") or BOARD_PATH)
 
     def submit(self, meeting_id, payload, kind=LIVE_SUMMARY):
         if not self.enabled:
@@ -91,10 +109,16 @@ class Publisher:
     def _run(self):
         while True:
             with self.cond:
-                while not self.pending:
-                    self.cond.wait()
-                key = next(iter(self.pending))
+                while True:
+                    while not self.pending:
+                        self.cond.wait()
+                    waits = {k: self._interval_wait(k) for k in self.pending}
+                    key = next((k for k, w in waits.items() if w <= 0), None)
+                    if key is not None:
+                        break
+                    self.cond.wait(min(waits.values()))       # 보내는 간격을 지키는 동안 더 새 내용이 오면 그것을 보낸다
                 payload = self.pending.pop(key)
+                self.last_start[key] = self.clock()
                 self.busy = True
             try:
                 self._deliver(key[0], key[1], payload)
@@ -105,6 +129,12 @@ class Publisher:
                 with self.cond:
                     self.busy = False
                     self.cond.notify_all()
+
+    def _interval_wait(self, key):
+        interval, last = self.intervals.get(key[1], 0), self.last_start.get(key)
+        if not interval or last is None:
+            return 0.0
+        return max(0.0, last + interval - self.clock())
 
     def _requeue(self, meeting_id, kind, payload):
         """합치는 종류는 못 보낸 내용을 버리지 않는다. 대기 중인 더 새 내용이 있으면 거기에 합치고, 없으면 보관한다."""

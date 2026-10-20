@@ -35,7 +35,8 @@ flowchart LR
 | 토큰 사용량 지표 | 구현 | OpenTelemetry `gen_ai.client.token.usage`, `GET /metrics` |
 | Bedrock 호출 | 미구현 | 리전·모델 ID 확인 후 추가 |
 | 안건 자동 분류 | 구현, 1차 평가 완료 | 줄마다 안건 하나 또는 해당 없음. 직전 대화와 사람이 고친 예를 함께 보여 줌. 사람이 고친 줄은 고정. 결과는 새로 분류했거나 바뀐 줄만 PUT (`docs/eval/agenda-classification-eval-v1.md`) |
-| 안건별 요약·안건 상태 판정 | 미구현 | PRD AI-03, AI-04 |
+| 안건별 요약 | 구현, 평가 전 | 안건마다 그 안건의 줄만 모아 2~3문장으로 요약하고 문장마다 근거 줄을 붙임. 사람이 고친 문장은 고정하고 근거가 달라지면 "확인 필요" 표시. 안건 보드 전체 상태를 PUT (`docs/api/agenda-summary-contract.md`) |
+| 안건 상태 판정 | 미구현 | PRD AI-04 |
 | 안건 보드, 오늘 회의 요약, 회의록 초안, 챗봇 | 미구현 | 연동 API 초안 기준 |
 
 현재 LLM은 기본값이 `echo`(모델을 부르지 않는 테스트용)이고, 실제 요약과 안건 분류는 Gemini로 시험했다.
@@ -71,6 +72,7 @@ flowchart LR
 | 수신 현황 (전사 내용 없음) | `GET /internal/meetings/{meetingId}/status` |
 | 안건 목록 전체 (덮어쓰기) | `PUT /internal/meetings/{meetingId}/agendas` |
 | 사람이 고친 분류 | `POST /internal/meetings/{meetingId}/agenda-corrections` |
+| 사람이 고친 요약 | `POST /internal/meetings/{meetingId}/agenda-summary-edits` |
 | 상태 확인 | `GET /health` |
 
 - 응답 (자세한 내용은 입력 형식 문서 7장)
@@ -86,6 +88,7 @@ flowchart LR
 - `end` 알림 뒤에 도착한 줄 묶음은 무시하므로, 마지막 줄 묶음을 먼저 보낸 뒤 `end`를 보낸다.
 - 회의 중 요약은 AI 서비스가 `PUT {백엔드 주소}/internal/meetings/{meetingId}/live-summary`로 보낸다 (`docs/api/output-contract.md`).
 - 줄별 안건 분류 결과는 `PUT {백엔드 주소}/internal/meetings/{meetingId}/agenda-classification`으로 보낸다. 새로 분류했거나 바뀐 줄만 담고, 회의 종료 뒤에는 `final: true` 결과를 보낸다. 안건 목록이 아직 없으면 줄을 모아 두었다가 목록이 오면 분류한다 (`docs/api/agenda-contract.md`).
+- 안건별 요약은 `PUT {백엔드 주소}/internal/meetings/{meetingId}/agenda-board`로 보낸다. 안건 목록의 모든 안건을 담은 전체 상태이고, 담을 값이 바뀌었을 때만 보내며 1초에 한 번보다 자주 보내지 않는다. 가장 큰 `version`이 최신이다 (`docs/api/agenda-summary-contract.md`).
 - 일시적 실패(408, 429, 5xx, 연결 오류)는 1, 2, 4초 간격으로 3번 다시 보내고, 그 밖의 4xx는 버린다. 백엔드가 어떤 4xx를 돌려주는지는 연동 때 확인한다.
 
 ### 클라우드
@@ -107,6 +110,9 @@ flowchart LR
 | `AGENDA_CLASSIFICATION_PATH` | 안건 분류 결과를 보낼 경로 (`BACKEND_BASE_URL`과 같은 주소로) | `/internal/meetings/{meeting_id}/agenda-classification` |
 | `CLASSIFY_REFRESH_SEC` | 안건 분류 모델 호출 간격(음성 시간 초) | 30 |
 | `MAX_CLASSIFY_CALLS_PER_MEETING` | 회의당 안건 분류 호출 상한 | 200 |
+| `AGENDA_BOARD_PATH` | 안건 보드를 보낼 경로 (`BACKEND_BASE_URL`과 같은 주소로) | `/internal/meetings/{meeting_id}/agenda-board` |
+| `AGENDA_SUMMARY_REFRESH_SEC` | 안건에 새 줄이 1개뿐일 때 요약을 기다리는 시간(음성 시간 초). 2개 이상이면 바로 요약 | 60 |
+| `MAX_AGENDA_SUMMARY_CALLS_PER_MEETING` | 회의당 안건별 요약 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 토큰 지표를 OTLP(HTTP)로도 보낼 주소 | 없음 |
 | `LOG_LEVEL` | 로그 수준 | `INFO` |
 | `GEMINI_API_KEY` | `LLM_PROVIDER=gemini`일 때 필요. 없으면 `503` | 없음 |

@@ -6,16 +6,25 @@
 FastAPI 없이 표준 라이브러리만 쓴다 (server/main.py 가 이 클래스를 HTTP로 감싼다).
 
 흐름
-  받기(바로 응답) : 형식 검사 -> 중복·순서 확인 -> 회의별 대기열에 넣기
-  처리(뒤에서)    : 회의마다 일꾼 스레드 하나가 대기열을 순서대로 꺼내 요약 코드에 넘김
+  받기(바로 응답) : 준비 확인 -> 형식 검사 -> 묶음 번호 확인 -> 회의별 대기열에 넣기
+  처리(뒤에서)    : 회의마다 일꾼 스레드 하나가 대기열을 순서대로 꺼내 요약 코드에 넘기고,
+                   요약이 바뀌면 백엔드로 보낸다 (publisher.py)
+
+묶음 번호 규칙 (입력 형식 문서 7·8장)
+  이미 받은 번호      -> 무시 (duplicate)
+  다음 번호(마지막+1) -> 받음
+  그 밖의 번호        -> 처리하지 않고 BatchOutOfOrder(expected). 백엔드가 expected 번부터 다시 보낸다.
+  재시작해서 모르는 회의의 묶음도 같은 길로 처리한다 (expected 는 1).
 
 로그 규칙: 전사 내용은 로그에 남기지 않는다. 회의 번호, 묶음 번호, 개수, 예외 이름만 남긴다.
 """
+import json
 import logging
 import os
 import queue
 import sys
 import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SUMMARY_DIR = os.path.abspath(os.path.join(HERE, "..", "summary"))
@@ -28,10 +37,27 @@ from meeting_live_summary_v2 import LiveSummarizer, Cfg  # noqa: E402
 log = logging.getLogger("ai-service")
 
 SUPPORTED_PROVIDERS = ("echo", "gemini", "anthropic", "openai")   # bedrock 은 다음 작업에서 추가
+PROVIDER_KEYS = {                                                 # provider 별로 필요한 API 키 환경변수 (하나만 있으면 됨)
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+}
 
 
 class ConfigError(ValueError):
     """환경변수 설정이 잘못됐을 때."""
+
+
+class BatchOutOfOrder(Exception):
+    """묶음 번호가 이어지지 않을 때. expected 번부터 다시 보내야 한다 (HTTP 409)."""
+
+    def __init__(self, expected):
+        super().__init__(f"expectedBatch={expected}")
+        self.expected = expected
+
+
+class NotReady(Exception):
+    """아직 받을 수 없을 때 (HTTP 503). 백엔드는 보낼 것을 남겨 두고 나중에 다시 보낸다."""
 
 
 def cfg_from_env(env=None):
@@ -61,22 +87,41 @@ class MeetingState:
         self.lock = threading.Lock()
         self.queue = queue.Queue()
         self.worker = None
-        self.seen_batches = set()
-        self.max_batch = 0
-        self.gaps = []                      # 건너뛴 묶음 번호 구간 [(처음, 끝), ...]
+        self.max_batch = 0                  # 지금까지 받은 마지막 묶음 번호 (1부터 빠짐없이 이어진다)
+        self.out_of_order = 0               # 번호가 이어지지 않아 다시 보내 달라고 한 횟수
         self.seen_events = set()            # (event, atMs)
         self.events = []                    # [{"event", "atMs"}]
         self.warnings = 0
         self.counts = {"batches": 0, "lines": 0, "edits": 0}
         self.errors = 0
+        self.version = 0                    # 백엔드로 보낸 요약의 마지막 version
+        self.last_sig = None                # 마지막으로 보낸 요약의 내용 (같으면 다시 보내지 않음)
 
 
 class Registry:
-    def __init__(self, cfg, llm=None):
+    def __init__(self, cfg, llm=None, publisher=None, env=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
+        self.publisher = publisher
+        self.env = os.environ if env is None else env
+        self.shutting_down = False
         self.meetings = {}
         self.lock = threading.Lock()
+
+    # ---------------- 준비 상태 ----------------
+    def ready(self):
+        """(준비됨, 이유). 종료 중이거나 필요한 API 키가 없으면 준비되지 않은 것으로 본다."""
+        if self.shutting_down:
+            return False, "서버 종료 중"
+        keys = PROVIDER_KEYS.get(self.cfg.provider)
+        if keys and self.llm is None and not any(self.env.get(k) for k in keys):
+            return False, f"{self.cfg.provider} API 키가 설정되지 않음 ({' 또는 '.join(keys)})"
+        return True, None
+
+    def _require_ready(self):
+        ok, why = self.ready()
+        if not ok:
+            raise NotReady(why)
 
     # ---------------- 받기 ----------------
     def _get(self, meeting_id):
@@ -92,6 +137,7 @@ class Registry:
             raise AdapterError(f"meetingId가 주소와 다름 (주소 {path_id}, 본문 {body_id})")
 
     def receive_batch(self, path_meeting_id, msg):
+        self._require_ready()
         a = adapt_batch(msg)                                   # 형식이 틀리면 AdapterError
         self._check_same_id(path_meeting_id, a["meeting_id"])
         m = self._get(a["meeting_id"])
@@ -100,16 +146,14 @@ class Registry:
             if m.status == "ended":
                 log.warning("종료된 회의의 묶음 무시 meeting=%s batch=%s", m.meeting_id, n)
                 return {"accepted": False, "result": "ignored", "reason": "ended", "batch": n}
-            if n in m.seen_batches:
+            if n <= m.max_batch:
                 log.info("중복 묶음 무시 meeting=%s batch=%s", m.meeting_id, n)
                 return {"accepted": True, "result": "duplicate", "batch": n}
-            gap = None
-            if n > m.max_batch + 1:
-                gap = (m.max_batch + 1, n - 1)
-                m.gaps.append(gap)
-                log.warning("묶음 번호가 건너뜀 meeting=%s 빠진 번호=%s~%s", m.meeting_id, gap[0], gap[1])
-            m.seen_batches.add(n)
-            m.max_batch = max(m.max_batch, n)
+            if n != m.max_batch + 1:
+                m.out_of_order += 1
+                log.warning("묶음 번호가 이어지지 않음 meeting=%s 받은 번호=%s 기대 번호=%s", m.meeting_id, n, m.max_batch + 1)
+                raise BatchOutOfOrder(m.max_batch + 1)
+            m.max_batch = n
             if m.status == "new":
                 m.status = "running"
             m.counts["batches"] += 1
@@ -119,12 +163,10 @@ class Registry:
             m.queue.put(("batch", a))
             self._ensure_worker(m)
             log.info("묶음 수신 meeting=%s batch=%s lines=%s edits=%s", m.meeting_id, n, len(a["lines"]), len(a["edits"]))
-        out = {"accepted": True, "result": "accepted", "batch": n}
-        if gap:
-            out["gap"] = {"from": gap[0], "to": gap[1]}
-        return out
+        return {"accepted": True, "result": "accepted", "batch": n}
 
     def receive_event(self, path_meeting_id, msg):
+        self._require_ready()
         ev = adapt_event(msg)
         self._check_same_id(path_meeting_id, ev["meeting_id"])
         m = self._get(ev["meeting_id"])
@@ -176,14 +218,35 @@ class Registry:
             try:
                 if kind == "batch":
                     m.summarizer.receive(payload)
+                    self._maybe_publish(m, final=False)
                 elif kind == "end":
                     m.summarizer.now_ms = max(m.summarizer.now_ms, payload["at_ms"])
                     m.summarizer.finish()
+                    self._maybe_publish(m, final=True)
             except Exception as e:                              # 한 건이 실패해도 일꾼은 계속 돈다
                 m.errors += 1
                 log.error("처리 실패 meeting=%s kind=%s error=%s", m.meeting_id, kind, type(e).__name__)
             finally:
                 m.queue.task_done()
+
+    def _maybe_publish(self, m, final):
+        """요약이 바뀌었으면(또는 종료이면) 백엔드로 보낼 목록에 올린다."""
+        if self.publisher is None or not self.publisher.enabled:
+            return
+        summary = m.summarizer.export_summary()["summary"]
+        sig = json.dumps(summary, ensure_ascii=False, sort_keys=True)
+        if not final and (sig == m.last_sig or (not summary and m.last_sig is None)):
+            return
+        m.last_sig = sig
+        m.version = max(m.version + 1, int(time.time() * 1000))   # 재시작해도 줄어들지 않도록 시각(밀리초) 이상으로
+        self.publisher.submit(m.meeting_id, {
+            "schemaVersion": "0.1",
+            "meetingId": m.meeting_id,
+            "version": m.version,
+            "atMs": m.summarizer.now_ms,
+            "final": final,
+            "summary": summary,
+        })
 
     def wait_idle(self, meeting_id, timeout=10.0):
         """시험용: 대기열이 빌 때까지 기다린다."""
@@ -209,11 +272,13 @@ class Registry:
                 "status": m.status,
                 "lastBatch": m.max_batch,
                 "received": dict(m.counts),
-                "gaps": [{"from": a, "to": b} for a, b in m.gaps],
+                "outOfOrder": m.out_of_order,
                 "events": list(m.events),
                 "warnings": m.warnings,
                 "errors": m.errors,
                 "queued": m.queue.qsize(),
                 "llmCalls": m.summarizer.calls,
                 "provider": self.cfg.provider,
+                "summaryVersion": m.version,
+                "publisher": self.publisher.info() if self.publisher else {"enabled": False},
             }

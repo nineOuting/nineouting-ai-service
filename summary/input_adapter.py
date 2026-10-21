@@ -16,6 +16,8 @@
              백엔드로 돌려보낼 때 받은 타입 그대로 쓰도록 받은 값을 meeting_id_raw 에 둔다
   agendas      안건 목록 전체 (agenda-contract.md 4장). agendaId 는 문자열이나 정수, key 는 문자열
   corrections  사람이 고친 분류 (agenda-contract.md 7장). agendaId 가 null 이면 해당 없음
+  attendees    안건 목록 요청의 선택 필드, 참석자 명단 (agenda-opinions-contract.md 6장). 없으면 None, 있으면 [{user_id, name}]
+  item edits   사람이 고친 의견·할 일 (agenda-opinions-contract.md 5장). target 은 opinion 또는 todo
 
 표준 라이브러리만 쓴다. 외부 호출 없음.
 """
@@ -28,6 +30,7 @@ sys.path.insert(0, HERE)
 
 RECOVERED_DELAY_MS = 2000                     # meeting_summary.py와 같은 값 (recovered 줄은 약 2초 뒤 도착)
 EVENTS = ("start", "pause", "resume", "end")
+OPINION_KINDS = ("OPINION", "EVIDENCE", "CONCERN", "QUESTION")   # 의견 항목의 종류 (agenda_opinions.py 와 같은 값)
 
 
 class AdapterError(ValueError):
@@ -130,7 +133,24 @@ def adapt_agendas(msg):
         out.append({"id": aid, "key": key, "position": _need(a, "position", int, where), "title": title,
                     "decision_point": _need(a, "decisionPoint", str, where),
                     "added": bool(a.get("addedDuringMeeting", False))})
-    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "version": version, "agendas": out}
+    attendees = None
+    if msg.get("attendees") is not None:                     # 선택 필드. 없거나 null 이면 이전 명단을 그대로 둔다
+        raw = msg["attendees"]
+        if not isinstance(raw, list):
+            raise AdapterError("agendas: 'attendees' 는 배열이어야 함")
+        attendees = []
+        for p in raw:
+            if not isinstance(p, dict):
+                raise AdapterError("attendees: 항목이 객체가 아님")
+            where = f"attendee {p.get('userId', '?')}"
+            uid = _need(p, "userId", (str, int), where)
+            if isinstance(uid, str) and not uid.strip():
+                raise AdapterError(f"{where}: userId가 비어 있음")
+            name = _need(p, "name", str, where)
+            if not name.strip():
+                raise AdapterError(f"{where}: name이 비어 있음")
+            attendees.append({"user_id": uid, "name": name.strip()})
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "version": version, "agendas": out, "attendees": attendees}
 
 
 def adapt_corrections(msg):
@@ -179,6 +199,65 @@ def adapt_summary_edits(msg):
             if not ev or any(isinstance(x, bool) or not isinstance(x, int) for x in ev):
                 raise AdapterError(f"{where}: 'evidenceSeqs' 는 1개 이상의 정수 배열이어야 함")
             row.update({"text": text, "evidence_seqs": ev})
+        out.append(row)
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "edits": out}
+
+
+def _opt_str(d, key, where):
+    """선택 문자열 칸. 없거나 null 이거나 공백뿐이면 None."""
+    v = d.get(key)
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, str):
+        raise AdapterError(f"{where}: '{key}' 의 타입이 맞지 않음 ({type(v).__name__})")
+    return v.strip() or None
+
+
+def adapt_item_edits(msg):
+    """사람이 고친 의견·할 일 (agenda-opinions-contract.md 5장) -> {"meeting_id", "edits"}.
+    edit 은 evidenceSeqs(1개 이상)가 필수이고, 의견은 text·kind, 할 일은 task 가 필수다. confirm 은 없어도 된다."""
+    meeting_id, raw_id = _meeting_id(msg, "item-edits")
+    items = _need(msg, "edits", list, "edits")
+    out = []
+    for e in items:
+        if not isinstance(e, dict):
+            raise AdapterError("edits: 항목이 객체가 아님")
+        where = f"item edit itemId={e.get('itemId', '?')}"
+        aid = _need(e, "agendaId", (str, int), where)
+        target = _need(e, "target", str, where)
+        if target not in ("opinion", "todo"):
+            raise AdapterError(f"{where}: 'target' 은 opinion 또는 todo 여야 함 ({target})")
+        iid = _need(e, "itemId", str, where)
+        if not iid:
+            raise AdapterError(f"{where}: 'itemId' 가 비어 있음")
+        action = _need(e, "action", str, where)
+        if action not in ("edit", "confirm"):
+            raise AdapterError(f"{where}: 'action' 은 edit 또는 confirm 이어야 함 ({action})")
+        row = {"agenda_id": aid, "target": target, "item_id": iid, "action": action, "rev": _need(e, "rev", int, where)}
+        if action == "edit":
+            ev = _need(e, "evidenceSeqs", list, where)
+            if not ev or any(isinstance(x, bool) or not isinstance(x, int) for x in ev):
+                raise AdapterError(f"{where}: 'evidenceSeqs' 는 1개 이상의 정수 배열이어야 함")
+            row["evidence_seqs"] = ev
+            if target == "opinion":
+                text = _need(e, "text", str, where)
+                if not text.strip():
+                    raise AdapterError(f"{where}: 'text' 가 비어 있음")
+                kind = _need(e, "kind", str, where)
+                if kind not in OPINION_KINDS:
+                    raise AdapterError(f"{where}: 'kind' 는 {', '.join(OPINION_KINDS)} 중 하나여야 함 ({kind})")
+                row.update({"text": text, "kind": kind})
+            else:
+                task = _need(e, "task", str, where)
+                if not task.strip():
+                    raise AdapterError(f"{where}: 'task' 가 비어 있음")
+                uid = e.get("assigneeUserId")
+                if uid is not None and (isinstance(uid, bool) or not isinstance(uid, (str, int))):
+                    raise AdapterError(f"{where}: 'assigneeUserId' 의 타입이 맞지 않음 ({type(uid).__name__})")
+                if isinstance(uid, str) and not uid.strip():
+                    uid = None
+                row.update({"task": task, "assignee_name": _opt_str(e, "assigneeName", where), "assignee_user_id": uid,
+                            "due_text": _opt_str(e, "dueText", where)})
         out.append(row)
     return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "edits": out}
 
@@ -344,7 +423,77 @@ def selftest():
     c1 = adapt_summary_edits({"meetingId": "m", "edits": [{"agendaId": "a", "itemId": "i", "action": "confirm", "rev": 1}]})
     assert c1["edits"][0]["action"] == "confirm"
 
-    print("입력 어댑터 자체 시험 통과 (이벤트 4종, 줄 변환, edits, manual, speakerLabel, 잘못된 입력, 안건 목록, 고친 분류, meetingId 문자열·정수, 고친 요약)")
+    # 10) 참석자 명단: 선택 필드. 없거나 null 이면 None, 있으면 변환. 형식이 틀리면 거절
+    ga = adapt_agendas(load("agendas-with-attendees-put.json"))
+    assert ga["meeting_id_raw"] == 31 and ga["version"] == 4 and len(ga["agendas"]) == 3
+    assert ga["attendees"] == [{"user_id": 7, "name": "김철수"}, {"user_id": 8, "name": "이영희"}], ga["attendees"]
+    assert adapt_agendas(load("agendas-put.json"))["attendees"] is None, "필드가 없으면 None (이전 명단을 그대로 둔다)"
+    base = {"meetingId": "m", "version": 1, "agendas": []}
+    assert adapt_agendas(dict(base, attendees=None))["attendees"] is None
+    assert adapt_agendas(dict(base, attendees=[]))["attendees"] == [], "빈 배열은 명단이 비었다는 뜻"
+    assert adapt_agendas(dict(base, attendees=[{"userId": "u1", "name": " 김철수 "}]))["attendees"] == [{"user_id": "u1", "name": "김철수"}]
+    for bad in ({"attendees": {}}, {"attendees": "x"}, {"attendees": ["x"]}, {"attendees": [{"name": "a"}]},
+                {"attendees": [{"userId": 1}]}, {"attendees": [{"userId": True, "name": "a"}]},
+                {"attendees": [{"userId": 1.5, "name": "a"}]}, {"attendees": [{"userId": "", "name": "a"}]},
+                {"attendees": [{"userId": 1, "name": "  "}]}, {"attendees": [{"userId": 1, "name": 5}]}):
+        try:
+            adapt_agendas(dict(base, **bad))
+            raise SystemExit(f"잘못된 참석자 명단을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    # 11) 사람이 고친 의견·할 일: 예시 파일, 필수 칸, 선택 칸, 잘못된 입력
+    ie = adapt_item_edits(load("agenda-item-edits-post.json"))
+    assert ie["meeting_id"] == "31" and ie["meeting_id_raw"] == 31 and len(ie["edits"]) == 3
+    o_edit, o_conf, t_edit = ie["edits"]
+    assert o_edit == {"agenda_id": 101, "target": "opinion", "item_id": "k3f9a1-8", "action": "edit", "rev": 2,
+                      "evidence_seqs": [45], "text": "QA는 수요일까지 가능하다는 설명", "kind": "EVIDENCE"}, o_edit
+    assert o_conf == {"agenda_id": 101, "target": "opinion", "item_id": "k3f9a1-8", "action": "confirm", "rev": 3}, o_conf
+    assert t_edit["target"] == "todo" and t_edit["task"] == "배포 체크리스트 작성" and t_edit["assignee_name"] == "이영희"
+    assert t_edit["assignee_user_id"] == 8 and t_edit["due_text"] == "배포 전날까지" and t_edit["evidence_seqs"] == [47]
+    okt = {"agendaId": "a", "target": "todo", "itemId": "i", "action": "edit", "task": "일", "evidenceSeqs": [1], "rev": 1}
+    r = adapt_item_edits({"meetingId": "m", "edits": [okt]})["edits"][0]
+    assert (r["assignee_name"], r["assignee_user_id"], r["due_text"]) == (None, None, None), "선택 칸은 없으면 None"
+    r = adapt_item_edits({"meetingId": "m", "edits": [dict(okt, assigneeName="  ", dueText="", assigneeUserId="")]})["edits"][0]
+    assert (r["assignee_name"], r["assignee_user_id"], r["due_text"]) == (None, None, None), "공백뿐인 값은 None"
+    r = adapt_item_edits({"meetingId": "m", "edits": [dict(okt, assigneeName=None, assigneeUserId="u-3")]})["edits"][0]
+    assert r["assignee_user_id"] == "u-3"
+    oko = {"agendaId": "a", "target": "opinion", "itemId": "i", "action": "edit", "text": "글", "kind": "CONCERN", "evidenceSeqs": [1], "rev": 1}
+    assert adapt_item_edits({"meetingId": "m", "edits": [oko]})["edits"][0]["kind"] == "CONCERN"
+    assert adapt_item_edits({"meetingId": "m", "edits": []})["edits"] == []
+
+    def bad_item(base, **change):
+        e = dict(base)
+        for k, v in change.items():
+            if v is _DROP:
+                e.pop(k, None)
+            else:
+                e[k] = v
+        try:
+            adapt_item_edits({"meetingId": "m", "edits": [e]})
+        except AdapterError:
+            return
+        raise SystemExit(f"잘못된 고친 의견·할 일을 못 잡음: {change}")
+    for change in ({"target": "summary"}, {"target": _DROP}, {"action": "delete"}, {"action": _DROP}, {"itemId": ""}, {"itemId": 5},
+                   {"agendaId": None}, {"agendaId": _DROP}, {"rev": "1"}, {"rev": _DROP}, {"evidenceSeqs": _DROP},
+                   {"evidenceSeqs": []}, {"evidenceSeqs": ["1"]}, {"evidenceSeqs": [True]}):
+        bad_item(oko, **change)
+        bad_item(okt, **change)
+    for change in ({"text": _DROP}, {"text": "  "}, {"kind": _DROP}, {"kind": "MAYBE"}, {"kind": 5}):
+        bad_item(oko, **change)
+    for change in ({"task": _DROP}, {"task": "  "}, {"assigneeName": 5}, {"dueText": 5}, {"assigneeUserId": True},
+                   {"assigneeUserId": 1.5}, {"assigneeUserId": []}):
+        bad_item(okt, **change)
+    for bad in ({"meetingId": "m"}, {"meetingId": "m", "edits": {}}, {"meetingId": "m", "edits": ["x"]}, {"edits": []}):
+        try:
+            adapt_item_edits(bad)
+            raise SystemExit(f"잘못된 본문을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    c2 = adapt_item_edits({"meetingId": "m", "edits": [{"agendaId": "a", "target": "todo", "itemId": "i", "action": "confirm", "rev": 1}]})
+    assert c2["edits"][0]["action"] == "confirm" and "task" not in c2["edits"][0] and "evidence_seqs" not in c2["edits"][0]
+
+    print("입력 어댑터 자체 시험 통과 (이벤트 4종, 줄 변환, edits, manual, speakerLabel, 잘못된 입력, 안건 목록, 고친 분류, meetingId 문자열·정수, 고친 요약, "
+          "참석자 명단, 고친 의견·할 일)")
 
 
 if __name__ == "__main__":

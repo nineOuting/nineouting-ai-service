@@ -8,7 +8,8 @@
   gen_ai.provider.name   gcp.gemini / anthropic / openai
   gen_ai.request.model   모델 이름
   gen_ai.token.type      input / output
-  ai.task                작업 종류: live_summary(회의 중 요약), draft(끝난 회의 요약), agenda_classification(안건 분류), agenda_summary(안건별 요약).
+  ai.task                작업 종류: live_summary(회의 중 요약), draft(끝난 회의 요약), agenda_classification(안건 분류), agenda_summary(안건별 요약),
+                         agenda_status(안건 상태 판정), agenda_opinions(안건별 의견 정리), agenda_todos(안건별 할 일 추출).
                          챗봇(chatbot)은 해당 기능이 생기면 추가
 
 내보내기

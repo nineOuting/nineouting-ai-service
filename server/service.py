@@ -32,11 +32,13 @@ if SUMMARY_DIR not in sys.path:
     sys.path.insert(0, SUMMARY_DIR)
 
 from input_adapter import (adapt_batch, adapt_event, adapt_agendas, adapt_corrections, adapt_summary_edits,  # noqa: E402
-                           AdapterError)
+                           adapt_item_edits, AdapterError)
 from meeting_live_summary_v2 import LiveSummarizer, Cfg  # noqa: E402
 from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
 from agenda_summarizer import AgendaSummarizer, SummarizeCfg  # noqa: E402
 from agenda_status import AgendaStatusJudge, StatusCfg  # noqa: E402
+from agenda_opinions import AgendaOpinions, OpinionCfg  # noqa: E402
+from agenda_todos import AgendaTodos, TodoCfg  # noqa: E402
 from .publisher import AGENDA_CLASSIFICATION, AGENDA_BOARD  # noqa: E402
 
 log = logging.getLogger("ai-service")
@@ -132,15 +134,53 @@ def status_cfg_from_env(env=None, cfg=None):
     return StatusCfg(**kw)
 
 
+def opinion_cfg_from_env(env=None, cfg=None):
+    """환경변수 -> 안건 의견 정리 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
+    AGENDA_OPINION_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), AGENDA_OPINION_MIN_LINES(호출을 시작하는 안건 줄 수, 기본 4),
+    MAX_AGENDA_OPINION_CALLS_PER_MEETING(회의당 호출 상한, 기본 300)
+    """
+    env = os.environ if env is None else env
+    cfg = cfg or cfg_from_env(env)
+    kw = {"provider": cfg.provider, "model": cfg.model}
+    for name, key in (("refresh_sec", "AGENDA_OPINION_REFRESH_SEC"), ("min_lines", "AGENDA_OPINION_MIN_LINES"),
+                      ("max_calls", "MAX_AGENDA_OPINION_CALLS_PER_MEETING")):
+        if env.get(key):
+            try:
+                kw[name] = int(env[key])
+            except ValueError:
+                raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+    return OpinionCfg(**kw)
+
+
+def todo_cfg_from_env(env=None, cfg=None):
+    """환경변수 -> 안건 할 일 추출 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
+    AGENDA_TODO_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), MAX_AGENDA_TODO_CALLS_PER_MEETING(회의당 호출 상한, 기본 300)
+    """
+    env = os.environ if env is None else env
+    cfg = cfg or cfg_from_env(env)
+    kw = {"provider": cfg.provider, "model": cfg.model}
+    for name, key in (("refresh_sec", "AGENDA_TODO_REFRESH_SEC"), ("max_calls", "MAX_AGENDA_TODO_CALLS_PER_MEETING")):
+        if env.get(key):
+            try:
+                kw[name] = int(env[key])
+            except ValueError:
+                raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+    return TodoCfg(**kw)
+
+
 class MeetingState:
     def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None, summarize_cfg=None, summarize_llm=None,
-                 status_cfg=None, status_llm=None):
+                 status_cfg=None, status_llm=None, opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None):
         self.meeting_id = meeting_id
         self.id_raw = meeting_id            # 백엔드가 보낸 meetingId 의 원래 값(숫자일 수 있음). 돌려보내는 본문에 쓴다
         self.summarizer = LiveSummarizer(meeting_id, cfg, llm=llm, verbose=False)
         self.classifier = AgendaClassifier(meeting_id, classify_cfg, llm=classify_llm)
         self.agenda_summarizer = AgendaSummarizer(self.classifier, summarize_cfg, llm=summarize_llm)   # 분류 결과를 읽어 안건별로 요약
         self.status_judge = AgendaStatusJudge(self.classifier, status_cfg, llm=status_llm)   # 분류 결과를 읽어 안건 상태를 판정
+        self.opinions = AgendaOpinions(self.classifier, opinion_cfg or OpinionCfg(provider=cfg.provider, model=cfg.model),
+                                       llm=opinion_llm)                  # 분류 결과를 읽어 안건별 의견을 정리
+        self.todos = AgendaTodos(self.classifier, todo_cfg or TodoCfg(provider=cfg.provider, model=cfg.model),
+                                 llm=todo_llm)                           # 분류 결과를 읽어 안건별 할 일을 뽑음 (참석자 명단은 안건 목록과 함께 받는다)
         self.cls_version = 0                # 백엔드로 보낸 안건 분류 결과의 마지막 version
         self.status = "new"                 # new -> running <-> paused -> ended
         self.lock = threading.Lock()
@@ -159,7 +199,8 @@ class MeetingState:
 
 class Registry:
     def __init__(self, cfg, llm=None, publisher=None, env=None, classify_cfg=None, classify_llm=None,
-                 summarize_cfg=None, summarize_llm=None, status_cfg=None, status_llm=None):
+                 summarize_cfg=None, summarize_llm=None, status_cfg=None, status_llm=None,
+                 opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
         self.publisher = publisher
@@ -170,6 +211,10 @@ class Registry:
         self.summarize_llm = summarize_llm  # 시험용: 안건별 요약에서 모델 호출 대신 쓸 함수
         self.status_cfg = status_cfg or status_cfg_from_env(self.env, cfg)
         self.status_llm = status_llm        # 시험용: 안건 상태 판정에서 모델 호출 대신 쓸 함수
+        self.opinion_cfg = opinion_cfg or opinion_cfg_from_env(self.env, cfg)
+        self.opinion_llm = opinion_llm      # 시험용: 안건 의견 정리에서 모델 호출 대신 쓸 함수
+        self.todo_cfg = todo_cfg or todo_cfg_from_env(self.env, cfg)
+        self.todo_llm = todo_llm            # 시험용: 안건 할 일 추출에서 모델 호출 대신 쓸 함수
         self.shutting_down = False
         self.meetings = {}
         self.lock = threading.Lock()
@@ -196,7 +241,8 @@ class Registry:
             if m is None:
                 m = self.meetings[meeting_id] = MeetingState(meeting_id, self.cfg, self.llm, self.classify_cfg, self.classify_llm,
                                                              self.summarize_cfg, self.summarize_llm,
-                                                             self.status_cfg, self.status_llm)
+                                                             self.status_cfg, self.status_llm,
+                                                             self.opinion_cfg, self.opinion_llm, self.todo_cfg, self.todo_llm)
                 if raw_id is not None:
                     m.id_raw = raw_id
             return m
@@ -277,7 +323,9 @@ class Registry:
         result = m.classifier.set_agendas(a["version"], a["agendas"])
         log.info("안건 목록 수신 meeting=%s version=%s agendas=%s result=%s", m.meeting_id, a["version"], len(a["agendas"]), result)
         if result == "stale":
-            return {"accepted": True, "result": "stale"}
+            return {"accepted": True, "result": "stale"}        # 명단도 같은 version 으로 거르므로 함께 무시한다
+        if a["attendees"] is not None:                          # 선택 필드. 없으면 이전 명단을 그대로 둔다
+            m.todos.set_roster(a["attendees"])
         m.queue.put(("tick", None))                             # 모아 둔 줄을 분류하고, 안건 삭제로 바뀐 줄을 내보낸다
         self._ensure_worker(m)
         return {"accepted": True, "result": "accepted", "version": a["version"]}
@@ -313,6 +361,27 @@ class Registry:
             self._ensure_worker(m)
         return {"accepted": True, "result": "accepted" if r["applied"] else "stale", "applied": r["applied"], "ignored": r["ignored"]}
 
+    def receive_item_edits(self, path_meeting_id, msg):
+        """사람이 고친 의견·할 일 (agenda-opinions-contract.md 5장)."""
+        self._require_ready()
+        e = adapt_item_edits(msg)
+        self._check_same_id(path_meeting_id, e["meeting_id"])
+        m = self._get(e["meeting_id"], e.get("meeting_id_raw"))
+        with m.lock:
+            if m.status == "ended":
+                return {"accepted": False, "result": "ignored", "reason": "ended"}
+        applied, ignored = 0, []
+        for extractor in (m.opinions, m.todos):
+            mine = [x for x in e["edits"] if x["target"] == extractor.TARGET]
+            if mine:
+                r = extractor.apply_edits(mine)
+                applied += r["applied"]
+                ignored += r["ignored"]
+        if applied:
+            m.queue.put(("tick", None))                         # 고친 안건은 기다리지 않고 다음 주기에 다시 처리한다
+            self._ensure_worker(m)
+        return {"accepted": True, "result": "accepted" if applied else "stale", "applied": applied, "ignored": ignored}
+
     @staticmethod
     def _transition_warning(m, name):
         started = any(e["event"] == "start" for e in m.events)
@@ -338,8 +407,7 @@ class Registry:
                 if kind == "batch":
                     self._step(m, "batch", lambda: (m.summarizer.receive(payload), self._maybe_publish(m, final=False)))
                     self._step(m, "classify", lambda: self._classify(m, batch=payload))
-                    self._step(m, "agenda_status", lambda: m.status_judge.process())
-                    self._step(m, "agenda_summary", lambda: self._agenda_summary(m))
+                    self._agenda_steps(m)
                 elif kind == "end":
                     def finish_summary():
                         m.summarizer.now_ms = max(m.summarizer.now_ms, payload["at_ms"])
@@ -347,12 +415,10 @@ class Registry:
                         self._maybe_publish(m, final=True)
                     self._step(m, "end", finish_summary)
                     self._step(m, "classify", lambda: self._classify(m, end_ms=payload["at_ms"], final=True))
-                    self._step(m, "agenda_status", lambda: m.status_judge.process(final=True))
-                    self._step(m, "agenda_summary", lambda: self._agenda_summary(m, final=True))
+                    self._agenda_steps(m, final=True)
                 elif kind == "tick":
                     self._step(m, "classify", lambda: self._classify(m))
-                    self._step(m, "agenda_status", lambda: m.status_judge.process())
-                    self._step(m, "agenda_summary", lambda: self._agenda_summary(m))
+                    self._agenda_steps(m)
             finally:
                 m.queue.task_done()
 
@@ -384,12 +450,33 @@ class Registry:
                    **{k: v for k, v in r.items() if k not in ("schemaVersion", "meetingId")}}
         self.publisher.submit(m.meeting_id, payload, kind=AGENDA_CLASSIFICATION)
 
-    def _agenda_summary(self, m, final=False):
-        """분류를 마친 직후 안건별 요약을 갱신하고, 바뀐 안건 보드 전체 상태를 백엔드로 보낸다."""
-        m.agenda_summarizer.process(final=final)
+    def _agenda_steps(self, m, final=False):
+        """분류를 마친 직후 같은 흐름에서 상태 판정 -> 안건 요약 -> 의견 -> 할 일 -> 보드 전송 순서로 돈다.
+        단계마다 따로 가둬서, 한 단계가 실패하거나 멈춰도 다른 단계와 보드 전송은 계속된다."""
+        self._step(m, "agenda_status", lambda: m.status_judge.process(final=final))
+        self._step(m, "agenda_summary", lambda: m.agenda_summarizer.process(final=final))
+        self._step(m, "agenda_opinions", lambda: m.opinions.process(final=final))
+        self._step(m, "agenda_todos", lambda: m.todos.process(final=final))
+        self._step(m, "agenda_board", lambda: self._publish_board(m))
+
+    @staticmethod
+    def _safe(m, name, fn):
+        """보드에 담을 값을 읽다가 실패해도 보드 전송은 계속한다 (그 칸은 빈 배열로 보낸다)."""
+        try:
+            return fn()
+        except Exception as e:
+            m.errors += 1
+            log.error("보드 값 읽기 실패 meeting=%s kind=%s error=%s", m.meeting_id, name, type(e).__name__)
+            return None
+
+    def _publish_board(self, m):
+        """바뀐 안건 보드 전체 상태(요약, 상태, 의견, 할 일)를 백엔드로 보낸다."""
         if self.publisher is None or not self.publisher.enabled:
             return
-        board = m.agenda_summarizer.take_board(status_info=m.status_judge.board_status())
+        opinions = self._safe(m, "opinions", m.opinions.board_items)
+        todos = self._safe(m, "todos", m.todos.board_items)
+        board = m.agenda_summarizer.take_board(status_info=m.status_judge.board_status(), opinions=opinions, todos=todos,
+                                               based_extra=max(m.opinions.based_on_seq(), m.todos.based_on_seq()))
         if board is not None:
             self.publisher.submit(m.meeting_id, board, kind=AGENDA_BOARD)
 
@@ -447,5 +534,7 @@ class Registry:
                 "agendaClassification": {**m.classifier.info(), "version": m.cls_version},
                 "agendaSummary": m.agenda_summarizer.info(),
                 "agendaStatus": m.status_judge.info(),
+                "agendaOpinions": m.opinions.info(),
+                "agendaTodos": m.todos.info(),
                 "publisher": self.publisher.info() if self.publisher else {"enabled": False},
             }

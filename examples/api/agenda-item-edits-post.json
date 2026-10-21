@@ -1,0 +1,34 @@
+{
+  "meetingId": 31,
+  "edits": [
+    {
+      "agendaId": 101,
+      "target": "opinion",
+      "itemId": "k3f9a1-8",
+      "action": "edit",
+      "text": "QA는 수요일까지 가능하다는 설명",
+      "kind": "EVIDENCE",
+      "evidenceSeqs": [45],
+      "rev": 2
+    },
+    {
+      "agendaId": 101,
+      "target": "opinion",
+      "itemId": "k3f9a1-8",
+      "action": "confirm",
+      "rev": 3
+    },
+    {
+      "agendaId": 101,
+      "target": "todo",
+      "itemId": "k3f9a1-11",
+      "action": "edit",
+      "task": "배포 체크리스트 작성",
+      "assigneeName": "이영희",
+      "assigneeUserId": 8,
+      "dueText": "배포 전날까지",
+      "evidenceSeqs": [47],
+      "rev": 1
+    }
+  ]
+}

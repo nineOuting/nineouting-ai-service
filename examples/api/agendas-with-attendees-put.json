@@ -1,0 +1,28 @@
+{
+  "meetingId": 31,
+  "version": 4,
+  "attendees": [
+    {"userId": 7, "name": "김철수"},
+    {"userId": 8, "name": "이영희"}
+  ],
+  "agendas": [
+    {
+      "agendaId": 101, "position": 1,
+      "title": "배포 일정",
+      "decisionPoint": "1차 배포 날짜를 확정한다",
+      "addedDuringMeeting": false
+    },
+    {
+      "agendaId": 102, "position": 2,
+      "title": "예산 배분",
+      "decisionPoint": "외부 API 비용 한도를 정한다",
+      "addedDuringMeeting": false
+    },
+    {
+      "agendaId": 103, "position": 3,
+      "title": "QA 담당 정하기",
+      "decisionPoint": "QA를 맡을 사람을 정한다",
+      "addedDuringMeeting": true
+    }
+  ]
+}

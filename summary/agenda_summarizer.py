@@ -382,10 +382,12 @@ class AgendaSummarizer:
                     it["needs_check"] = True
 
     # ---------------- 출력 ----------------
-    def take_board(self, status_info=None):
+    def take_board(self, status_info=None, opinions=None, todos=None, based_extra=0):
         """안건 보드의 전체 상태. 안건 목록을 아직 못 받았거나 마지막으로 낸 것과 같으면 None.
         돌려준 내용은 보낸 것으로 기록한다.
-        status_info: 안건 key -> {"status", "reason"} (AgendaStatusJudge.board_status). 없으면 status 는 None으로 낸다."""
+        status_info: 안건 key -> {"status", "reason"} (AgendaStatusJudge.board_status). 없으면 status 는 None으로 낸다.
+        opinions, todos: 안건 key -> 보드에 담을 항목 목록 (AgendaOpinions, AgendaTodos 의 board_items). 없으면 빈 배열로 낸다.
+        based_extra: 의견·할 일이 반영한 가장 큰 seq (basedOnSeq 계산에 합친다)."""
         view = self._view()
         with self.lock:
             if not view["agendas"]:
@@ -401,7 +403,7 @@ class AgendaSummarizer:
                 ent = {"agendaId": view["ids"][a["key"]], "status": si["status"] if si else None,
                        "summary": [{"id": it["id"], "text": it["text"], "evidenceSeqs": list(it["evidence"]),
                                     "edited": bool(it["edited"]), "needsCheck": bool(it["needs_check"])} for it in rows],
-                       "opinions": []}
+                       "opinions": list((opinions or {}).get(a["key"], [])), "todos": list((todos or {}).get(a["key"], []))}
                 if status_info is not None:
                     r = si["reason"] if si else None
                     ent["statusReason"] = {"text": r["text"], "evidenceSeqs": list(r["evidenceSeqs"])} if r else None
@@ -412,7 +414,7 @@ class AgendaSummarizer:
                 return None
             self.sent_sig = sig
             self.version = max(int(self.now() * 1000), self.version + 1)
-            based = max((s for st in self.ag.values() for s in st["reflected"]), default=0)
+            based = max(max((s for st in self.ag.values() for s in st["reflected"]), default=0), based_extra)
             return {"version": self.version, "basedOnSeq": based, "currentAgendaId": cur_id,
                     "agendas": agendas, "offTopic": None}
 

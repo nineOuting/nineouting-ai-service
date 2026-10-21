@@ -37,7 +37,7 @@ class RagRuntime:
         if self.stop_event is not None:
             self.stop_event.set()
             self.thread.join(timeout=timeout_s)
-            self.worker.conn.close()
+            self.worker.close()
             log.info("RAG 작업자 멈춤")
         self.pool.close()
 

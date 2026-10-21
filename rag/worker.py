@@ -36,12 +36,15 @@ UPLOAD_NOT_READY = "업로드 로더 미구현"
 
 
 class Worker:
-    def __init__(self, conn, embedder, callback, max_attempts=MAX_ATTEMPTS, retry_delays_s=RETRY_DELAYS_S):
+    def __init__(self, conn, embedder, callback, max_attempts=MAX_ATTEMPTS, retry_delays_s=RETRY_DELAYS_S,
+                 connect=None):
+        """connect 를 주면 conn 이 없거나 끊겼을 때 run() 이 그것으로 다시 접속한다 (conn=None 으로 시작해도 됨)."""
         self.conn = conn
         self.embedder = embedder
         self.callback = callback
         self.max_attempts = max_attempts
         self.retry_delays_s = tuple(retry_delays_s)
+        self._connect = connect
 
     def process_one(self) -> bool:
         """작업 하나를 처리했으면 True, 꺼낼 것이 없으면 False."""
@@ -113,6 +116,7 @@ class Worker:
         next_cleanup = 0.0
         while not stop.is_set():
             try:
+                self._ensure_conn()
                 if time.monotonic() >= next_cleanup:
                     removed = cleanup_finished(self.conn, KEEP_DAYS)
                     if removed:
@@ -120,24 +124,47 @@ class Worker:
                     next_cleanup = time.monotonic() + cleanup_every_s
                 if not self.process_one():
                     stop.wait(poll_s)
-            except Exception as e:                    # DB 연결 끊김 등. 반복은 멈추지 않는다
+            except Exception as e:                    # DB 접속 실패·연결 끊김 등. 반복은 멈추지 않는다
                 log.error("작업자 오류 error=%s", type(e).__name__)
                 stop.wait(poll_s * 5)
 
+    def _ensure_conn(self):
+        """연결이 없거나 끊겼으면 다시 접속한다. connect 가 없으면 지금 연결을 그대로 쓴다."""
+        if self._connect is None:
+            return
+        if self.conn is not None and not (self.conn.closed or self.conn.broken):
+            return
+        self.close()
+        self.conn = self._connect()
+        log.info("작업자 DB 접속")
+
+    def close(self):
+        if self.conn is not None:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = None
+
 
 def from_env(env=None):
-    """환경변수로 작업자를 만든다. 임베딩 모델은 여기서 한 번 불러온다."""
+    """환경변수로 작업자를 만든다. 임베딩 모델은 여기서 한 번 불러온다.
+    DB 에는 여기서 접속하지 않는다. run() 이 처음 돌 때 접속하고, 끊기면 다시 접속한다 (DB 가 늦게 떠도 서버는 뜬다)."""
+    from functools import partial
+
     from .db import connect
     from .embedding import E5Embedder
 
     env = os.environ if env is None else env
-    conn = connect(statement_timeout_ms=env.get("RAG_DB_STATEMENT_TIMEOUT_MS", 30000),
-                   idle_tx_timeout_ms=env.get("RAG_DB_IDLE_TX_TIMEOUT_MS", 60000))
+    connect_db = partial(connect, url=env.get("RAG_DATABASE_URL"),
+                         statement_timeout_ms=env.get("RAG_DB_STATEMENT_TIMEOUT_MS", 30000),
+                         idle_tx_timeout_ms=env.get("RAG_DB_IDLE_TX_TIMEOUT_MS", 60000),
+                         connect_timeout_s=env.get("RAG_DB_CONNECT_TIMEOUT_S", 10))
     embedder = E5Embedder(threads=int(env.get("RAG_TORCH_THREADS", "2")))
     allowed = allowed_hosts_from_env(env)
     if allowed is None:
         log.warning("RAG_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")
-    return Worker(conn, embedder, CallbackSender(allowed=allowed))
+    return Worker(None, embedder, CallbackSender(allowed=allowed), connect=connect_db)
 
 
 def start_in_thread(worker, stop=None):

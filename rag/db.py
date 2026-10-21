@@ -12,10 +12,11 @@ def timeout_options(statement_timeout_ms=None, idle_tx_timeout_ms=None):
     return " ".join(options)
 
 
-def connect(url=None, env="RAG_DATABASE_URL", register=True, statement_timeout_ms=None, idle_tx_timeout_ms=None):
+def connect(url=None, env="RAG_DATABASE_URL", register=True, statement_timeout_ms=None, idle_tx_timeout_ms=None,
+            connect_timeout_s=None):
     """autocommit 연결을 돌려준다. 트랜잭션은 conn.transaction() 으로 연다.
     register=True 면 vector 형을 등록한다 (vector 확장이 있어야 함. 마이그레이션 실행기는 False).
-    시간 제한을 주면 그 연결에만 적용된다."""
+    시간 제한을 주면 그 연결에만 적용된다. connect_timeout_s 는 접속 자체를 기다리는 상한."""
     import psycopg
 
     url = url or os.environ.get(env)
@@ -23,6 +24,8 @@ def connect(url=None, env="RAG_DATABASE_URL", register=True, statement_timeout_m
         raise RuntimeError(f"환경변수 {env} 가 없음")
     options = timeout_options(statement_timeout_ms, idle_tx_timeout_ms)
     kwargs = {"options": options} if options else {}
+    if connect_timeout_s:
+        kwargs["connect_timeout"] = int(connect_timeout_s)
     conn = psycopg.connect(url, autocommit=True, **kwargs)
     if register:
         from pgvector.psycopg import register_vector

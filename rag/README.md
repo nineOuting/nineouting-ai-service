@@ -132,6 +132,7 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 | 결과 버림 | 처리 중 문서가 지워졌거나 더 새 버전이 접수되면 콜백 없이 끝낸다 |
 | 콜백 | `POST {callbackUrl}`, `X-Request-Id` 를 돌려준다. 408·429·5xx·연결 오류만 3번 재시도(1·2·4초), 리다이렉트는 따라가지 않는다 |
 | 정리 | 끝난 작업은 `payload`(문서 내용)를 비우고, 7일 뒤 줄을 지운다 |
+| DB 접속 | 시작할 때 접속하지 않고 반복을 돌며 접속한다. DB 가 늦게 뜨거나 `vector` 확장이 없어도 서버는 뜨고(그동안 RAG 주소는 503), 연결이 끊기면 다음 반복에서 다시 접속한다 |
 
 ## 시험
 
@@ -152,4 +153,5 @@ set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면
 | `RAG_CALLBACK_ALLOWED_HOSTS` | 콜백을 보내도 되는 호스트 (`host` 또는 `host:port`, 쉼표로). 비어 있으면 모두 허용(개발용, 경고 로그). 운영에서는 반드시 설정 |
 | `RAG_TORCH_THREADS` | 작업자의 임베딩 스레드 수 (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |
 | `RAG_DB_STATEMENT_TIMEOUT_MS`, `RAG_DB_IDLE_TX_TIMEOUT_MS` | 작업자 DB 연결의 시간 제한 (기본 30000, 60000) |
+| `RAG_DB_CONNECT_TIMEOUT_S` | 작업자가 DB 에 접속할 때 기다리는 상한 (기본 10초). 닿지 않는 주소에서 서버 종료가 늦어지지 않게 |
 | `HF_HUB_CACHE` | 모델 캐시 위치. 없으면 `~/.cache/huggingface/hub`. 이미지에서는 `/models` 로 고정할 예정 (실행 사용자가 바뀌어도 같은 곳을 찾도록) |

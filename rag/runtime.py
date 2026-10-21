@@ -54,8 +54,12 @@ def make_answerer(runtime, env) -> Answerer:
     except LLMConfigError as e:
         log.error("답변 LLM 설정 오류: %s", e)
         return Answerer(lambda: runtime.embedder, config_error=str(e))
-    log.info("답변 LLM %s/%s, 시간 제한 %.0f초", llm.name, llm.model, timeout_s)
-    return Answerer(lambda: runtime.embedder, llm, timeout_s)
+    answerer = Answerer(lambda: runtime.embedder, llm, timeout_s)    # 지시문(prompts/answer_system.md)도 여기서 읽는다
+    if answerer.config_error:
+        log.error("답변 설정 오류: %s", answerer.config_error)
+    else:
+        log.info("답변 LLM %s/%s, 지시문 %s, 시간 제한 %.0f초", llm.name, llm.model, answerer.prompt.version, timeout_s)
+    return answerer
 
 
 def setup(app, env) -> RagRuntime:

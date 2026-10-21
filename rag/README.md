@@ -129,6 +129,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 | 통과 | `answered`. `citations` 는 답에 나온 번호의 조각만 (`ref`, `docId`, `sourceType`, `title`, `text` 원문, `location`) |
 
 - answered·no_result·failed 모두 200 이고, 입력 오류는 400 `INVALID_INPUT`, DB·임베딩 모델·LLM 설정이 준비되지 않으면 503 `NOT_READY`
+- 지시문(시스템 프롬프트)은 `rag/prompts/answer_system.md` 에 있다. 고칠 때는 파일 머리의 `version` 을 올리고(로그에 `prompt=answer-v1` 처럼 남는다), 방법은 `rag/prompts/README.md`
 - 조각 글은 프롬프트에서 `<자료>` 칸에 넣고, 그 안의 지시는 따르지 말라고 적는다
 - 임베딩 모델은 서버가 한 번 불러 작업자와 같이 쓴다 (잠금으로 한 번에 하나씩). 문서를 임베딩하는 중에 질문이 오면 그 묶음이 끝날 때까지 기다린다
 - 로그에는 질문·답·조각 글을 남기지 않는다 (요청 ID, 개수, 상태, 오류 코드, 검색·LLM 걸린 ms, LLM 공급자·모델, 입력·출력 토큰 수). 출력 토큰에는 추론 토큰을 더한다 (출력 요금 기준)

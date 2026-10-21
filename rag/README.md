@@ -10,6 +10,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 | 저장(pgvector, 버전 교체), 검색(workspaceId + docIds) | 구현 (함수까지, HTTP 없음) |
 | 대기열·작업자, 완료 콜백 | 구현 |
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
+| 배포 이미지 (`ghcr.io/nineouting/nineouting-ai-service`) | 구현. 아래 "이미지·배포" |
 | 업로드 문서(PDF·워드·엑셀), 답변 | 예정 |
 
 원본 명세는 노션 "RAG 인터페이스 명세".
@@ -134,6 +135,18 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 | 정리 | 끝난 작업은 `payload`(문서 내용)를 비우고, 7일 뒤 줄을 지운다 |
 | DB 접속 | 시작할 때 접속하지 않고 반복을 돌며 접속한다. DB 가 늦게 뜨거나 `vector` 확장이 없어도 서버는 뜨고(그동안 RAG 주소는 503), 연결이 끊기면 다음 반복에서 다시 접속한다 |
 
+## 이미지·배포
+
+공용 `Dockerfile` 이미지에 RAG 가 함께 들어간다. GitHub Actions(`.github/workflows/image.yml`)가 PR 에서는 빌드·크기 측정·모델 확인만 하고, `develop` 에 합쳐지면 `ghcr.io/nineouting/nineouting-ai-service:develop` 과 `:<커밋 SHA>` 로 올린다.
+
+- torch 는 CPU 전용, 임베딩 모델은 빌드 때 `/models` 에 받아 sha256 을 확인하고 실행 중에는 내려받지 않는다(`HF_HUB_OFFLINE=1`)
+- root 가 아닌 사용자(uid 10001)로 실행, `linux/amd64`
+
+처음 배포할 때 (운영 DB)
+1. 관리자가 `CREATE EXTENSION vector` (앱 계정은 관리자 권한이 없음)
+2. 같은 이미지로 `python -m rag.migrate` 를 한 번 (`RAG_DATABASE_URL` 필요). 새 마이그레이션이 생기면 배포 전에 다시
+3. 서버에 `RAG_DATABASE_URL`, `RAG_CALLBACK_ALLOWED_HOSTS` 를 넣고 띄운다. `RAG_DATABASE_URL` 이 없으면 RAG 는 꺼진 채 요약만 뜬다
+
 ## 시험
 
 ```bash
@@ -154,4 +167,4 @@ set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면
 | `RAG_TORCH_THREADS` | 작업자의 임베딩 스레드 수 (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |
 | `RAG_DB_STATEMENT_TIMEOUT_MS`, `RAG_DB_IDLE_TX_TIMEOUT_MS` | 작업자 DB 연결의 시간 제한 (기본 30000, 60000) |
 | `RAG_DB_CONNECT_TIMEOUT_S` | 작업자가 DB 에 접속할 때 기다리는 상한 (기본 10초). 닿지 않는 주소에서 서버 종료가 늦어지지 않게 |
-| `HF_HUB_CACHE` | 모델 캐시 위치. 없으면 `~/.cache/huggingface/hub`. 이미지에서는 `/models` 로 고정할 예정 (실행 사용자가 바뀌어도 같은 곳을 찾도록) |
+| `HF_HUB_CACHE` | 모델 캐시 위치. 없으면 `~/.cache/huggingface/hub`. 이미지에서는 `/models` 로 고정 (실행 사용자가 바뀌어도 같은 곳을 찾도록) |

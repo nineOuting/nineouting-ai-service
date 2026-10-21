@@ -36,6 +36,7 @@ from input_adapter import (adapt_batch, adapt_event, adapt_agendas, adapt_correc
 from meeting_live_summary_v2 import LiveSummarizer, Cfg  # noqa: E402
 from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
 from agenda_summarizer import AgendaSummarizer, SummarizeCfg  # noqa: E402
+from agenda_status import AgendaStatusJudge, StatusCfg  # noqa: E402
 from .publisher import AGENDA_CLASSIFICATION, AGENDA_BOARD  # noqa: E402
 
 log = logging.getLogger("ai-service")
@@ -115,13 +116,31 @@ def summarize_cfg_from_env(env=None, cfg=None):
     return SummarizeCfg(**kw)
 
 
+def status_cfg_from_env(env=None, cfg=None):
+    """환경변수 -> 안건 상태 판정 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
+    AGENDA_STATUS_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), MAX_AGENDA_STATUS_CALLS_PER_MEETING(회의당 호출 상한, 기본 300)
+    """
+    env = os.environ if env is None else env
+    cfg = cfg or cfg_from_env(env)
+    kw = {"provider": cfg.provider, "model": cfg.model}
+    for name, key in (("refresh_sec", "AGENDA_STATUS_REFRESH_SEC"), ("max_calls", "MAX_AGENDA_STATUS_CALLS_PER_MEETING")):
+        if env.get(key):
+            try:
+                kw[name] = int(env[key])
+            except ValueError:
+                raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+    return StatusCfg(**kw)
+
+
 class MeetingState:
-    def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None, summarize_cfg=None, summarize_llm=None):
+    def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None, summarize_cfg=None, summarize_llm=None,
+                 status_cfg=None, status_llm=None):
         self.meeting_id = meeting_id
         self.id_raw = meeting_id            # 백엔드가 보낸 meetingId 의 원래 값(숫자일 수 있음). 돌려보내는 본문에 쓴다
         self.summarizer = LiveSummarizer(meeting_id, cfg, llm=llm, verbose=False)
         self.classifier = AgendaClassifier(meeting_id, classify_cfg, llm=classify_llm)
         self.agenda_summarizer = AgendaSummarizer(self.classifier, summarize_cfg, llm=summarize_llm)   # 분류 결과를 읽어 안건별로 요약
+        self.status_judge = AgendaStatusJudge(self.classifier, status_cfg, llm=status_llm)   # 분류 결과를 읽어 안건 상태를 판정
         self.cls_version = 0                # 백엔드로 보낸 안건 분류 결과의 마지막 version
         self.status = "new"                 # new -> running <-> paused -> ended
         self.lock = threading.Lock()
@@ -140,7 +159,7 @@ class MeetingState:
 
 class Registry:
     def __init__(self, cfg, llm=None, publisher=None, env=None, classify_cfg=None, classify_llm=None,
-                 summarize_cfg=None, summarize_llm=None):
+                 summarize_cfg=None, summarize_llm=None, status_cfg=None, status_llm=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
         self.publisher = publisher
@@ -149,6 +168,8 @@ class Registry:
         self.classify_llm = classify_llm    # 시험용: 안건 분류에서 모델 호출 대신 쓸 함수
         self.summarize_cfg = summarize_cfg or summarize_cfg_from_env(self.env, cfg)
         self.summarize_llm = summarize_llm  # 시험용: 안건별 요약에서 모델 호출 대신 쓸 함수
+        self.status_cfg = status_cfg or status_cfg_from_env(self.env, cfg)
+        self.status_llm = status_llm        # 시험용: 안건 상태 판정에서 모델 호출 대신 쓸 함수
         self.shutting_down = False
         self.meetings = {}
         self.lock = threading.Lock()
@@ -174,7 +195,8 @@ class Registry:
             m = self.meetings.get(meeting_id)
             if m is None:
                 m = self.meetings[meeting_id] = MeetingState(meeting_id, self.cfg, self.llm, self.classify_cfg, self.classify_llm,
-                                                             self.summarize_cfg, self.summarize_llm)
+                                                             self.summarize_cfg, self.summarize_llm,
+                                                             self.status_cfg, self.status_llm)
                 if raw_id is not None:
                     m.id_raw = raw_id
             return m
@@ -316,6 +338,7 @@ class Registry:
                 if kind == "batch":
                     self._step(m, "batch", lambda: (m.summarizer.receive(payload), self._maybe_publish(m, final=False)))
                     self._step(m, "classify", lambda: self._classify(m, batch=payload))
+                    self._step(m, "agenda_status", lambda: m.status_judge.process())
                     self._step(m, "agenda_summary", lambda: self._agenda_summary(m))
                 elif kind == "end":
                     def finish_summary():
@@ -324,9 +347,11 @@ class Registry:
                         self._maybe_publish(m, final=True)
                     self._step(m, "end", finish_summary)
                     self._step(m, "classify", lambda: self._classify(m, end_ms=payload["at_ms"], final=True))
+                    self._step(m, "agenda_status", lambda: m.status_judge.process(final=True))
                     self._step(m, "agenda_summary", lambda: self._agenda_summary(m, final=True))
                 elif kind == "tick":
                     self._step(m, "classify", lambda: self._classify(m))
+                    self._step(m, "agenda_status", lambda: m.status_judge.process())
                     self._step(m, "agenda_summary", lambda: self._agenda_summary(m))
             finally:
                 m.queue.task_done()
@@ -364,7 +389,7 @@ class Registry:
         m.agenda_summarizer.process(final=final)
         if self.publisher is None or not self.publisher.enabled:
             return
-        board = m.agenda_summarizer.take_board()
+        board = m.agenda_summarizer.take_board(status_info=m.status_judge.board_status())
         if board is not None:
             self.publisher.submit(m.meeting_id, board, kind=AGENDA_BOARD)
 
@@ -421,5 +446,6 @@ class Registry:
                 "summaryVersion": m.version,
                 "agendaClassification": {**m.classifier.info(), "version": m.cls_version},
                 "agendaSummary": m.agenda_summarizer.info(),
+                "agendaStatus": m.status_judge.info(),
                 "publisher": self.publisher.info() if self.publisher else {"enabled": False},
             }

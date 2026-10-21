@@ -5,6 +5,7 @@ e5 계열은 질문 앞에 "query: ", 조각 앞에 "passage: " 를 붙인다 (�
 벡터는 길이 1로 정규화한다. 그래서 코사인 거리와 내적 순위가 같다.
 """
 import hashlib
+import threading
 from pathlib import Path
 from typing import Protocol, Sequence
 
@@ -46,6 +47,9 @@ class E5Embedder:
         self.dim = EMBED_DIM
         self.max_tokens = MAX_TOKENS
         self.batch_size = batch_size
+        # 작업자(문서 처리)와 답변 API 가 이 임베더 하나를 같이 쓴다. 허깅페이스 토크나이저는 여러 스레드가
+        # 동시에 쓰면 "Already borrowed" 오류가 날 수 있어, 토큰 세기와 임베딩을 한 번에 하나씩만 한다
+        self._lock = threading.Lock()
 
     def passage_tokens(self, text):
         return self._count(self.PASSAGE + text)
@@ -63,11 +67,13 @@ class E5Embedder:
         return self._encode([self.QUERY + text])[0]
 
     def _count(self, text):
-        return len(self._tokenizer(text, add_special_tokens=True, truncation=False)["input_ids"])
+        with self._lock:
+            return len(self._tokenizer(text, add_special_tokens=True, truncation=False)["input_ids"])
 
     def _encode(self, inputs):
-        vecs = self._model.encode(list(inputs), batch_size=self.batch_size, normalize_embeddings=True,
-                                  convert_to_numpy=True, show_progress_bar=False)
+        with self._lock:
+            vecs = self._model.encode(list(inputs), batch_size=self.batch_size, normalize_embeddings=True,
+                                      convert_to_numpy=True, show_progress_bar=False)
         if vecs.shape[1] != self.dim:
             raise RuntimeError(f"벡터 차원 {vecs.shape[1]} 이 {self.dim} 이 아님")
         return vecs.tolist()

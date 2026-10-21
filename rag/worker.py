@@ -147,20 +147,28 @@ class Worker:
             self.conn = None
 
 
-def from_env(env=None):
-    """환경변수로 작업자를 만든다. 임베딩 모델은 여기서 한 번 불러온다.
+def embedder_from_env(env=None):
+    """임베딩 모델을 불러온다. 서버에서는 RagRuntime 이 한 번 불러 작업자와 답변 API 가 같이 쓴다."""
+    from .embedding import E5Embedder
+
+    env = os.environ if env is None else env
+    return E5Embedder(threads=int(env.get("RAG_TORCH_THREADS", "2")))
+
+
+def from_env(env=None, embedder=None):
+    """환경변수로 작업자를 만든다. embedder 를 주지 않으면 임베딩 모델을 여기서 불러온다.
     DB 에는 여기서 접속하지 않는다. run() 이 처음 돌 때 접속하고, 끊기면 다시 접속한다 (DB 가 늦게 떠도 서버는 뜬다)."""
     from functools import partial
 
     from .db import connect
-    from .embedding import E5Embedder
 
     env = os.environ if env is None else env
     connect_db = partial(connect, url=env.get("RAG_DATABASE_URL"),
                          statement_timeout_ms=env.get("RAG_DB_STATEMENT_TIMEOUT_MS", 30000),
                          idle_tx_timeout_ms=env.get("RAG_DB_IDLE_TX_TIMEOUT_MS", 60000),
                          connect_timeout_s=env.get("RAG_DB_CONNECT_TIMEOUT_S", 10))
-    embedder = E5Embedder(threads=int(env.get("RAG_TORCH_THREADS", "2")))
+    if embedder is None:
+        embedder = embedder_from_env(env)
     allowed = allowed_hosts_from_env(env)
     if allowed is None:
         log.warning("RAG_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")

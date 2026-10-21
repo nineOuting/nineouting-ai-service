@@ -4,10 +4,12 @@
   GET    {prefix}/documents/{docId}         상태 조회 → 200 / 404
   DELETE {prefix}/documents/{docId}         문서 지우기 → 204 (없어도)
   DELETE {prefix}/workspaces/{workspaceId}  워크스페이스 지우기 → 204
+  POST   {prefix}/answer                    답변 → 200 {status, answer, citations, errorCode}
 
 지금은 회의록(sourceType=minutes)만 받는다. 업로드 문서는 로더를 만들 때 연다.
 명세에 없어서 AI 쪽이 정한 것: 입력 오류 400 INVALID_INPUT, 다른 워크스페이스로 온 같은 docId 409 CONFLICT,
 DB 를 쓸 수 없음 503 NOT_READY. 오류 형식은 server/main.py 와 같다.
+답변은 answered·no_result·failed 모두 200 이고 본문의 status 로 구분한다. ID 는 명세 문구와 달리 모두 정수다.
 
 본문은 dict 로 받아 직접 검사한다 (server/ 쪽과 같은 방식, 앱의 검사 오류 처리기에 기대지 않으려고).
 로그에는 docId, 버전, 결과, 요청 추적 ID 만 남긴다. 회의록 내용은 남기지 않는다.
@@ -29,6 +31,10 @@ REQUEST_ID_HEADER = "X-Request-Id"
 MAX_REQUEST_ID = 200
 MAX_DOC_VERSION = 200
 MAX_TITLE = 500
+MAX_QUERY = 2000
+MAX_DOC_IDS = 1000
+DEFAULT_TOP_K = 5
+MAX_TOP_K = 20                       # search.MAX_TOP_K 와 같다
 SOURCE_TYPES = ("minutes",)          # 업로드 문서 로더를 만들 때 "upload" 를 더한다
 API_STATUS = {"queued": "accepted"}  # DB 상태 → 명세의 상태 값
 
@@ -63,6 +69,27 @@ INGEST_SCHEMA = {
     },
 }
 STATUS_EXAMPLE = {"docId": 200, "docVersion": "2", "status": "ready", "errorCode": None, "chunkCount": 4}
+ANSWER_EXAMPLE = {"workspaceId": 1, "docIds": [200, 123], "query": "1분기 예산은 얼마로 하기로 했어?", "topK": 5}
+ANSWER_SCHEMA = {
+    "type": "object",
+    "required": ["workspaceId", "docIds", "query"],
+    "properties": {
+        "workspaceId": {"type": "integer", "minimum": 1, "description": "소속 워크스페이스"},
+        "docIds": {"type": "array", "items": {"type": "integer", "minimum": 1}, "maxItems": MAX_DOC_IDS,
+                   "description": "이 사용자가 볼 수 있는 문서 목록. 비면 no_result"},
+        "query": {"type": "string", "maxLength": MAX_QUERY, "description": "사용자 질문"},
+        "topK": {"type": "integer", "minimum": 1, "maximum": MAX_TOP_K, "default": DEFAULT_TOP_K,
+                 "description": "근거로 찾을 조각 수"},
+    },
+}
+ANSWER_RESULT_EXAMPLE = {
+    "status": "answered",
+    "answer": "1분기 예산은 3천만 원으로 하자는 제안이 회의에서 나왔습니다 [1].",
+    "citations": [{"ref": 1, "docId": 200, "sourceType": "minutes", "title": "10월 예산 회의",
+                   "text": "1분기 예산은 3천만 원으로 하자는 제안이 나옴",
+                   "location": {"type": "time", "startMs": 754000, "endMs": 791000, "label": "12:34~13:11"}}],
+    "errorCode": None,
+}
 
 
 def _error_doc(description, error, detail):
@@ -115,9 +142,32 @@ def parse_ingest(body, request_id=None) -> IngestRequest:
     return IngestRequest(doc, callback_url, minutes=minutes, request_id=request_id)
 
 
+def parse_answer(body):
+    """답변 요청 → (workspaceId, docIds, query, topK). history 등 다른 필드는 무시한다."""
+    if not isinstance(body, dict):
+        raise InvalidInput("본문이 JSON 객체가 아님")
+    workspace_id = _positive_int(body, "workspaceId")
+    doc_ids = body.get("docIds")
+    if not isinstance(doc_ids, list):
+        raise InvalidInput("docIds 는 배열이어야 함")
+    if len(doc_ids) > MAX_DOC_IDS:
+        raise InvalidInput(f"docIds 는 {MAX_DOC_IDS}개 이하여야 함")
+    if any(not _is_positive_int(d) for d in doc_ids):
+        raise InvalidInput("docIds 의 값은 양의 정수여야 함")
+    query = _text(body, "query", MAX_QUERY)
+    top_k = body.get("topK", DEFAULT_TOP_K)
+    if not _is_positive_int(top_k) or top_k > MAX_TOP_K:
+        raise InvalidInput(f"topK 는 1~{MAX_TOP_K} 정수여야 함")
+    return workspace_id, doc_ids, query, top_k
+
+
+def _is_positive_int(v):
+    return not isinstance(v, bool) and isinstance(v, int) and v > 0     # bool 은 int 의 하위 형이라 따로 막는다
+
+
 def _positive_int(body, key):
     v = body.get(key)
-    if isinstance(v, bool) or not isinstance(v, int) or v <= 0:     # bool 은 int 의 하위 형이라 따로 막는다
+    if not _is_positive_int(v):
         raise InvalidInput(f"{key} 는 양의 정수여야 함")
     return v
 
@@ -137,8 +187,9 @@ def _path_id(raw, name):
     return int(raw)
 
 
-def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_HEADER, prefix=PREFIX):
-    """pool: psycopg_pool.ConnectionPool (autocommit 연결)."""
+def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_HEADER, prefix=PREFIX, answerer=None):
+    """pool: psycopg_pool.ConnectionPool (autocommit 연결, vector 형 등록).
+    answerer: answer.Answerer. 없으면 답변 주소는 503 으로 답한다."""
     from psycopg import OperationalError
     from psycopg_pool import PoolTimeout
 
@@ -235,5 +286,35 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
             return not_ready("DB 를 쓸 수 없음")
         log.info("워크스페이스 지우기 workspace=%s 문서=%d request_id=%s", wid, removed, request_id_of(request))
         return Response(status_code=204)
+
+    @router.post(
+        "/answer", summary="답변",
+        description="볼 수 있는 문서(docIds) 안에서 질문과 가까운 조각을 찾아, LLM 이 그 조각만 근거로 답한다. "
+                    "답의 문장마다 근거 번호 [n] 이 붙고, citations 에 그 번호의 원문과 위치가 담긴다. "
+                    "status: answered(답함) / no_result(근거 없음, LLM 을 부르지 않음) / failed(errorCode 참고). "
+                    "세 경우 모두 200 이다. 지금 LLM 은 시험용 가짜라 답 앞에 [시험용 답변] 이 붙는다.",
+        openapi_extra={"requestBody": {"required": True, "content": {"application/json": {
+            "schema": ANSWER_SCHEMA, "example": ANSWER_EXAMPLE}}}},
+        responses={200: {"description": "답변 결과 (status 로 구분)", "content": {"application/json": {
+                       "example": ANSWER_RESULT_EXAMPLE}}},
+                   400: _error_doc("입력 오류", "INVALID_INPUT", "docIds 의 값은 양의 정수여야 함"),
+                   503: _error_doc("DB·임베딩 모델·LLM 설정이 준비되지 않음", "NOT_READY", "DB 를 쓸 수 없음")},
+    )
+    def post_answer(request: Request, body: Any = Body(...)):
+        rid = request_id_of(request)
+        try:
+            workspace_id, doc_ids, query, top_k = parse_answer(body)
+        except InvalidInput as e:
+            log.info("답변 거부 request_id=%s reason=%s", rid, e)
+            return invalid(str(e))
+        reason = "답변 기능이 켜지지 않음" if answerer is None else answerer.not_ready_reason()
+        if reason:
+            log.error("답변 준비 안 됨 request_id=%s reason=%s", rid, reason)
+            return not_ready(reason)
+        try:
+            return answerer.run(pool.connection, workspace_id, doc_ids, query, top_k, request_id=rid)
+        except db_down as e:
+            log.error("답변 DB 오류 request_id=%s error=%s", rid, type(e).__name__)
+            return not_ready("DB 를 쓸 수 없음")
 
     return router

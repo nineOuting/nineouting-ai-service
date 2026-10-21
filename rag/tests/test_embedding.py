@@ -71,3 +71,19 @@ def test_관련_있는_조각이_더_가까움(embedder):
                                            "[잡담] 점심은 근처 국밥집에서 먹기로 함"])
     dot = lambda u, v: sum(x * y for x, y in zip(u, v))
     assert dot(q, jira) > dot(q, lunch)
+
+
+def test_여러_스레드가_같이_써도_오류_없음(embedder):
+    """작업자와 답변 API 가 임베더 하나를 같이 쓴다. 토큰 세기·임베딩을 동시에 불러도 같은 결과여야 한다."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    want_q = embedder.embed_query("회의 일정")
+    want_n = embedder.passage_tokens("회의 일정은 금요일")
+
+    def work(i):
+        if i % 2:
+            return embedder.embed_query("회의 일정") == want_q
+        return embedder.passage_tokens("회의 일정은 금요일") == want_n and len(embedder.embed_passages(["가", "나"])) == 2
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        assert all(ex.map(work, range(64)))

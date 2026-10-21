@@ -7,11 +7,12 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 | 단계 | 상태 |
 |---|---|
 | 회의록 로더, 512토큰 나누기, 임베딩 | 구현 |
-| 저장(pgvector, 버전 교체), 검색(workspaceId + docIds) | 구현 (함수까지, HTTP 없음) |
+| 저장(pgvector, 버전 교체), 검색(workspaceId + docIds) | 구현 |
 | 대기열·작업자, 완료 콜백 | 구현 |
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
 | 배포 이미지 (`ghcr.io/nineouting/nineouting-ai-service`) | 구현. 아래 "이미지·배포" |
-| 업로드 문서(PDF·워드·엑셀), 답변 | 예정 |
+| 답변 API (검색 → LLM → 근거 번호 검사) | 구현. LLM 은 아직 시험용 가짜 (답 앞에 `[시험용 답변]`) |
+| 실제 LLM 연결 (운영 OpenAI, 시험 Gemini), 업로드 문서(PDF·워드·엑셀) | 예정 |
 
 원본 명세는 노션 "RAG 인터페이스 명세".
 
@@ -114,6 +115,25 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 - 지금은 `sourceType=minutes` 만 받는다. `upload` 는 400 (준비 중)
 - 서버 간 인증은 `api.verify_internal_request` 자리만 있다 (CN팀 방식 대기)
 
+### 답변 `POST /internal/rag/answer`
+
+요청 `{workspaceId, docIds, query, topK?}` (ID 는 모두 정수, topK 1~20 기본 5, 그 밖의 필드는 무시) → 200 `{status, answer, citations, errorCode}`
+
+| 단계 | 결과 |
+|---|---|
+| `docIds` 가 비었음 | `no_result` (DB·LLM 을 부르지 않음) |
+| `workspaceId`·`docIds` 로 거른 검색에서 조각 0개 | `no_result` (LLM 을 부르지 않음) |
+| 조각에 `[1]..[k]` 를 붙여 LLM 에 넘김. LLM 이 `NO_ANSWER` | `no_result` |
+| LLM 시간 초과 / 그 밖의 오류 | `failed` + `llm_timeout` / `llm_failed` |
+| 답에 `[n]` 이 없거나 넘긴 번호 밖 | `failed` + `llm_failed` (근거를 지어냈을 수 있음) |
+| 통과 | `answered`. `citations` 는 답에 나온 번호의 조각만 (`ref`, `docId`, `sourceType`, `title`, `text` 원문, `location`) |
+
+- answered·no_result·failed 모두 200 이고, 입력 오류는 400 `INVALID_INPUT`, DB·임베딩 모델·LLM 설정이 준비되지 않으면 503 `NOT_READY`
+- 조각 글은 프롬프트에서 `<자료>` 칸에 넣고, 그 안의 지시는 따르지 말라고 적는다
+- 임베딩 모델은 서버가 한 번 불러 작업자와 같이 쓴다 (잠금으로 한 번에 하나씩). 문서를 임베딩하는 중에 질문이 오면 그 묶음이 끝날 때까지 기다린다
+- 로그에는 질문·답·조각 글을 남기지 않는다 (요청 ID, 개수, 상태, 오류 코드, 검색·LLM 걸린 ms)
+- 유사도 하한은 아직 없다 (측정 전). 관련 없는 조각만 걸리면 LLM 의 `NO_ANSWER` 로 거른다
+
 ## 작업자
 
 접수(`jobs.submit()`)는 문서를 `queued` 로 두고 작업 표(`rag_jobs`)에 적기만 한다. 작업자가 꺼내서 로더 → 나누기 → 임베딩 → 저장을 하고 완료 콜백을 보낸다.
@@ -166,7 +186,10 @@ set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면
 | `RAG_REQUEST_ID_HEADER` | 요청 추적 헤더 이름 (기본 `X-Request-Id`) |
 | `RAG_DB_POOL_MAX`, `RAG_DB_POOL_TIMEOUT_S` | API 의 DB 연결 풀 최대 개수(기본 5), 연결을 기다리는 시간(기본 5초, 넘으면 503) |
 | `RAG_CALLBACK_ALLOWED_HOSTS` | 콜백을 보내도 되는 호스트 (`host` 또는 `host:port`, 쉼표로). 비어 있으면 모두 허용(개발용, 경고 로그). 운영에서는 반드시 설정 |
-| `RAG_TORCH_THREADS` | 작업자의 임베딩 스레드 수 (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |
+| `RAG_TORCH_THREADS` | 임베딩 스레드 수 (작업자·답변이 같이 씀) (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |
 | `RAG_DB_STATEMENT_TIMEOUT_MS`, `RAG_DB_IDLE_TX_TIMEOUT_MS` | 작업자 DB 연결의 시간 제한 (기본 30000, 60000) |
+| `RAG_LLM_PROVIDER` | 답변 LLM 공급자. 지금은 `fake`(기본, 시험용)만. 지원하지 않는 값이면 서버는 뜨고 답변만 503 |
+| `RAG_LLM_MODEL` | 공급자의 모델 이름 (실제 공급자를 붙일 때 씀) |
+| `RAG_LLM_TIMEOUT_S` | 답변 LLM 을 기다리는 상한 (기본 30초). 넘으면 `llm_timeout` |
 | `RAG_DB_CONNECT_TIMEOUT_S` | 작업자가 DB 에 접속할 때 기다리는 상한 (기본 10초). 닿지 않는 주소에서 서버 종료가 늦어지지 않게 |
 | `HF_HUB_CACHE` | 모델 캐시 위치. 없으면 `~/.cache/huggingface/hub`. 이미지에서는 `/models` 로 고정 (실행 사용자가 바뀌어도 같은 곳을 찾도록) |

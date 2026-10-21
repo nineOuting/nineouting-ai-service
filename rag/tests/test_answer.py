@@ -7,7 +7,8 @@ import pytest
 
 from _helpers import OTHER_WS, WS, doc, put
 from rag import answer as answer_mod
-from rag.answer import NO_ANSWER, Answerer, Prompt, PromptError, answer, answer_prompt, build_prompt, load_prompt, parse_refs
+from rag.answer import (NO_ANSWER, Answerer, Prompt, PromptError, answer, answer_prompt, build_prompt, load_prompt,
+                        parse_refs, prompt_versions)
 from rag.llm import FakeLLM, LLMConfigError, LLMError, LLMTimeout, Reply, make_llm
 from rag.search import Hit
 
@@ -179,27 +180,63 @@ def test_지시문을_LLM에_그대로_넘김(two_hits):
     assert llm.calls[0][0] == "시험 지시문 NO_ANSWER"
 
 
-@pytest.mark.parametrize("content, word", [
-    (None, "파일 없음"),
-    ("version 없는 본문 NO_ANSWER", "version"),
-    ("---\nauthor: x\n---\n본문 NO_ANSWER", "version"),
-    ("---\nversion: t-v1\n---\nNO 표시가 빠진 본문", "NO_ANSWER"),
-])
-def test_지시문_파일이_틀리면_PromptError(tmp_path, monkeypatch, content, word):
+def write(folder, version, body, meta=None):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{version}.md").write_text(f"---\nversion: {meta or 't-' + version}\n---\n{body}", encoding="utf-8")
+
+
+def test_버전을_고르지_않으면_번호가_가장_큰_파일(tmp_path, monkeypatch):
     from rag import answer as mod
     monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)
-    if content is not None:
-        (tmp_path / "t.md").write_text(content, encoding="utf-8")
+    for v in ("v1", "v2", "v10"):
+        write(tmp_path / "t", v, f"{v} 본문 NO_ANSWER")
+    assert mod.prompt_versions("t") == ["v1", "v2", "v10"]                # 글자 순이 아니라 번호 순
+    assert load_prompt.__wrapped__("t").version == "t-v10"
+    assert load_prompt.__wrapped__("t", "v2").text == "v2 본문 NO_ANSWER"
+
+
+def test_답변_지시문은_v1_v2_를_골라_쓸_수_있음():
+    assert answer_prompt("v1").version == "answer-v1"
+    assert answer_prompt("answer-v1").version == "answer-v1"              # 앞에 종류를 붙여도 됨
+    assert answer_prompt().version == answer_prompt(f"v{len(prompt_versions('answer'))}").version
+    assert Answerer(lambda: object(), FakeLLM(), prompt_version="v1").prompt.version == "answer-v1"
+
+
+@pytest.mark.parametrize("files, version, word", [
+    ({}, None, "파일 없음"),
+    ({"v1": ("본문 NO_ANSWER", None)}, "v3", "있는 버전: v1"),
+    ({"v1": ("본문 NO_ANSWER", None)}, "1", "v1, v2 처럼"),
+    ({"v1": ("본문 NO_ANSWER", "t-v2")}, "v1", "t-v1 가 아님"),
+    ({"v1": ("NO 표시가 빠진 본문", None)}, "v1", "NO_ANSWER"),
+])
+def test_지시문_파일이_틀리면_PromptError(tmp_path, monkeypatch, files, version, word):
+    from rag import answer as mod
+    monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)
+    for v, (body, meta) in files.items():
+        write(tmp_path / "t", v, body, meta)
     with pytest.raises(PromptError) as e:
-        load_prompt.__wrapped__("t", (NO_ANSWER,))
+        load_prompt.__wrapped__("t", version, (NO_ANSWER,))
     assert word in str(e.value)
+
+
+def test_머리가_없는_지시문은_PromptError(tmp_path, monkeypatch):
+    from rag import answer as mod
+    monkeypatch.setattr(mod, "PROMPTS_DIR", tmp_path)
+    (tmp_path / "t").mkdir()
+    (tmp_path / "t" / "v1.md").write_text("머리 없는 본문 NO_ANSWER", encoding="utf-8")
+    with pytest.raises(PromptError, match="version 이 없음"):
+        load_prompt.__wrapped__("t", "v1")
+
+
+def test_없는_버전을_고르면_답변만_503():
+    assert "v99" in Answerer(lambda: object(), FakeLLM(), prompt_version="v99").not_ready_reason()
 
 
 def test_지시문이_틀리면_답변만_503_이유(monkeypatch):
     from rag import answer as mod
 
-    def broken():
-        raise PromptError("prompts/answer_system.md 에 version 이 없음")
+    def broken(version=None):
+        raise PromptError("prompts/answer/v2.md 에 version 이 없음")
     monkeypatch.setattr(mod, "answer_prompt", broken)
     assert "version" in Answerer(lambda: object(), FakeLLM()).not_ready_reason()
 

@@ -129,7 +129,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 | 통과 | `answered`. `citations` 는 답에 나온 번호의 조각만 (`ref`, `docId`, `sourceType`, `title`, `text` 원문, `location`) |
 
 - answered·no_result·failed 모두 200 이고, 입력 오류는 400 `INVALID_INPUT`, DB·임베딩 모델·LLM 설정이 준비되지 않으면 503 `NOT_READY`
-- 지시문(시스템 프롬프트)은 `rag/prompts/answer_system.md` 에 있다. 고칠 때는 파일 머리의 `version` 을 올리고(로그에 `prompt=answer-v1` 처럼 남는다), 방법은 `rag/prompts/README.md`
+- 지시문(시스템 프롬프트)은 `rag/prompts/answer/v1.md`, `v2.md` … 처럼 버전마다 파일이 따로 있다. `RAG_ANSWER_PROMPT_VERSION`(예: `v1`)으로 고르고, 없으면 번호가 가장 큰 파일을 쓴다. 쓰는 버전은 로그에 `prompt=answer-v2` 처럼 남는다. 새 버전 만드는 법은 `rag/prompts/README.md`
 - 조각 글은 프롬프트에서 `<자료>` 칸에 넣고, 그 안의 지시는 따르지 말라고 적는다
 - 임베딩 모델은 서버가 한 번 불러 작업자와 같이 쓴다 (잠금으로 한 번에 하나씩). 문서를 임베딩하는 중에 질문이 오면 그 묶음이 끝날 때까지 기다린다
 - 로그에는 질문·답·조각 글을 남기지 않는다 (요청 ID, 개수, 상태, 오류 코드, 검색·LLM 걸린 ms, LLM 공급자·모델, 입력·출력 토큰 수). 출력 토큰에는 추론 토큰을 더한다 (출력 요금 기준)
@@ -203,6 +203,7 @@ set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면
 | `RAG_DB_STATEMENT_TIMEOUT_MS`, `RAG_DB_IDLE_TX_TIMEOUT_MS` | 작업자 DB 연결의 시간 제한 (기본 30000, 60000) |
 | `RAG_LLM_PROVIDER` | 답변 LLM 공급자: `fake`(기본, 시험용 가짜) / `gemini`(시험) / `openai`(운영). 설정이 잘못되면 서버는 뜨고 답변만 503 |
 | `RAG_LLM_MODEL` | 공급자의 모델 이름. `gemini`·`openai` 는 꼭 넣는다 (기본값 없음) |
+| `RAG_ANSWER_PROMPT_VERSION` | 답변 지시문 버전 (`v1`, `v2` …). 없으면 `rag/prompts/answer/` 에서 번호가 가장 큰 파일. 없는 버전이면 답변만 503 |
 | `RAG_LLM_TIMEOUT_S` | 답변 LLM 을 기다리는 상한 (기본 30초). 넘으면 `llm_timeout`. 재시도는 하지 않는다 |
 | `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`), `OPENAI_API_KEY` | 공급자 API 키. 요약 서버와 같은 이름이라 하나로 같이 쓴다. 이미지에 넣지 않고 실행할 때 비밀값으로 |
 | `RAG_DB_CONNECT_TIMEOUT_S` | 작업자가 DB 에 접속할 때 기다리는 상한 (기본 10초). 닿지 않는 주소에서 서버 종료가 늦어지지 않게 |

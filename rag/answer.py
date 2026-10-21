@@ -5,7 +5,8 @@
   답의 [n] 이 하나도 없거나 넘긴 번호(1..k) 밖이면 failed / llm_failed (근거를 지어냈을 수 있다)
   citations 는 답에 나온 번호의 조각만 담고, ref 는 그 번호 그대로다
 
-지시문(시스템 프롬프트)은 rag/prompts/answer_system.md 에 있다 (버전은 파일 머리의 version, 로그에 남는다).
+지시문(시스템 프롬프트)은 rag/prompts/answer/v{n}.md 에 버전마다 따로 있다. RAG_ANSWER_PROMPT_VERSION 으로 고르고,
+없으면 번호가 가장 큰 파일을 쓴다. 쓰는 버전은 로그에 남는다.
 조각 글은 사용자가 올린 자료라, 지시문에서 지시와 구분하고 지시로 보지 말라고 적는다.
 로그에는 질문·답·조각 글을 남기지 않는다 (요청 ID, 개수, 상태, 오류 코드, 걸린 시간만).
 """
@@ -27,7 +28,8 @@ LLM_FAILED = "llm_failed"
 LLM_TIMEOUT = "llm_timeout"
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-ANSWER_PROMPT = "answer_system"
+ANSWER_KIND = "answer"
+_VERSION = re.compile(r"v(\d+)")
 
 
 class PromptError(ValueError):
@@ -36,34 +38,53 @@ class PromptError(ValueError):
 
 @dataclass(frozen=True)
 class Prompt:
-    version: str
+    version: str              # "answer-v2" 처럼 종류-버전. 로그에 남는다
     text: str
 
 
+def prompt_versions(kind: str) -> list[str]:
+    """rag/prompts/{kind}/ 의 버전 목록을 번호 순으로 (["v1", "v2", ...])."""
+    folder = PROMPTS_DIR / kind
+    names = [p.stem for p in folder.glob("v*.md") if _VERSION.fullmatch(p.stem)] if folder.is_dir() else []
+    return sorted(names, key=lambda v: int(v[1:]))
+
+
 @lru_cache(maxsize=None)
-def load_prompt(name: str, required: tuple[str, ...] = ()) -> Prompt:
-    """rag/prompts/{name}.md 를 읽는다. 맨 위 --- 사이의 version 이 있어야 하고, required 글이 본문에 있어야 한다."""
-    path = PROMPTS_DIR / f"{name}.md"
+def load_prompt(kind: str, version: str | None = None, required: tuple[str, ...] = ()) -> Prompt:
+    """rag/prompts/{kind}/{version}.md 를 읽는다. version 을 주지 않으면 번호가 가장 큰 파일을 쓴다.
+    파일 맨 위 --- 사이의 version 이 "{kind}-{version}" 과 같아야 하고, required 글이 본문에 있어야 한다."""
+    if version is None:
+        versions = prompt_versions(kind)
+        if not versions:
+            raise PromptError(f"지시문 파일 없음: prompts/{kind}/v*.md")
+        version = versions[-1]
+    if not _VERSION.fullmatch(version):
+        raise PromptError(f"지시문 버전은 v1, v2 처럼 써야 함 (받은 값: {version})")
+    where = f"prompts/{kind}/{version}.md"
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = (PROMPTS_DIR / kind / f"{version}.md").read_text(encoding="utf-8")
     except OSError:
-        raise PromptError(f"지시문 파일 없음: prompts/{name}.md") from None
+        raise PromptError(f"지시문 파일 없음: {where} (있는 버전: {', '.join(prompt_versions(kind)) or '없음'})") from None
     m = re.match(r"---\n(.*?)\n---\n(.*)", raw, re.S)
     if not m:
-        raise PromptError(f"prompts/{name}.md 맨 위에 --- 로 감싼 version 이 없음")
+        raise PromptError(f"{where} 맨 위에 --- 로 감싼 version 이 없음")
     meta = dict(line.split(":", 1) for line in m.group(1).splitlines() if ":" in line)
-    version = meta.get("version", "").strip()
+    expected = f"{kind}-{version}"
+    if meta.get("version", "").strip() != expected:
+        raise PromptError(f"{where} 의 version 이 {expected} 가 아님 (파일 이름과 맞춘다)")
     text = m.group(2).strip()
-    if not version:
-        raise PromptError(f"prompts/{name}.md 에 version 이 없음")
     missing = [w for w in required if w not in text]
     if not text or missing:
-        raise PromptError(f"prompts/{name}.md 본문에 꼭 필요한 글이 없음: {', '.join(missing) or '본문'}")
-    return Prompt(version, text)
+        raise PromptError(f"{where} 본문에 꼭 필요한 글이 없음: {', '.join(missing) or '본문'}")
+    return Prompt(expected, text)
 
 
-def answer_prompt() -> Prompt:
-    return load_prompt(ANSWER_PROMPT, (NO_ANSWER,))
+def answer_prompt(version: str | None = None) -> Prompt:
+    """답변 지시문. version 은 "v1" 또는 "answer-v1" (없으면 가장 큰 번호)."""
+    if version:
+        version = version.strip().removeprefix(f"{ANSWER_KIND}-")
+    return load_prompt(ANSWER_KIND, version or None, (NO_ANSWER,))
+
 
 _REF = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")       # [1], [1, 2]. [1][2] 는 두 번 걸린다
 
@@ -104,7 +125,7 @@ def _result(status, answer=None, citations=None, error_code=None):
 def answer(connection: Callable[[], ContextManager], embedder, llm, workspace_id: int, doc_ids: list[int],
            query: str, top_k: int = 5, timeout_s: float = 30.0, request_id=None, prompt: Prompt | None = None) -> dict:
     """명세의 응답 dict 를 돌려준다. connection() 은 DB 연결을 여는 컨텍스트 (docIds 가 비면 열지 않는다).
-    prompt 를 주지 않으면 prompts/answer_system.md 를 쓴다. DB 오류는 그대로 올린다 (API 가 503 으로 바꾼다)."""
+    prompt 를 주지 않으면 가장 큰 번호의 답변 지시문을 쓴다. DB 오류는 그대로 올린다 (API 가 503 으로 바꾼다)."""
     prompt = prompt or answer_prompt()
     t0 = time.monotonic()
     tag = f"request_id={request_id} workspace={workspace_id} docs={len(doc_ids)}"
@@ -155,7 +176,7 @@ class Answerer:
     """API 가 쓰는 답변 묶음. 임베딩 모델은 작업자와 같이 쓰므로, 불러오기 전에는 준비 안 됨(503)이다."""
 
     def __init__(self, get_embedder: Callable, llm=None, timeout_s: float = 30.0, config_error: str | None = None,
-                 prompt: Prompt | None = None):
+                 prompt: Prompt | None = None, prompt_version: str | None = None):
         self.get_embedder = get_embedder
         self.llm = llm
         self.timeout_s = timeout_s
@@ -163,7 +184,7 @@ class Answerer:
         self.prompt = prompt
         if prompt is None and config_error is None:
             try:
-                self.prompt = answer_prompt()
+                self.prompt = answer_prompt(prompt_version)
             except PromptError as e:
                 self.config_error = str(e)
 

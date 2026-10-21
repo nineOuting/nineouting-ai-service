@@ -54,7 +54,8 @@ def make_answerer(runtime, env) -> Answerer:
     except LLMConfigError as e:
         log.error("답변 LLM 설정 오류: %s", e)
         return Answerer(lambda: runtime.embedder, config_error=str(e))
-    answerer = Answerer(lambda: runtime.embedder, llm, timeout_s)    # 지시문(prompts/answer_system.md)도 여기서 읽는다
+    # 지시문도 여기서 읽는다. RAG_ANSWER_PROMPT_VERSION(예: v1)으로 고르고, 없으면 가장 큰 번호
+    answerer = Answerer(lambda: runtime.embedder, llm, timeout_s, prompt_version=env.get("RAG_ANSWER_PROMPT_VERSION"))
     if answerer.config_error:
         log.error("답변 설정 오류: %s", answerer.config_error)
     else:

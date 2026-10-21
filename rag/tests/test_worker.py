@@ -1,6 +1,8 @@
 """대기열·작업자 시험 (시험 DB 필요). 임베더와 백엔드는 가짜를 쓴다."""
 import copy
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -261,3 +263,58 @@ def test_끝난_작업은_7일이_지나면_지움(conn):
     conn.execute("UPDATE rag_jobs SET updated_at = now() - interval '8 days' WHERE doc_id = 4")   # 아직 queued
     assert cleanup_finished(conn) == 2
     assert [r[1] for r in job_rows(conn)] == [3, 4]
+
+
+# ---- DB 접속 ----
+
+def run_in_thread(worker, poll_s=0.01):
+    stop = threading.Event()
+    t = threading.Thread(target=worker.run, args=(stop,), kwargs={"poll_s": poll_s}, daemon=True)
+    t.start()
+    return t, stop
+
+
+def wait_until(cond, timeout_s=10.0):
+    deadline = time.monotonic() + timeout_s
+    while not cond():
+        assert time.monotonic() < deadline, "시간 안에 조건이 맞지 않음"
+        time.sleep(0.02)
+
+
+def test_DB에_접속할_수_없어도_작업자는_멈추지_않고_다시_시도(fake_embedder):
+    import psycopg
+
+    calls = []
+
+    def refuse():
+        calls.append(1)
+        raise psycopg.OperationalError("접속 실패 흉내")
+
+    w = Worker(None, fake_embedder, CallbackSender(sender=FakeBackend()), connect=refuse)
+    t, stop = run_in_thread(w)
+    wait_until(lambda: len(calls) >= 3)
+    stop.set()
+    t.join(timeout=5)
+    assert not t.is_alive() and w.conn is None
+
+
+def test_연결이_끊기면_다시_접속해_대기_작업을_처리(conn, fake_embedder):
+    from rag.db import connect
+
+    def connect_db():
+        return connect(env="RAG_TEST_DATABASE_URL")
+
+    first = connect_db()
+    conn.execute("SELECT pg_terminate_backend(%s)", (first.info.backend_pid,))   # 작업자 연결을 DB 쪽에서 끊음
+    submit(conn, request())
+    backend = FakeBackend()
+    w = Worker(first, fake_embedder, CallbackSender(sender=backend, sleep=lambda s: None), connect=connect_db)
+    t, stop = run_in_thread(w)
+    try:
+        wait_until(lambda: job_rows(conn)[0][3] == "done")
+    finally:
+        stop.set()
+        t.join(timeout=5)
+        w.close()
+    assert backend.bodies[0]["status"] == "ready"
+    assert chunk_count(conn, 1) == MINUTES_PIECES

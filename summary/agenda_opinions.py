@@ -37,12 +37,12 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건에 나온 의견을 정리하�
 규칙
 1. 전사는 회의 전체가 아니라 하나의 안건에 연결된 발언만 모은 거야. 근거 줄 번호는 이 전사의 번호만 써.
 2. [안건]의 제목과 결정할 사항은 이야기가 무엇에 관한 것인지 이해하는 데만 써. 전사에 없는 내용을 제목에서 가져와 쓰지 마.
-3. 누가 말했는지가 아니라 어떤 의견이 나왔는지를 내용 기준으로 정리해. 화자 구분은 없으니 사람 이름을 지어내지 마. 같은 의견이 반복되면 하나로 합쳐.
+3. 누가 말했는지가 아니라 어떤 의견이 나왔는지를 내용 기준으로 정리해. 화자 구분은 없으니 사람 이름을 지어내지 마. 같은 의견이 반복되거나 같은 취지의 말이 이어지면 하나로 합쳐.
 4. kind는 넷 중 하나야.
    - "OPINION": 어떤 안이나 방향에 대한 의견, 제안.
    - "EVIDENCE": 앞의 의견의 이유나 근거로 전사에 나온 사실과 설명.
    - "CONCERN": 우려, 걱정, 반대하는 이유.
-   - "QUESTION": 아직 답이 나오지 않은 질문.
+   - "QUESTION": 아직 답이 나오지 않은 질문. 상대의 말을 확인하려고 되묻는 말이나 곧바로 답이 나온 질문은 만들지 마.
 5. EVIDENCE는 전사에 실제로 나온 이유만 써. 이유가 전사에 없으면 만들지 마. 의견만 있으면 OPINION 항목만 만들어.
 6. 같은 안(예: A안)에 대한 의견, 근거, 우려는 이어서 나열해.
 7. text는 한 문장으로, 무슨 말이 나왔는지를 써. "~라는 의견이 나옴", "~라는 우려가 나옴"처럼 써. 결정이 났다고 쓰지 마(결정 여부는 따로 판정해).
@@ -57,6 +57,7 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건에 나온 의견을 정리하�
 
 class OpinionCfg(ItemCfg):
     """의견 정리 설정. 값은 모두 제안이며 평가 뒤에 다시 정한다."""
+    MIN_NEW_LINES = 4                 # 평가(회의 A·B)를 이 값으로 했다
     MIN_LINES = 4                     # 안건 줄이 이만큼 이상일 때부터 호출
     MAX_ITEMS = 8                     # 안건당 항목 수
 
@@ -148,7 +149,7 @@ def selftest():
         c = AgendaClassifier("t", ClassifyCfg(refresh_sec=0))
         if agendas:
             c.set_agendas(1, list(agendas))
-        return c, AgendaOpinions(c, OpinionCfg(**kw), llm=llm, id_prefix="p")
+        return c, AgendaOpinions(c, OpinionCfg(**{"min_new_lines": 2, **kw}), llm=llm, id_prefix="p")   # 시험은 새 줄 2개 기준 (서비스 기본값은 4)
 
     def feed(c, lines, sent_ms, edits=()):
         c.receive({"lines": lines, "edits": list(edits), "sent_ms": sent_ms})
@@ -376,7 +377,7 @@ def selftest():
     for w in ("OPINION", "EVIDENCE", "CONCERN", "QUESTION", "지어내지 마", "사람이 확정한 항목", "JSON만"):
         assert w in SYSTEM_PROMPT, w
     d = OpinionCfg()
-    assert (d.min_lines, d.max_items, d.refresh_sec, d.min_new_lines, d.max_calls, d.provider) == (4, 8, 60, 2, 300, "echo")
+    assert (d.min_lines, d.max_items, d.refresh_sec, d.min_new_lines, d.max_calls, d.provider) == (4, 8, 60, 4, 300, "echo")
     try:
         OpinionCfg(nope=1)
         assert False

@@ -46,8 +46,8 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건에 나온 할 일을 뽑는 �
 규칙
 1. 전사는 회의 전체가 아니라 하나의 안건에 연결된 발언만 모은 거야. 근거 줄 번호는 이 전사의 번호만 써.
 2. [안건]의 제목과 결정할 사항은 이야기가 무엇에 관한 것인지 이해하는 데만 써. 전사에 없는 내용을 제목에서 가져와 쓰지 마.
-3. 누가 무엇을 하겠다, 하자, 해 달라고 말한 발언에서만 할 일을 뽑아. 단순한 의견, 질문, 이미 끝난 일의 보고는 할 일이 아니야.
-4. task는 한 문장으로, 전사에 있는 내용만 써. 전사에 없는 사실, 이름, 숫자를 쓰지 마. 말을 인용할 때는 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 그 부분을 근거로 쓰면 task에 "STT 불확실"이라고 밝혀. 숫자는 말한 한글 표기를 「」로 그대로 인용해.
+3. 누가 무엇을 하겠다, 하자, 해 달라고 말한 발언에서 할 일을 뽑아. 말하는 사람이 스스로 맡겠다고 한 말("~해 줄게요", "~하겠습니다")과 상대에게 부탁한 말("~해 주세요")도 모두 포함해. 단순한 의견, 질문, 이미 끝난 일의 보고는 할 일이 아니야.
+4. task는 "~하기"처럼 해야 할 일을 짧은 한 문장으로 네 말로 정리해서 써. 말을 통째로 옮기지 마. 전사에 있는 내용만 쓰고, 전사에 없는 사실, 이름, 숫자를 쓰지 마. 숫자나 고유한 용어만 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 그 부분을 근거로 쓰면 task에 "STT 불확실"이라고 밝혀. 숫자는 말한 한글 표기를 「」로 그대로 인용해.
 5. assigneeName은 전사에 나온 이름을 글자 그대로 써. "님", "씨"는 빼도 돼. 이름이 전사에 없으면 null이야. "제가", "저는", "우리가"처럼 누구인지 알 수 없는 말은 이름이 아니야. 이름을 추측하거나 지어내지 마.
 6. dueText는 기한을 전사에 나온 말 그대로("수요일까지") 써. 날짜로 바꾸지 마. 기한이 없으면 null이야.
 7. unclear는 할 일인지 분명하지 않은 발언일 때 true야(예: "누가 좀 알아봐요"). 분명하면 false야.
@@ -62,6 +62,7 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건에 나온 할 일을 뽑는 �
 
 class TodoCfg(ItemCfg):
     """할 일 추출 설정. 값은 모두 제안이며 평가 뒤에 다시 정한다."""
+    MIN_NEW_LINES = 4                 # 평가(회의 A·B)를 이 값으로 했다
     MIN_LINES = 1                     # 한 줄로도 할 일이 생긴다
     MAX_ITEMS = 20                    # 안건당 항목 수 (비정상적으로 늘어나는 것을 막는 상한)
 
@@ -273,6 +274,7 @@ def selftest():
         c = AgendaClassifier("t", ClassifyCfg(refresh_sec=0))
         if agendas:
             c.set_agendas(1, list(agendas))
+        kw.setdefault("min_new_lines", 2)                 # 시험은 새 줄 2개 기준으로 짜여 있다 (서비스 기본값은 4)
         t = AgendaTodos(c, TodoCfg(**kw), llm=llm, id_prefix="p")
         if roster is not None:
             t.set_roster(roster)
@@ -492,7 +494,7 @@ def selftest():
     for w in ("assigneeName", "dueText", "unclear", "날짜로 바꾸지 마", "지어내지 마", "사람이 확정한 항목", "JSON만"):
         assert w in SYSTEM_PROMPT, w
     d = TodoCfg()
-    assert (d.min_lines, d.max_items, d.refresh_sec, d.min_new_lines, d.max_calls) == (1, 20, 60, 2, 300)
+    assert (d.min_lines, d.max_items, d.refresh_sec, d.min_new_lines, d.max_calls) == (1, 20, 60, 4, 300)
     try:
         TodoCfg(nope=1)
         assert False

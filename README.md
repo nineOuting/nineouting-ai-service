@@ -116,10 +116,10 @@ flowchart LR
 | `MAX_AGENDA_SUMMARY_CALLS_PER_MEETING` | 회의당 안건별 요약 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
 | `AGENDA_STATUS_REFRESH_SEC` | 안건에 새 줄이 1개뿐일 때 상태 판정을 기다리는 시간(음성 시간 초). 2개 이상이면 바로 판정 | 60 |
 | `MAX_AGENDA_STATUS_CALLS_PER_MEETING` | 회의당 안건 상태 판정 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
-| `AGENDA_OPINION_REFRESH_SEC` | 안건에 새 줄이 1개뿐일 때 의견 정리를 기다리는 시간(음성 시간 초). 2개 이상이면 바로 정리 | 60 |
+| `AGENDA_OPINION_REFRESH_SEC` | 안건에 새 줄이 4개 미만일 때 의견 정리를 기다리는 시간(음성 시간 초). 4개 이상이면 바로 정리 | 60 |
 | `AGENDA_OPINION_MIN_LINES` | 의견 정리를 시작하는 안건의 최소 줄 수 | 4 |
 | `MAX_AGENDA_OPINION_CALLS_PER_MEETING` | 회의당 의견 정리 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
-| `AGENDA_TODO_REFRESH_SEC` | 안건에 새 줄이 1개뿐일 때 할 일 추출을 기다리는 시간(음성 시간 초). 2개 이상이면 바로 추출 | 60 |
+| `AGENDA_TODO_REFRESH_SEC` | 안건에 새 줄이 4개 미만일 때 할 일 추출을 기다리는 시간(음성 시간 초). 4개 이상이면 바로 추출 | 60 |
 | `MAX_AGENDA_TODO_CALLS_PER_MEETING` | 회의당 할 일 추출 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 토큰 지표를 OTLP(HTTP)로도 보낼 주소 | 없음 |
 | `LOG_LEVEL` | 로그 수준 | `INFO` |

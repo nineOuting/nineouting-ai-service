@@ -859,7 +859,7 @@ def item_batches(mid, extra=0):
 def test_item_cfg():
     from .service import opinion_cfg_from_env, todo_cfg_from_env
     d = opinion_cfg_from_env({})
-    assert (d.provider, d.refresh_sec, d.min_lines, d.max_calls, d.min_new_lines, d.max_items) == ("echo", 60, 4, 300, 2, 8)
+    assert (d.provider, d.refresh_sec, d.min_lines, d.max_calls, d.min_new_lines, d.max_items) == ("echo", 60, 4, 300, 4, 8)
     c = opinion_cfg_from_env({"LLM_PROVIDER": "gemini", "LLM_MODEL": "m", "AGENDA_OPINION_REFRESH_SEC": "45",
                               "AGENDA_OPINION_MIN_LINES": "6", "MAX_AGENDA_OPINION_CALLS_PER_MEETING": "99"})
     assert (c.provider, c.model, c.refresh_sec, c.min_lines, c.max_calls) == ("gemini", "m", 45, 6, 99)
@@ -870,7 +870,7 @@ def test_item_cfg():
         except ConfigError:
             pass
     d = todo_cfg_from_env({})
-    assert (d.provider, d.refresh_sec, d.min_lines, d.max_calls, d.min_new_lines, d.max_items) == ("echo", 60, 1, 300, 2, 20)
+    assert (d.provider, d.refresh_sec, d.min_lines, d.max_calls, d.min_new_lines, d.max_items) == ("echo", 60, 1, 300, 4, 20)
     c = todo_cfg_from_env({"LLM_PROVIDER": "gemini", "LLM_MODEL": "m", "AGENDA_TODO_REFRESH_SEC": "45",
                            "MAX_AGENDA_TODO_CALLS_PER_MEETING": "99"})
     assert (c.provider, c.model, c.refresh_sec, c.max_calls) == ("gemini", "m", 45, 99)
@@ -885,9 +885,12 @@ def test_item_cfg():
 def test_agenda_items_flow(cap):
     """안건 보드에 의견과 할 일이 담기고, 고친 항목은 고정되며, 참석자 명단이 바뀌면 모델 없이 이름을 다시 맞춘다 (AI-05)"""
     from agenda_classifier import ClassifyCfg
+    from agenda_opinions import OpinionCfg
+    from agenda_todos import TodoCfg
     sent = []
     pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
-    reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=ClassifyCfg(refresh_sec=0))   # 묶음마다 바로 분류한다
+    reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=ClassifyCfg(refresh_sec=0),
+                   opinion_cfg=OpinionCfg(min_new_lines=2), todo_cfg=TodoCfg(min_new_lines=2))   # 묶음마다 바로 분류하고 새 줄 2개면 바로 처리한다
     mid, path = 31, "31"
     boards = lambda: [p for u, p in sent if u.endswith("/agenda-board")]
     reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
@@ -989,12 +992,14 @@ def test_agenda_items_flow(cap):
 def test_agenda_items_isolated():
     """의견이 멈춰도 할 일과 보드 전송은 계속되고, 할 일이 멈춰도 의견은 계속된다. 한 단계가 예외를 내도 다른 단계는 돈다"""
     from agenda_classifier import ClassifyCfg
+    from agenda_opinions import OpinionCfg
+    from agenda_todos import TodoCfg
     fast = ClassifyCfg(refresh_sec=0)                       # 묶음마다 바로 분류한다
 
     def run(mid, **kw):
         sent = []
         pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
-        reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=fast, **kw)
+        reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=fast, opinion_cfg=OpinionCfg(min_new_lines=2), todo_cfg=TodoCfg(min_new_lines=2), **kw)
         reg.receive_event(mid, {"meetingId": mid, "event": "start", "atMs": 0})
         reg.receive_agendas(mid, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
         for b in item_batches(mid, extra=3):
@@ -1021,7 +1026,7 @@ def test_agenda_items_isolated():
     # 단계 하나가 예외를 내도 일꾼은 계속 돌고, 다른 단계와 보드 전송은 계속된다
     sent = []
     pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
-    reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=fast)
+    reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=fast, opinion_cfg=OpinionCfg(min_new_lines=2), todo_cfg=TodoCfg(min_new_lines=2))
     m = reg._get("m_i3")
     m.opinions.process = lambda final=False: 1 / 0
     reg.receive_agendas("m_i3", dict(load("agendas-with-attendees-put.json"), meetingId="m_i3"))

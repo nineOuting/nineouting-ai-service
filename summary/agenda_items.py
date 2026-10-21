@@ -47,13 +47,14 @@ MAX_STREAK = 3                        # 연속 실패가 이만큼이면 이 기
 class ItemCfg:
     """설정의 공통 틀. 값은 모두 제안이며 평가 뒤에 다시 정한다. 기능마다 MIN_LINES, MAX_ITEMS 기본값만 바꾼다."""
     MIN_LINES = 1
+    MIN_NEW_LINES = 2
     MAX_ITEMS = 20
 
     def __init__(self, **kw):
         self.provider = "echo"
         self.model = None
         self.refresh_sec = 60             # 새 줄이 1개뿐일 때 기다리는 시간 (음성 시간 기준)
-        self.min_new_lines = 2            # 새 줄이 이만큼이면 기다리지 않고 바로 처리
+        self.min_new_lines = self.MIN_NEW_LINES            # 새 줄이 이만큼이면 기다리지 않고 바로 처리
         self.min_lines = self.MIN_LINES   # 안건에 연결된 줄이 이만큼 이상일 때부터 호출
         self.max_items = self.MAX_ITEMS   # 안건당 항목 수 (사람이 고친 항목이 먼저 자리를 차지)
         self.max_calls = 300              # 회의당 모델 호출 상한 (비용을 추정한 뒤 정한다)

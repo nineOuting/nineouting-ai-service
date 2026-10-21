@@ -1,8 +1,13 @@
-# ai-service 이미지를 만들어 GHCR(ghcr.io/nineouting/nineouting-ai-service)에 올림. STT 레포의 image.yml 과 같은 방식
+# ai-service 이미지를 만들어 GHCR(ghcr.io/nineouting/nineouting-ai-service)에 올림. STT 레포의 image.yml 을 바탕으로 함
 # 같은 조직 레포라 따로 받을 자격증명이 없고, 아래 permissions와 기본 GITHUB_TOKEN이면 됨.
 #
+# 플랫폼: linux/amd64(테스트용)와 linux/arm64(CN팀 노드)를 각자의 빌드 서버에서 만들고, 하나의 태그로 묶음.
+#         받는 쪽은 자기 CPU에 맞는 이미지를 자동으로 받음 (일부러 고르려면 docker pull --platform linux/amd64 ...)
 # 태그: 브랜치 이름 + 커밋 SHA (STT·백엔드 서비스 레포와 같은 모양)
 # 끌어 쓰기: docker pull ghcr.io/nineouting/nineouting-ai-service:develop
+#
+# 옛 이미지 정리(delete-package-versions)는 두지 않음: 묶음 안쪽 플랫폼 이미지가 GHCR에서 "태그 없는 버전"으로 보여
+# 태그 없는 버전을 지우면 develop 이미지가 깨짐. 공개 패키지라 저장 공간 비용은 없음
 name: image
 
 on:
@@ -31,8 +36,19 @@ env:
   IMAGE: ghcr.io/nineouting/nineouting-ai-service   # GHCR 주소는 소문자만 받음 (조직 이름은 nineOuting)
 
 jobs:
+  # 플랫폼마다 그 CPU의 빌드 서버에서 만듦 (에뮬레이터보다 빠름)
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            pair: linux-amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            pair: linux-arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -50,49 +66,105 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # pull_request에서는 올리는 대신 이 빌드 서버의 docker 에 넣어(load) 아래에서 크기를 잼
-      - name: 만들어서 올리기
+      # pull_request: 올리지 않고 이 빌드 서버의 docker 에 넣어(load) 아래에서 크기를 재고 모델을 확인함
+      - name: 만들기 (PR)
+        if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name == 'pull_request' }}
-          tags: |
-            ${{ env.IMAGE }}:develop
-            ${{ env.IMAGE }}:${{ github.sha }}
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ${{ env.IMAGE }}:pr-${{ matrix.pair }}
+          cache-from: type=gha,scope=${{ matrix.pair }}
+          cache-to: type=gha,scope=${{ matrix.pair }},mode=max
+
+      # develop: 태그 없이 digest 로만 올리고, 아래 merge 에서 두 플랫폼을 하나의 태그로 묶음
+      - name: 만들어서 올리기 (digest)
+        id: push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.pair }}
+          cache-to: type=gha,scope=${{ matrix.pair }},mode=max
+
+      - name: 확인할 이미지
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "REF=${IMAGE}:pr-${{ matrix.pair }}" >> "$GITHUB_ENV"
+          else
+            echo "REF=${IMAGE}@${{ steps.push.outputs.digest }}" >> "$GITHUB_ENV"
+            docker pull "${IMAGE}@${{ steps.push.outputs.digest }}"
+          fi
 
       - name: 이미지 크기
         run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then docker pull "${IMAGE}:${GITHUB_SHA}"; fi
-          size=$(docker image inspect "${IMAGE}:${GITHUB_SHA}" --format '{{.Size}}')
-          echo "이미지 크기(압축 풀린 상태): $((size / 1000000)) MB (${size} bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
+          size=$(docker image inspect "$REF" --format '{{.Size}}')
+          echo "${{ matrix.platform }} 이미지 크기(압축 풀린 상태): $((size / 1000000)) MB (${size} bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # 네트워크 없이, root 가 아닌 사용자로 이미지 안의 모델을 불러올 수 있는지 확인
       - name: 모델 확인
         run: |
-          docker run --rm --network none "${IMAGE}:${GITHUB_SHA}" python -c "
-          import os
+          docker run --rm --network none "$REF" python -c "
+          import os, platform
           from rag.embedding import E5Embedder, verify_model_files
           verify_model_files()
           E5Embedder()
-          print('모델 확인 uid=%d' % os.getuid())
+          print('모델 확인 uid=%d arch=%s' % (os.getuid(), platform.machine()))
           "
 
-  # 태그가 붙지 않은 옛 이미지를 치움 (모델·의존성 층이 바뀔 때마다 쌓이므로)
-  cleanup:
+      - name: digest 넘기기
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.push.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: digests-${{ matrix.pair }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # 두 플랫폼 이미지를 하나의 태그(develop, 커밋 SHA)로 묶음
+  merge:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       packages: write
     steps:
-      - uses: actions/delete-package-versions@v5
+      - uses: actions/download-artifact@v4
         with:
-          package-name: nineouting-ai-service
-          package-type: container
-          min-versions-to-keep: 10
-          delete-only-untagged-versions: true
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: GHCR 로그인
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 하나의 태그로 묶기
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            -t "${IMAGE}:develop" -t "${IMAGE}:${GITHUB_SHA}" \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      - name: 두 플랫폼이 들어갔는지 확인
+        run: |
+          docker buildx imagetools inspect "${IMAGE}:${GITHUB_SHA}" | tee inspect.txt
+          grep -q "linux/amd64" inspect.txt && grep -q "linux/arm64" inspect.txt
+          echo "묶음 확인: linux/amd64, linux/arm64" | tee -a "$GITHUB_STEP_SUMMARY"

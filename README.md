@@ -37,6 +37,7 @@ flowchart LR
 | 안건 자동 분류 | 구현, 1차 평가 완료 | 줄마다 안건 하나 또는 해당 없음. 직전 대화와 사람이 고친 예를 함께 보여 줌. 사람이 고친 줄은 고정. 결과는 새로 분류했거나 바뀐 줄만 PUT (`docs/eval/agenda-classification-eval-v1.md`) |
 | 안건별 요약 | 구현, 평가 전 | 안건마다 그 안건의 줄만 모아 2~3문장으로 요약하고 문장마다 근거 줄을 붙임. 사람이 고친 문장은 고정하고 근거가 달라지면 "확인 필요" 표시. 안건 보드 전체 상태를 PUT (`docs/api/agenda-summary-contract.md`) |
 | 안건 상태 판정 | 구현, 평가 전 | 안건마다 아직 안 다룸·논의 중·결정·미결·결정 확인 필요 중 하나와 근거 줄을 안건 보드에 담음. 줄이 있는 안건만 모델이 결정 여부를 판정하고, 결정에는 근거 줄이 필수 (`docs/api/agenda-status-contract.md`) |
+| 안건별 의견·할 일 정리 | 구현, 평가 전 | 안건마다 주요 의견·근거와 할 일(담당자·기한)을 안건 보드에 담음. 의견과 할 일은 모델을 따로 부르고 그 안건의 원문 줄만 입력으로 씀. 참석자 명단은 안건 목록 요청의 선택 필드로 받아 담당자 이름을 코드로 맞춤. 사람이 고친 항목은 고정하고 근거가 달라지면 "확인 필요" 표시 (`docs/api/agenda-opinions-contract.md`) |
 | 안건 보드, 오늘 회의 요약, 회의록 초안, 챗봇 | 미구현 | 연동 API 초안 기준 |
 
 현재 LLM은 기본값이 `echo`(모델을 부르지 않는 테스트용)이고, 실제 요약과 안건 분류는 Gemini로 시험했다.
@@ -95,7 +96,7 @@ flowchart LR
 
 - 이미지는 `Dockerfile`로 만들고 포트는 `8000`이다. 배포 설정은 cn 팀이 맡는다.
 - 설정은 환경변수로 주입한다 (아래 표). 비밀키는 이미지에 넣지 않는다.
-- 토큰 사용량 지표는 `GET /metrics`(Prometheus 형식)로 열려 있고, `OTEL_EXPORTER_OTLP_ENDPOINT`를 설정하면 OTLP로도 보낸다. 작업 종류는 `ai.task` 속성이며 `live_summary`(회의 중 요약), `draft`(끝난 회의 요약), `agenda_classification`(안건 분류) 세 가지다.
+- 토큰 사용량 지표는 `GET /metrics`(Prometheus 형식)로 열려 있고, `OTEL_EXPORTER_OTLP_ENDPOINT`를 설정하면 OTLP로도 보낸다. 작업 종류는 `ai.task` 속성이며 `live_summary`(회의 중 요약), `draft`(끝난 회의 요약), `agenda_classification`(안건 분류), `agenda_summary`(안건별 요약), `agenda_status`(안건 상태 판정), `agenda_opinions`(안건별 의견 정리), `agenda_todos`(안건별 할 일 추출) 일곱 가지다.
 - CPU·메모리 요구량은 측정 전이다.
 
 | 환경변수 | 설명 | 기본값 |
@@ -115,6 +116,11 @@ flowchart LR
 | `MAX_AGENDA_SUMMARY_CALLS_PER_MEETING` | 회의당 안건별 요약 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
 | `AGENDA_STATUS_REFRESH_SEC` | 안건에 새 줄이 1개뿐일 때 상태 판정을 기다리는 시간(음성 시간 초). 2개 이상이면 바로 판정 | 60 |
 | `MAX_AGENDA_STATUS_CALLS_PER_MEETING` | 회의당 안건 상태 판정 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
+| `AGENDA_OPINION_REFRESH_SEC` | 안건에 새 줄이 1개뿐일 때 의견 정리를 기다리는 시간(음성 시간 초). 2개 이상이면 바로 정리 | 60 |
+| `AGENDA_OPINION_MIN_LINES` | 의견 정리를 시작하는 안건의 최소 줄 수 | 4 |
+| `MAX_AGENDA_OPINION_CALLS_PER_MEETING` | 회의당 의견 정리 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
+| `AGENDA_TODO_REFRESH_SEC` | 안건에 새 줄이 1개뿐일 때 할 일 추출을 기다리는 시간(음성 시간 초). 2개 이상이면 바로 추출 | 60 |
+| `MAX_AGENDA_TODO_CALLS_PER_MEETING` | 회의당 할 일 추출 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 토큰 지표를 OTLP(HTTP)로도 보낼 주소 | 없음 |
 | `LOG_LEVEL` | 로그 수준 | `INFO` |
 | `GEMINI_API_KEY` | `LLM_PROVIDER=gemini`일 때 필요. 없으면 `503` | 없음 |
@@ -133,6 +139,8 @@ cd summary
 python3 meeting_summary.py --selftest
 python3 meeting_live_summary_v2.py --selftest
 python3 agenda_status.py --selftest
+python3 agenda_opinions.py --selftest
+python3 agenda_todos.py --selftest
 python3 input_adapter.py
 ```
 

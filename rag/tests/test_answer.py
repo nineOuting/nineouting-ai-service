@@ -8,7 +8,7 @@ import pytest
 from _helpers import OTHER_WS, WS, doc, put
 from rag import answer as answer_mod
 from rag.answer import NO_ANSWER, SYSTEM_PROMPT, Answerer, answer, build_prompt, parse_refs
-from rag.llm import FakeLLM, LLMConfigError, LLMTimeout, make_llm
+from rag.llm import FakeLLM, LLMConfigError, LLMError, LLMTimeout, Reply, make_llm
 from rag.search import Hit
 
 QUERY = "1분기 예산은 얼마로 하기로 했어?"
@@ -31,7 +31,7 @@ class ScriptLLM:
         self.calls.append((system, user, timeout_s))
         if self.error:
             raise self.error
-        return self.reply
+        return Reply(self.reply, 120, 30)
 
 
 class NoConnection:
@@ -125,7 +125,8 @@ def test_시간_초과는_llm_timeout(two_hits):
 
 
 def test_LLM_오류는_llm_failed(two_hits):
-    assert run(ScriptLLM(error=RuntimeError("공급자 오류 흉내")))["errorCode"] == "llm_failed"
+    assert run(ScriptLLM(error=LLMError("ClientError")))["errorCode"] == "llm_failed"
+    assert run(ScriptLLM(error=RuntimeError("감싸지 못한 예외")))["errorCode"] == "llm_failed"
 
 
 def test_가짜_LLM은_시험용_표시를_붙이고_찾은_조각을_모두_근거로(two_hits):
@@ -136,7 +137,7 @@ def test_가짜_LLM은_시험용_표시를_붙이고_찾은_조각을_모두_근
 
 
 def test_가짜_LLM은_조각이_없으면_NO_ANSWER():
-    assert FakeLLM().generate(SYSTEM_PROMPT, build_prompt(QUERY, []), 1.0) == NO_ANSWER
+    assert FakeLLM().generate(SYSTEM_PROMPT, build_prompt(QUERY, []), 1.0).text == NO_ANSWER
 
 
 def test_로그에_질문과_답과_조각_글이_없음(two_hits, caplog):
@@ -147,6 +148,7 @@ def test_로그에_질문과_답과_조각_글이_없음(two_hits, caplog):
     assert "req-1" in logged
     for secret in (QUERY, "비밀스러운 답", "번호 없는 답", "조각 원문"):
         assert secret not in logged
+    assert "tokens_in=120 tokens_out=30" in logged and "llm=script/-" in logged
 
 
 # ---- LLM 설정 ----

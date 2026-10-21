@@ -13,7 +13,7 @@ import re
 import time
 from typing import Callable, ContextManager
 
-from .llm import LLMTimeout
+from .llm import LLMError, LLMTimeout
 from .search import search
 
 log = logging.getLogger("rag.answer")
@@ -57,6 +57,10 @@ def parse_refs(text) -> list[int]:
     return seen
 
 
+def _ms(since):
+    return round((time.monotonic() - since) * 1000)
+
+
 def _result(status, answer=None, citations=None, error_code=None):
     return {"status": status, "answer": answer, "citations": citations or [], "errorCode": error_code}
 
@@ -80,17 +84,19 @@ def answer(connection: Callable[[], ContextManager], embedder, llm, workspace_id
         return _result("no_result")
 
     t1 = time.monotonic()
+    tag += f" llm={llm.name}/{getattr(llm, 'model', '-')}"
     try:
-        text = llm.generate(SYSTEM_PROMPT, build_prompt(query, hits), timeout_s)
-    except LLMTimeout:
-        log.warning("답변 failed %s llm=%s code=%s", tag, llm.name, LLM_TIMEOUT)
+        reply = llm.generate(SYSTEM_PROMPT, build_prompt(query, hits), timeout_s)
+    except LLMTimeout as e:
+        log.warning("답변 failed %s llm_ms=%d code=%s error=%s", tag, _ms(t1), LLM_TIMEOUT, e)
         return _result("failed", error_code=LLM_TIMEOUT)
-    except Exception as e:                              # 공급자 SDK 의 예외도 llm_failed 로 본다
-        log.warning("답변 failed %s llm=%s code=%s error=%s", tag, llm.name, LLM_FAILED, type(e).__name__)
+    except Exception as e:                              # LLMError 와, 혹시 감싸지 못한 예외도 llm_failed 로 본다
+        detail = e if isinstance(e, LLMError) else type(e).__name__
+        log.warning("답변 failed %s llm_ms=%d code=%s error=%s", tag, _ms(t1), LLM_FAILED, detail)
         return _result("failed", error_code=LLM_FAILED)
-    tag += f" llm={llm.name} llm_ms={round((time.monotonic() - t1) * 1000)}"
+    tag += f" llm_ms={_ms(t1)} tokens_in={reply.input_tokens} tokens_out={reply.output_tokens}"
 
-    text = (text or "").strip()
+    text = (reply.text or "").strip()
     if text == NO_ANSWER:
         log.info("답변 no_result(근거로 답할 수 없음) %s", tag)
         return _result("no_result")

@@ -11,8 +11,8 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 | 대기열·작업자, 완료 콜백 | 구현 |
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
 | 배포 이미지 (`ghcr.io/nineouting/nineouting-ai-service`) | 구현. 아래 "이미지·배포" |
-| 답변 API (검색 → LLM → 근거 번호 검사) | 구현. LLM 은 아직 시험용 가짜 (답 앞에 `[시험용 답변]`, 찾은 조각을 모두 근거로 담음) |
-| 실제 LLM 연결 (운영 OpenAI, 시험 Gemini), 업로드 문서(PDF·워드·엑셀) | 예정 |
+| 답변 API (검색 → LLM → 근거 번호 검사) | 구현. LLM 은 설정으로 고름: 가짜(기본, 답 앞에 `[시험용 답변]`) / Gemini(시험) / OpenAI(운영, SDK 는 모델을 정할 때 추가) |
+| 업로드 문서(PDF·워드·엑셀) | 예정 |
 
 원본 명세는 노션 "RAG 인터페이스 명세".
 
@@ -131,7 +131,8 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 - answered·no_result·failed 모두 200 이고, 입력 오류는 400 `INVALID_INPUT`, DB·임베딩 모델·LLM 설정이 준비되지 않으면 503 `NOT_READY`
 - 조각 글은 프롬프트에서 `<자료>` 칸에 넣고, 그 안의 지시는 따르지 말라고 적는다
 - 임베딩 모델은 서버가 한 번 불러 작업자와 같이 쓴다 (잠금으로 한 번에 하나씩). 문서를 임베딩하는 중에 질문이 오면 그 묶음이 끝날 때까지 기다린다
-- 로그에는 질문·답·조각 글을 남기지 않는다 (요청 ID, 개수, 상태, 오류 코드, 검색·LLM 걸린 ms)
+- 로그에는 질문·답·조각 글을 남기지 않는다 (요청 ID, 개수, 상태, 오류 코드, 검색·LLM 걸린 ms, LLM 공급자·모델, 입력·출력 토큰 수). 출력 토큰에는 추론 토큰을 더한다 (출력 요금 기준)
+- 실제 LLM 을 쓰면 검색된 조각이 공급자(Google·OpenAI)로 전송된다. 실제 회의 데이터를 보내도 되는지는 서비스 정책으로 정한다
 - 유사도 하한은 아직 없다 (측정 전). 관련 없는 조각만 걸리면 LLM 의 `NO_ANSWER` 로 거른다
 
 손으로 시험하기: 서버를 띄운 뒤 다른 터미널에서 대화형 도구를 쓴다. 회의록을 시험용 워크스페이스(999999)에 넣고, 처리가 끝나면 질문을 받아 답과 근거를 보여 주고, 끝날 때 지운다 (`--keep` 이면 남김).
@@ -141,7 +142,8 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 .venv/bin/python -m rag.try_answer --file a.json --title "첫 회의" --file b.json --title "후속 회의"   # 여러 문서
 ```
 
-- 지금 LLM 은 가짜라 검색된 조각을 모두 근거로 단다. 어느 문서의 어떤 조각이 찾아졌는지 보는 용도다 (`--top-k` 로 개수 조정)
+- 가짜 LLM 은 검색된 조각을 모두 근거로 단다. 어느 문서의 어떤 조각이 찾아졌는지 보는 용도다 (`--top-k` 로 개수 조정)
+- 실제 LLM 으로 보려면 서버를 띄울 때 `RAG_LLM_PROVIDER=gemini`, `RAG_LLM_MODEL`, `GEMINI_API_KEY` 를 넣는다 (`rag/.env` 에 적어 두면 된다). 질문마다 요금이 나간다
 - 실제 회의 데이터는 레포 밖(또는 git 이 무시하는 `data/`)에 두고 `--file` 로 경로만 넘긴다
 
 ## 작업자
@@ -198,8 +200,9 @@ set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면
 | `RAG_CALLBACK_ALLOWED_HOSTS` | 콜백을 보내도 되는 호스트 (`host` 또는 `host:port`, 쉼표로). 비어 있으면 모두 허용(개발용, 경고 로그). 운영에서는 반드시 설정 |
 | `RAG_TORCH_THREADS` | 임베딩 스레드 수 (작업자·답변이 같이 씀) (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |
 | `RAG_DB_STATEMENT_TIMEOUT_MS`, `RAG_DB_IDLE_TX_TIMEOUT_MS` | 작업자 DB 연결의 시간 제한 (기본 30000, 60000) |
-| `RAG_LLM_PROVIDER` | 답변 LLM 공급자. 지금은 `fake`(기본, 시험용)만. 지원하지 않는 값이면 서버는 뜨고 답변만 503 |
-| `RAG_LLM_MODEL` | 공급자의 모델 이름 (실제 공급자를 붙일 때 씀) |
-| `RAG_LLM_TIMEOUT_S` | 답변 LLM 을 기다리는 상한 (기본 30초). 넘으면 `llm_timeout` |
+| `RAG_LLM_PROVIDER` | 답변 LLM 공급자: `fake`(기본, 시험용 가짜) / `gemini`(시험) / `openai`(운영). 설정이 잘못되면 서버는 뜨고 답변만 503 |
+| `RAG_LLM_MODEL` | 공급자의 모델 이름. `gemini`·`openai` 는 꼭 넣는다 (기본값 없음) |
+| `RAG_LLM_TIMEOUT_S` | 답변 LLM 을 기다리는 상한 (기본 30초). 넘으면 `llm_timeout`. 재시도는 하지 않는다 |
+| `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`), `OPENAI_API_KEY` | 공급자 API 키. 요약 서버와 같은 이름이라 하나로 같이 쓴다. 이미지에 넣지 않고 실행할 때 비밀값으로 |
 | `RAG_DB_CONNECT_TIMEOUT_S` | 작업자가 DB 에 접속할 때 기다리는 상한 (기본 10초). 닿지 않는 주소에서 서버 종료가 늦어지지 않게 |
 | `HF_HUB_CACHE` | 모델 캐시 위치. 없으면 `~/.cache/huggingface/hub`. 이미지에서는 `/models` 로 고정 (실행 사용자가 바뀌어도 같은 곳을 찾도록) |

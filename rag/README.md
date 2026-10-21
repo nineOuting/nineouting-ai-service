@@ -140,7 +140,9 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 공용 `Dockerfile` 이미지에 RAG 가 함께 들어간다. GitHub Actions(`.github/workflows/image.yml`)가 PR 에서는 빌드·크기 측정·모델 확인만 하고, `develop` 에 합쳐지면 `ghcr.io/nineouting/nineouting-ai-service:develop` 과 `:<커밋 SHA>` 로 올린다.
 
 - torch 는 CPU 전용, 임베딩 모델은 빌드 때 `/models` 에 받아 sha256 을 확인하고 실행 중에는 내려받지 않는다(`HF_HUB_OFFLINE=1`)
-- root 가 아닌 사용자(uid 10001)로 실행, `linux/amd64`
+- root 가 아닌 사용자(uid 10001)로 실행
+- `linux/arm64`(CN팀 노드)와 `linux/amd64`(테스트용)를 각자의 빌드 서버에서 만들어 하나의 태그로 묶는다. 받는 쪽 CPU 에 맞는 이미지가 자동으로 받아진다 (`docker pull --platform linux/amd64 …` 로 고를 수 있음)
+- GHCR 의 옛 이미지는 자동으로 지우지 않는다. 묶음 안쪽 플랫폼 이미지가 "태그 없는 버전"으로 보여, 태그 없는 버전을 지우면 묶음이 깨진다
 
 처음 배포할 때 (운영 DB)
 1. 관리자가 `CREATE EXTENSION vector` (앱 계정은 관리자 권한이 없음)

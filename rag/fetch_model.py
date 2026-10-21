@@ -4,7 +4,7 @@
 이미 있고 체크섬이 맞으면 접속하지 않고 끝낸다.
 받는 위치는 huggingface_hub 규칙을 따른다 (HF_HUB_CACHE > HF_HOME/hub > ~/.cache/huggingface/hub).
 """
-from .config import MODEL_FILES, MODEL_NAME, MODEL_REVISION
+from .config import MODEL_NAME, MODEL_REVISION
 from .embedding import verify_model_files
 
 
@@ -18,7 +18,7 @@ def main():
 
     from huggingface_hub import snapshot_download
 
-    snapshot_download(MODEL_NAME, revision=MODEL_REVISION, allow_patterns=MODEL_FILES)
+    snapshot_download(MODEL_NAME, revision=MODEL_REVISION)   # 일부만 받지 않는다 (config.py 주석)
     verify_model_files()                       # 체크섬이 다르면 RuntimeError
     print(f"모델 받기 완료: {MODEL_NAME}@{MODEL_REVISION[:7]}")
 

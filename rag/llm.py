@@ -7,6 +7,7 @@
   RAG_LLM_MODEL      공급자의 모델 이름 (가짜는 쓰지 않음)
   RAG_LLM_TIMEOUT_S  응답을 기다리는 상한 (기본 30초)
 """
+import re
 from typing import Protocol
 
 PROVIDERS = ("fake",)
@@ -32,15 +33,19 @@ class LLM(Protocol):
 
 
 class FakeLLM:
-    """시험용. 근거 1번이 있으면 정해진 문장에 [1] 을 붙여 돌려주고, 없으면 NO_ANSWER.
+    """시험용. 넘겨받은 조각 번호를 모두 근거로 단 정해진 문장을 돌려주고, 조각이 없으면 NO_ANSWER.
+    그래서 citations 에 검색된 조각이 모두 나와, 어느 문서의 어떤 조각이 찾아졌는지 볼 수 있다.
     배포된 서버에서도 기본값이라, 실제 답으로 착각하지 않게 앞에 표시를 붙인다. 조각 글은 되풀이하지 않는다."""
     name = "fake"
     MARK = "[시험용 답변]"
+    _CHUNK = re.compile(r"^\[(\d+)\] \(", re.M)        # answer.build_prompt 의 조각 머리 "[n] (제목, 위치)"
 
     def generate(self, system, user, timeout_s):
-        if "[1] " not in user:
+        refs = self._CHUNK.findall(user)
+        if not refs:
             return "NO_ANSWER"
-        return f"{self.MARK} 실제 AI 를 연결하기 전의 시험용 답입니다. 근거 1번을 참고했습니다 [1]."
+        return (f"{self.MARK} 실제 AI 를 연결하기 전의 시험용 답입니다. "
+                f"검색된 근거 {len(refs)}개를 모두 달았습니다 {''.join(f'[{n}]' for n in refs)}.")
 
 
 def make_llm(env) -> tuple[LLM, float]:

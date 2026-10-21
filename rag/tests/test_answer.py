@@ -128,10 +128,15 @@ def test_LLM_오류는_llm_failed(two_hits):
     assert run(ScriptLLM(error=RuntimeError("공급자 오류 흉내")))["errorCode"] == "llm_failed"
 
 
-def test_가짜_LLM은_시험용_표시를_붙여_답함(two_hits):
+def test_가짜_LLM은_시험용_표시를_붙이고_찾은_조각을_모두_근거로(two_hits):
     r = run(FakeLLM())
     assert r["status"] == "answered" and r["answer"].startswith(FakeLLM.MARK)
-    assert [c["ref"] for c in r["citations"]] == [1]
+    assert [c["ref"] for c in r["citations"]] == [1, 2]
+    assert [c["docId"] for c in r["citations"]] == [101, 102]
+
+
+def test_가짜_LLM은_조각이_없으면_NO_ANSWER():
+    assert FakeLLM().generate(SYSTEM_PROMPT, build_prompt(QUERY, []), 1.0) == NO_ANSWER
 
 
 def test_로그에_질문과_답과_조각_글이_없음(two_hits, caplog):

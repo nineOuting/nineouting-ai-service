@@ -7,11 +7,14 @@
   .venv/bin/python -m rag.try_answer --file 회의록.json     임시 형식(summary.json v0.1) 회의록으로
   .venv/bin/python -m rag.try_answer --file a.json --title "첫 회의" --file b.json --title "후속 회의"
                                                             여러 문서를 넣고 문서 전체에서 근거를 찾는다
+  .venv/bin/python -m rag.try_answer --show-search         검색 결과(상위 topK 전부, 점수)도 보여 준다
 
 시험용 워크스페이스(기본 999999)에 넣고, 끝날 때 그 워크스페이스를 지운다 (--keep 이면 남김).
 실제 회의 데이터는 레포 밖에 두고 --file 로 경로만 넘긴다.
 완료 콜백은 이 도구가 127.0.0.1 의 빈 포트에서 받는다. 서버의 RAG_CALLBACK_ALLOWED_HOSTS 가 비어 있어야 한다.
-파이썬 기본 라이브러리만 쓴다.
+--show-search 는 서버와 같은 DB(rag/.env 의 RAG_DATABASE_URL)와 같은 검색 함수로 이 도구가 직접 검색한다.
+API 응답의 citations 는 답에 쓰인 조각만 담으므로, LLM 에 넘어간 조각 전체는 이걸로 본다 (임베딩 모델을 따로 불러 시작이 느리다).
+그 밖에는 파이썬 기본 라이브러리만 쓴다.
 """
 import argparse
 import json
@@ -77,6 +80,46 @@ def ingest(server, args, doc_id, title, minutes, callback_url):
     sys.exit(f"  {args.wait}초 안에 처리가 끝나지 않음 (서버 로그를 확인)")
 
 
+def load_env_file(path):
+    env = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip().strip('"').strip("'")
+    return env
+
+
+class Searcher:
+    """서버와 같은 검색을 이 도구 안에서 한다 (--show-search). 결과는 LLM 에 넘어간 조각과 같은 순서다."""
+
+    def __init__(self):
+        import os
+
+        from .db import connect
+        from .embedding import E5Embedder
+
+        url = os.environ.get("RAG_DATABASE_URL") or load_env_file(Path(__file__).parent / ".env").get("RAG_DATABASE_URL")
+        if not url:
+            sys.exit("  --show-search 에는 RAG_DATABASE_URL 이 필요함 (rag/.env)")
+        self.conn = connect(url)
+        self.embedder = E5Embedder(threads=2)
+
+    def show(self, workspace, doc_ids, query, top_k, cited):
+        from .search import search
+
+        hits = search(self.conn, self.embedder, workspace, doc_ids, query, top_k)
+        print(f"  ─ 검색 결과 (상위 {len(hits)}개, ✔ = 답에 쓰임, 숫자는 유사도)")
+        for i, h in enumerate(hits, 1):
+            mark = "✔" if i in cited else " "
+            text = h.content if len(h.content) <= 60 else h.content[:60] + "…"
+            print(f"    {mark} [{i}] {h.score:.3f} {h.title} · {h.location.get('label', '')}  {text}")
+
+    def close(self):
+        self.conn.close()
+
+
 def show(result, secs):
     print(f"  ─ 상태: {result['status']}" + (f" / {result['errorCode']}" if result.get("errorCode") else "")
           + f" ({secs:.1f}초)")
@@ -99,6 +142,7 @@ def main(argv=None):
     p.add_argument("--top-k", type=int, default=5)
     p.add_argument("--wait", type=float, default=120, help="처리를 기다리는 최대 초")
     p.add_argument("--keep", action="store_true", help="끝나도 시험 문서를 지우지 않음")
+    p.add_argument("--show-search", action="store_true", help="검색 결과(LLM 에 넘어간 조각 전부)도 보여 줌")
     args = p.parse_args(argv)
     files = args.file or [DEMO]
     if len(args.title) > len(files):
@@ -113,6 +157,11 @@ def main(argv=None):
     except OSError:
         sys.exit(f"\n  {server} 에 닿지 않음. 터미널 1에서 서버를 먼저 띄운다 (이 파일 맨 위 설명)")
     print("OK")
+    searcher = None
+    if args.show_search:
+        print("      검색 결과 보기: 임베딩 모델 불러오는 중 ...", end=" ", flush=True)
+        searcher = Searcher()
+        print("OK")
 
     cb = HTTPServer(("127.0.0.1", 0), _Callback)
     threading.Thread(target=cb.serve_forever, daemon=True).start()
@@ -141,9 +190,13 @@ def main(argv=None):
                 print(f"  ─ 오류 {code}: {result}\n")
                 continue
             show(result, time.monotonic() - t0)
+            if searcher:
+                searcher.show(args.workspace, doc_ids, q, args.top_k, {c["ref"] for c in result.get("citations", [])})
             print()
     finally:
         cb.shutdown()
+        if searcher:
+            searcher.close()
         if args.keep:
             print(f"남겨 둠: 워크스페이스 {args.workspace}, docId {', '.join(map(str, doc_ids))}")
         else:

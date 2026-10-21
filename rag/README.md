@@ -168,6 +168,19 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 | 정리 | 끝난 작업은 `payload`(문서 내용)를 비우고, 7일 뒤 줄을 지운다 |
 | DB 접속 | 시작할 때 접속하지 않고 반복을 돌며 접속한다. DB 가 늦게 뜨거나 `vector` 확장이 없어도 서버는 뜨고(그동안 RAG 주소는 503), 연결이 끊기면 다음 반복에서 다시 접속한다 |
 
+## 검색 품질 평가
+
+질문마다 "찾아와야 할 정답 청크"를 정해 둔 질문 파일로, 정답 청크가 검색 결과 몇 위에 오는지 보고 Hit@k·Recall@k·MRR 을 유형별로 낸다. AI 를 부르지 않아 비용이 없고 회의록이 밖으로 나가지 않는다.
+
+```bash
+.venv/bin/python -m rag.eval_search data/eval/questions_v1.json                    # Top-5, Top-10
+.venv/bin/python -m rag.eval_search data/eval/questions_v1.json --k 5 10 20 --detail --out data/eval/results/x.json
+```
+
+- 청크는 실제 작업자와 같은 함수(로더 → 나누기 → 임베딩)로 만들고, 서버 검색과 같은 모델·기준(코사인)으로 순위를 낸다. DB 를 쓰지 않는다
+- 질문 파일 형식은 `rag/eval_search.py` 맨 위 설명. `gold` 가 빈 질문(답할 수 없음)은 검색 지표에서 뺀다
+- 회의록·질문·결과는 레포 밖이나 git 이 무시하는 `data/` 에 둔다. 실제 회의 데이터로 낸 결과는 올리지 않는다
+
 ## 이미지·배포
 
 공용 `Dockerfile` 이미지에 RAG 가 함께 들어간다. GitHub Actions(`.github/workflows/image.yml`)가 PR 에서는 빌드·크기 측정·모델 확인만 하고, `develop` 에 합쳐지면 `ghcr.io/nineouting/nineouting-ai-service:develop` 과 `:<커밋 SHA>` 로 올린다.

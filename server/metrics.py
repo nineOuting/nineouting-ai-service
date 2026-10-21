@@ -20,6 +20,7 @@ from opentelemetry.sdk.resources import Resource
 
 PROVIDER_NAMES = {"gemini": "gcp.gemini", "anthropic": "anthropic", "openai": "openai"}
 BUCKETS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864]
+DURATION_BUCKETS = [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120]
 
 
 class Metrics:
@@ -31,6 +32,10 @@ class Metrics:
             "gen_ai.client.token.usage", unit="{token}",
             description="LLM 호출의 입력·출력 토큰 수",
             explicit_bucket_boundaries_advisory=BUCKETS)
+        self.operation_duration = meter.create_histogram(
+            "gen_ai.client.operation.duration", unit="s",
+            description="LLM 호출 응답 시간",
+            explicit_bucket_boundaries_advisory=DURATION_BUCKETS)
 
     def record_token_usage(self, provider, model, task, input_tokens, output_tokens):
         base = {
@@ -41,6 +46,17 @@ class Metrics:
         }
         self.token_usage.record(int(input_tokens), {**base, "gen_ai.token.type": "input"})
         self.token_usage.record(int(output_tokens), {**base, "gen_ai.token.type": "output"})
+
+    def record_operation(self, provider, model, task, duration_seconds, error_type=None):
+        attributes = {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": PROVIDER_NAMES.get(provider, provider),
+            "gen_ai.request.model": model or "unknown",
+            "ai.task": task or "unknown",
+        }
+        if error_type:
+            attributes["error.type"] = error_type
+        self.operation_duration.record(float(duration_seconds), attributes)
 
     def shutdown(self):
         self.provider.shutdown()

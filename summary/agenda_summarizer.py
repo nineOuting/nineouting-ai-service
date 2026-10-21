@@ -382,9 +382,10 @@ class AgendaSummarizer:
                     it["needs_check"] = True
 
     # ---------------- 출력 ----------------
-    def take_board(self):
+    def take_board(self, status_info=None):
         """안건 보드의 전체 상태. 안건 목록을 아직 못 받았거나 마지막으로 낸 것과 같으면 None.
-        돌려준 내용은 보낸 것으로 기록한다."""
+        돌려준 내용은 보낸 것으로 기록한다.
+        status_info: 안건 key -> {"status", "reason"} (AgendaStatusJudge.board_status). 없으면 status 는 None으로 낸다."""
         view = self._view()
         with self.lock:
             if not view["agendas"]:
@@ -396,10 +397,15 @@ class AgendaSummarizer:
                 st = self.ag.get(a["key"]) or _new_state()
                 rows = [it for it in st["items"] if it["evidence"]]
                 rows.sort(key=lambda it: min((by_id[s]["start_ms"] for s in it["evidence"] if s in by_id), default=float("inf")))
-                agendas.append({"agendaId": view["ids"][a["key"]], "status": None,
-                                "summary": [{"id": it["id"], "text": it["text"], "evidenceSeqs": list(it["evidence"]),
-                                             "edited": bool(it["edited"]), "needsCheck": bool(it["needs_check"])} for it in rows],
-                                "opinions": []})
+                si = (status_info or {}).get(a["key"])
+                ent = {"agendaId": view["ids"][a["key"]], "status": si["status"] if si else None,
+                       "summary": [{"id": it["id"], "text": it["text"], "evidenceSeqs": list(it["evidence"]),
+                                    "edited": bool(it["edited"]), "needsCheck": bool(it["needs_check"])} for it in rows],
+                       "opinions": []}
+                if status_info is not None:
+                    r = si["reason"] if si else None
+                    ent["statusReason"] = {"text": r["text"], "evidenceSeqs": list(r["evidenceSeqs"])} if r else None
+                agendas.append(ent)
             cur_id = view["ids"].get(view["current"]) if view["current"] is not None else None
             sig = _h(json.dumps([cur_id, agendas], ensure_ascii=False, sort_keys=True))
             if sig == self.sent_sig:

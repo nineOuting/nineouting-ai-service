@@ -562,9 +562,14 @@ def test_agenda_summary_flow(cap):
     vs = [p["version"] for p in bs]
     assert vs == sorted(set(vs)) and vs[0] > 10 ** 12, vs
     assert all("meetingId" not in p and "final" not in p and p["offTopic"] is None for p in bs), "연동 API 초안 3.2에 없는 필드"
-    assert all(len(p["agendas"]) == 3 and all(a["status"] is None and a["opinions"] == [] for a in p["agendas"]) for p in bs)
+    from agenda_status import STATUSES
+    assert all(len(p["agendas"]) == 3 and all(a["status"] in STATUSES and a["opinions"] == [] for a in p["agendas"]) for p in bs)
+    assert all(set(a["statusReason"]) == {"text", "evidenceSeqs"} for p in bs for a in p["agendas"] if a["statusReason"])
     last = bs[-1]
     a1, a2, a3 = last["agendas"]
+    assert a3["status"] == "NOT_STARTED" and a3["statusReason"] is None, a3        # 줄이 없는 안건
+    assert a1["status"] in ("DECIDED", "DECISION_CHECK", "UNDECIDED") and a1["statusReason"]["evidenceSeqs"], a1   # 끝난 뒤에는 논의 중이 없다
+    assert all(a["status"] != "DISCUSSING" for a in last["agendas"]), last
     assert a1["summary"] and a2["summary"] and a3["summary"] == [], last
     assert last["currentAgendaId"] == "a_102"
     mine = [x for x in a1["summary"] if x["id"] == edited_id]

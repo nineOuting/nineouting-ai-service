@@ -436,19 +436,57 @@ def test_metrics():
     m = Metrics([reader])
     m.record_token_usage("gemini", "gemini-x", "live_summary", 1200, 80)
     m.record_token_usage("gemini", "gemini-x", "live_summary", 800, 40)
-    pts = {}
+    m.record_operation("gemini", "gemini-x", "live_summary", 0.25)
+    m.record_operation("openai", "gpt-x", "draft", 1.5, "TimeoutError")
+    token_pts, duration_pts = {}, {}
     for rm in reader.get_metrics_data().resource_metrics:
         for sm in rm.scope_metrics:
             for met in sm.metrics:
-                assert met.name == "gen_ai.client.token.usage" and met.unit == "{token}"
-                for dp in met.data.data_points:
-                    a = dict(dp.attributes)
-                    pts[a["gen_ai.token.type"]] = (dp.sum, dp.count, a)
-    assert pts["input"][:2] == (2000, 2) and pts["output"][:2] == (120, 2), pts
-    a = pts["input"][2]
+                if met.name == "gen_ai.client.token.usage":
+                    assert met.unit == "{token}"
+                    for dp in met.data.data_points:
+                        a = dict(dp.attributes)
+                        token_pts[a["gen_ai.token.type"]] = (dp.sum, dp.count, a)
+                elif met.name == "gen_ai.client.operation.duration":
+                    assert met.unit == "s"
+                    for dp in met.data.data_points:
+                        a = dict(dp.attributes)
+                        duration_pts[a.get("error.type")] = (dp.sum, dp.count, a)
+                else:
+                    raise AssertionError(f"예상하지 못한 지표: {met.name}")
+    assert token_pts["input"][:2] == (2000, 2) and token_pts["output"][:2] == (120, 2), token_pts
+    a = token_pts["input"][2]
     assert a["gen_ai.provider.name"] == "gcp.gemini" and a["gen_ai.request.model"] == "gemini-x"
     assert a["ai.task"] == "live_summary" and a["gen_ai.operation.name"] == "chat"
+    assert duration_pts[None][:2] == (0.25, 1), duration_pts
+    assert duration_pts["TimeoutError"][:2] == (1.5, 1), duration_pts
+    failed = duration_pts["TimeoutError"][2]
+    assert failed["gen_ai.provider.name"] == "openai" and failed["ai.task"] == "draft"
     m.shutdown()
+
+
+def test_llm_operation_hook():
+    from summary import meeting_summary
+    old_operation, old_usage = meeting_summary.OPERATION_HOOK, meeting_summary.USAGE_HOOK
+    calls = []
+    meeting_summary.OPERATION_HOOK = lambda *args: calls.append(args)
+    meeting_summary.USAGE_HOOK = None
+    try:
+        assert meeting_summary._invoke_llm("gemini", "gemini-x", "live_summary", lambda: "ok") == "ok"
+
+        def fail():
+            raise TimeoutError("시험용 실패")
+
+        try:
+            meeting_summary._invoke_llm("openai", "gpt-x", "draft", fail)
+            raise AssertionError("LLM 호출 예외를 숨김")
+        except TimeoutError:
+            pass
+    finally:
+        meeting_summary.OPERATION_HOOK, meeting_summary.USAGE_HOOK = old_operation, old_usage
+    assert len(calls) == 2, calls
+    assert calls[0][:3] == ("gemini", "gemini-x", "live_summary") and calls[0][3] >= 0 and calls[0][4] is None
+    assert calls[1][:3] == ("openai", "gpt-x", "draft") and calls[1][3] >= 0 and calls[1][4] == "TimeoutError"
 
 
 def test_api():
@@ -482,8 +520,11 @@ def test_api():
     finally:
         main.registry.shutting_down = False
     main.metrics.record_token_usage("gemini", "gemini-x", "live_summary", 10, 2)
+    main.metrics.record_operation("gemini", "gemini-x", "live_summary", 0.25, "TimeoutError")
     r = c.get("/metrics")
-    assert r.status_code == 200 and "gen_ai_client_token_usage" in r.text and 'ai_task="live_summary"' in r.text, r.text[:300]
+    assert r.status_code == 200 and "gen_ai_client_token_usage" in r.text, r.text[:300]
+    assert "gen_ai_client_operation_duration" in r.text and 'ai_task="live_summary"' in r.text, r.text[:500]
+    assert 'error_type="TimeoutError"' in r.text, r.text[:500]
 
 
 def test_api_agenda():
@@ -816,6 +857,7 @@ def main():
     test_rejects_and_warnings()
     test_failure_does_not_stop_worker()
     test_metrics()
+    test_llm_operation_hook()
     test_api()
     test_api_agenda()
     test_api_summary_edits()

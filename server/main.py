@@ -32,6 +32,7 @@ SUMMARY_EDITS_PATH = "/internal/meetings/{meeting_id}/agenda-summary-edits"  # �
 
 metrics = Metrics(default_readers(os.environ))
 meeting_summary.USAGE_HOOK = metrics.record_token_usage          # 모델을 부를 때마다 토큰 사용량을 지표로 남긴다
+meeting_summary.OPERATION_HOOK = metrics.record_operation     # 호출 시간과 실패 종류를 지표로 남긴다
 publisher = Publisher.from_env(os.environ)
 registry = Registry(cfg_from_env(), publisher=publisher)          # 잘못된 설정이면 서버가 뜨지 않는다
 

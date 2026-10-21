@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HEDGE = re.compile(r"STT|불확실|불명확")          # 프롬프트 규칙 4와 같은 말
@@ -214,6 +215,7 @@ SYSTEM_PROMPT = """너는 회의 전사에서 요약 항목을 뽑는 도구야.
 # 4. LLM 호출
 # --------------------------------------------------------------------------------------
 USAGE_HOOK = None    # 서버가 지정한다: fn(provider, model, task, input_tokens, output_tokens). 토큰 사용량 지표용
+OPERATION_HOOK = None  # 서버가 지정한다: fn(provider, model, task, duration_seconds, error_type)
 
 
 def usage_of(provider, r):
@@ -243,9 +245,31 @@ def report_usage(provider, model, task, r):
         pass                                # 지표 오류가 요약을 막으면 안 된다
 
 
+def report_operation(provider, model, task, duration_seconds, error_type=None):
+    if OPERATION_HOOK is None:
+        return
+    try:
+        OPERATION_HOOK(provider, model, task, duration_seconds, error_type)
+    except Exception:
+        pass                                # 지표 오류가 요약을 막으면 안 된다
+
+
+def _invoke_llm(provider, model, task, invoke):
+    """실제 SDK 호출을 실행하고 성공·실패 시간을 기록한다. 실패 예외는 호출자에게 그대로 전달한다."""
+    started = time.perf_counter()
+    try:
+        response = invoke()
+    except Exception as exc:
+        report_operation(provider, model, task, time.perf_counter() - started, type(exc).__name__)
+        raise
+    report_operation(provider, model, task, time.perf_counter() - started)
+    report_usage(provider, model, task, response)
+    return response
+
+
 def call_llm(provider, model, system, user, mock_file=None, task=None):
-    """task: 작업 종류. 토큰 사용량 지표의 ai.task 속성으로 쓴다. live_summary(회의 중 요약), draft(끝난 회의 요약),
-    agenda_classification(안건 분류)"""
+    """task: 작업 종류. 토큰 사용량과 호출 시간 지표의 ai.task 속성으로 쓴다. live_summary(회의 중 요약),
+    draft(끝난 회의 요약), agenda_classification(안건 분류)"""
     if provider == "mock":
         path = mock_file or os.path.join(HERE, "mock_llm_output.json")
         with open(path, encoding="utf-8") as f:
@@ -254,28 +278,40 @@ def call_llm(provider, model, system, user, mock_file=None, task=None):
         from google import genai
         from google.genai import types
         client = genai.Client()   # GEMINI_API_KEY 환경변수
-        r = client.models.generate_content(
-            model=model, contents=user,
-            config=types.GenerateContentConfig(system_instruction=system, response_mime_type="application/json"))
-        report_usage(provider, model, task, r)
-        return r.text
-    if provider == "anthropic":
+
+        def invoke():
+            return client.models.generate_content(
+                model=model, contents=user,
+                config=types.GenerateContentConfig(system_instruction=system, response_mime_type="application/json"))
+
+        def response_text(r):
+            return r.text
+    elif provider == "anthropic":
         import anthropic
         client = anthropic.Anthropic()   # ANTHROPIC_API_KEY 환경변수
-        r = client.messages.create(model=model, max_tokens=8000, system=system,
-                                   messages=[{"role": "user", "content": user}])
-        report_usage(provider, model, task, r)
-        return "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
-    if provider == "openai":
+
+        def invoke():
+            return client.messages.create(model=model, max_tokens=8000, system=system,
+                                          messages=[{"role": "user", "content": user}])
+
+        def response_text(r):
+            return "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
+    elif provider == "openai":
         from openai import OpenAI
         client = OpenAI()   # OPENAI_API_KEY 환경변수
-        r = client.chat.completions.create(
-            model=model, response_format={"type": "json_object"},
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
-        report_usage(provider, model, task, r)
-        return r.choices[0].message.content
-    raise ValueError(f"알 수 없는 provider: {provider}")
 
+        def invoke():
+            return client.chat.completions.create(
+                model=model, response_format={"type": "json_object"},
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+
+        def response_text(r):
+            return r.choices[0].message.content
+    else:
+        raise ValueError(f"알 수 없는 provider: {provider}")
+
+    response = _invoke_llm(provider, model, task, invoke)
+    return response_text(response)
 
 def parse_llm_json(raw):
     s = raw.strip()

@@ -1086,6 +1086,173 @@ def test_api_item_edits():
     finally:
         main.registry.shutting_down = False
 
+def offtopic_batches(mid, first_seq, count):
+    """10초짜리 잡담 줄 count 개를 3줄씩 묶음으로 만든다. 등록된 안건과 겹치는 단어가 없다. 반환: (묶음 목록, 다음 seq)."""
+    rows = [{"seq": first_seq + k, "startMs": (first_seq + k - 1) * 10000, "endMs": (first_seq + k) * 10000, "text": f"점심 뭐 먹을까요 {first_seq + k}번",
+             "kind": None, "lowConfidence": False, "recovered": False, "manual": False} for k in range(count)]
+    return [rows[i:i + 3] for i in range(0, len(rows), 3)], first_seq + count
+
+
+def test_offtopic_cfg():
+    from .service import offtopic_cfg_from_env
+    d = offtopic_cfg_from_env({})
+    assert (d.provider, d.threshold_sec, d.long_sec, d.max_calls) == ("echo", 180, 180, 20)
+    c = offtopic_cfg_from_env({"LLM_PROVIDER": "gemini", "LLM_MODEL": "m", "AGENDA_OFFTOPIC_SEC": "120", "AGENDA_OFFTOPIC_LONG_SEC": "60",
+                               "MAX_AGENDA_OFFTOPIC_CALLS_PER_MEETING": "5"})
+    assert (c.provider, c.model, c.threshold_sec, c.long_sec, c.max_calls) == ("gemini", "m", 120, 60, 5)
+    for key in ("AGENDA_OFFTOPIC_SEC", "AGENDA_OFFTOPIC_LONG_SEC", "MAX_AGENDA_OFFTOPIC_CALLS_PER_MEETING"):
+        for bad in ("x", "0", "-5"):
+            try:
+                offtopic_cfg_from_env({key: bad})
+                raise SystemExit(f"잘못된 설정을 못 잡음: {key}={bad}")
+            except ConfigError:
+                pass
+
+
+def test_agenda_offtopic_flow(cap):
+    """해당 없음이 3분 이어지면 새 안건 제안이 보드에 담기고, 무시하면 거두었다가 3분 뒤 다시 알리고, 회의가 끝나면 거둔다 (AI-06)"""
+    from agenda_classifier import ClassifyCfg
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+    reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=ClassifyCfg(refresh_sec=0))
+    mid, path = 51, "51"
+    boards = lambda: [p for u, p in sent if u.endswith("/agenda-board")]
+    reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(path, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert boards()[0]["offTopic"] is None
+    state = {"seq": 1, "batch": 0}
+
+    def feed(count):
+        groups, state["seq"] = offtopic_batches(mid, state["seq"], count)
+        for g in groups:
+            state["batch"] += 1
+            reg.receive_batch(path, {"meetingId": mid, "batch": state["batch"], "lines": g, "edits": []})
+            assert reg.wait_idle(path) and pub.wait_idle()
+
+    feed(15)                                                              # 150초: 아직 제안하지 않는다
+    assert all(b["offTopic"] is None for b in boards())
+    feed(3)                                                               # 180초
+    b = boards()[-1]
+    ot = b["offTopic"]
+    assert ot and ot["stage"] == "SUGGEST" and ot["suggestedTitle"] == "기타 논의" and ot["evidenceSeqs"] == [1], b
+    assert set(ot) == {"stage", "detectedAt", "detectedAtMs", "suggestedTitle", "evidenceSeqs"}
+    assert reg.status(path)["agendaOffTopic"]["calls"] == 1
+    n_boards = len(boards())
+    feed(3)                                                               # 구간이 길어져도 제목을 다시 만들지 않고 보드도 다시 보내지 않는다
+    assert len(boards()) == n_boards and reg.status(path)["agendaOffTopic"]["calls"] == 1
+    assert all(a["status"] in ("NOT_STARTED", "DISCUSSING", "UNDECIDED") for a in boards()[-1]["agendas"])
+
+    # 무시: 다음 주기에 offTopic 이 null 로 바뀐 보드가 나간다
+    assert reg.receive_offtopic_action(path, {"meetingId": mid, "action": "dismiss", "rev": 1}) == {
+        "accepted": True, "result": "accepted", "applied": True}
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert boards()[-1]["offTopic"] is None and len(boards()) == n_boards + 1
+    assert reg.receive_offtopic_action(path, {"meetingId": mid, "action": "dismiss", "rev": 1})["result"] == "stale"
+    feed(15)                                                              # 무시한 뒤 150초
+    assert boards()[-1]["offTopic"] is None
+    feed(3)                                                               # 180초: 지금 다른 이야기를 하고 있다
+    ot = boards()[-1]["offTopic"]
+    assert ot and ot["stage"] == "LONG" and ot["suggestedTitle"] == "기타 논의", ot
+    assert reg.status(path)["agendaOffTopic"]["calls"] == 1 and reg.status(path)["agendaOffTopic"]["stage"] == "LONG"
+
+    # 끝나면 거둔다. 끝난 회의에는 더 받지 않는다
+    reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": 600000})
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert boards()[-1]["offTopic"] is None
+    assert reg.receive_offtopic_action(path, {"meetingId": mid, "action": "dismiss", "rev": 9})["result"] == "ignored"
+    st = reg.status(path)
+    assert st["errors"] == 0 and st["agendaOffTopic"]["halted"] is None and st["agendaOffTopic"]["suggested"] == 1, st
+    dump = json.dumps(st, ensure_ascii=False) + "\n".join(cap.rows)
+    for secret in ("점심", "기타 논의", "배포 일정"):
+        assert secret not in dump, f"로그나 상태에 내용이 있음: {secret}"
+    # 잘못된 요청은 거절
+    reg2 = Registry(cfg_from_env({}))
+    for bad in ({"meetingId": "m"}, {"meetingId": "other", "action": "dismiss", "rev": 1}, {"meetingId": "m", "action": "register", "rev": 1},
+                {"meetingId": "m", "action": "dismiss"}, {"meetingId": "m", "action": "dismiss", "rev": 1, "atMs": -3}):
+        try:
+            reg2.receive_offtopic_action("m", bad)
+            raise SystemExit(f"잘못된 요청을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    assert reg2.receive_offtopic_action("m", {"meetingId": "m", "action": "dismiss", "rev": 1})["result"] == "not_active"
+
+
+def test_agenda_offtopic_isolated():
+    """제목 호출이 실패해도 제안은 제목 없이 나가고, 주제 변경 단계가 예외를 내도 요약·보드 전송은 계속된다"""
+    from agenda_classifier import ClassifyCfg
+
+    def run(mid, **kw):
+        sent = []
+        pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+        reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=ClassifyCfg(refresh_sec=0), **kw)
+        path = str(mid)
+        reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
+        reg.receive_agendas(path, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
+        groups, _ = offtopic_batches(mid, 1, 21)
+        for n, g in enumerate(groups, 1):
+            reg.receive_batch(path, {"meetingId": mid, "batch": n, "lines": g, "edits": []})
+            assert reg.wait_idle(path) and pub.wait_idle()
+        return reg, path, [p for u, p in sent if u.endswith("/agenda-board")]
+
+    def boom(user):
+        raise RuntimeError("키 오류")
+    reg, path, boards = run(52, offtopic_llm=boom)
+    ot = boards[-1]["offTopic"]
+    assert ot and ot["stage"] == "SUGGEST" and ot["suggestedTitle"] is None and ot["evidenceSeqs"] == [], boards[-1]
+    st = reg.status(path)
+    assert st["agendaOffTopic"]["errors"] == 1 and st["errors"] == 0, st
+
+    from agenda_offtopic import AgendaOffTopic
+    real = AgendaOffTopic.process
+
+    def explode(self, final=False):
+        raise RuntimeError("터짐")
+    AgendaOffTopic.process = explode
+    try:
+        reg, path, boards = run(53)
+    finally:
+        AgendaOffTopic.process = real
+    assert boards and all(b["offTopic"] is None for b in boards), "터진 단계가 보드에 영향을 줌"
+    st = reg.status(path)
+    assert st["errors"] > 0 and st["agendaClassification"]["classified"] == 21 and st["publisher"]["enabled"], st
+    assert boards[-1]["agendas"][0]["agendaId"] == 101
+
+
+def test_api_offtopic_action():
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        return
+    from . import main
+    c = TestClient(main.app)
+    mid = "61"
+    url = f"/internal/meetings/{mid}/off-topic-actions"
+    body = dict(load("off-topic-action-post.json"), meetingId=61)
+    r = c.post(url, json=body)
+    assert r.status_code == 200 and r.json() == {"accepted": True, "result": "not_active", "applied": False}, r.text    # 떠 있는 제안이 없다
+    replay = dict(load("off-topic-action-replay-post.json"), meetingId=61)
+    r = c.post(url, json=replay)
+    assert r.status_code == 200 and r.json() == {"accepted": True, "result": "accepted", "applied": True}, r.text       # 재시작 복구 때 무시한 시각
+    assert c.post(url, json=replay).json()["result"] == "stale"
+    assert c.put(url, json=body).status_code == 405
+    r = c.post(url, json={"meetingId": 61, "action": "register", "rev": 3})
+    assert r.status_code == 400 and r.json()["error"] == "INVALID_INPUT" and "dismiss" in r.json()["detail"], r.text
+    assert c.post(url.replace(mid, "62"), json=body).status_code == 400
+    s = c.get(f"/internal/meetings/{mid}/status").json()
+    assert s["agendaOffTopic"]["dismissals"] == 1 and s["agendaOffTopic"]["halted"] is None, s
+    r = c.post("/internal/meetings/63/events", json={"meetingId": 63, "event": "end", "atMs": 1200000, "wall": "2026-10-15T14:25:00.000+09:00"})
+    assert r.status_code == 200, r.text
+    assert main.registry.wait_idle("63")
+    r = c.post("/internal/meetings/63/off-topic-actions", json=dict(body, meetingId=63))
+    assert r.status_code == 200 and r.json() == {"accepted": False, "result": "ignored", "reason": "ended"}, r.text     # 끝난 회의
+    main.registry.shutting_down = True
+    try:
+        assert c.post(url, json=body).status_code == 503
+        assert c.post(url, json=body).json()["error"] == "NOT_READY"
+    finally:
+        main.registry.shutting_down = False
+
 
 def main():
     cap = Capture()
@@ -1119,11 +1286,16 @@ def main():
     test_agenda_items_flow(cap)
     test_agenda_items_isolated()
     test_api_item_edits()
+    test_offtopic_cfg()
+    test_agenda_offtopic_flow(cap)
+    test_agenda_offtopic_isolated()
+    test_api_offtopic_action()
     test_numeric_meeting_id()
     print("수신 서버 자체 시험 통과 (설정, 묶음 번호 409, 요약 전송·재시도, 503, 잘못된 요청, 처리 실패, 토큰 지표, 로그에 전사 내용 없음, HTTP, "
           "안건 분류: 안건 목록·고친 분류 받기, 바뀐 줄만 전송, 고정, 종료 final, 실패 격리, 합쳐 보내기, 숫자 meetingId, "
           "안건 요약: 안건 보드 전송, 고친 요약 받기, 실패 격리, 1초 간격, "
-          "의견·할 일: 참석자 명단 받기, 고친 항목 받기, 이름 다시 맞추기, 실패 격리)")
+          "의견·할 일: 참석자 명단 받기, 고친 항목 받기, 이름 다시 맞추기, 실패 격리, "
+          "주제 변경: 새 안건 제안 보드 전송, 무시와 재알림, 종료 시 거둠, 제목 실패 격리, 무시 요청 HTTP)")
 
 
 if __name__ == "__main__":

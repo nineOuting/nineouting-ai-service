@@ -30,6 +30,7 @@ AGENDAS_PATH = "/internal/meetings/{meeting_id}/agendas"                    # �
 CORRECTIONS_PATH = "/internal/meetings/{meeting_id}/agenda-corrections"    # 사람이 고친 분류 (POST)
 SUMMARY_EDITS_PATH = "/internal/meetings/{meeting_id}/agenda-summary-edits"  # 사람이 고친 요약 문장 (POST)
 ITEM_EDITS_PATH = "/internal/meetings/{meeting_id}/agenda-item-edits"        # 사람이 고친 의견·할 일 (POST)
+OFFTOPIC_ACTIONS_PATH = "/internal/meetings/{meeting_id}/off-topic-actions"  # 새 안건 제안을 무시했다는 알림 (POST)
 
 metrics = Metrics(default_readers(os.environ))
 meeting_summary.USAGE_HOOK = metrics.record_token_usage          # 모델을 부를 때마다 토큰 사용량을 지표로 남긴다
@@ -145,6 +146,16 @@ def post_summary_edits(meeting_id: str, msg: dict = Body(...)):
 def post_item_edits(meeting_id: str, msg: dict = Body(...)):
     try:
         return registry.receive_item_edits(meeting_id, msg)
+    except NotReady as e:
+        return not_ready(str(e))
+    except AdapterError as e:
+        return invalid(str(e))
+
+
+@app.post(OFFTOPIC_ACTIONS_PATH)
+def post_offtopic_action(meeting_id: str, msg: dict = Body(...)):
+    try:
+        return registry.receive_offtopic_action(meeting_id, msg)
     except NotReady as e:
         return not_ready(str(e))
     except AdapterError as e:

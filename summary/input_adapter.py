@@ -262,6 +262,20 @@ def adapt_item_edits(msg):
     return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "edits": out}
 
 
+def adapt_offtopic_action(msg):
+    """새 안건 제안·"지금 다른 이야기" 알림에 대한 사용자의 응답 (agenda-offtopic-contract.md 5장)
+    -> {"meeting_id", "action", "rev", "at_ms"}. 지금은 dismiss(무시)만 받는다. atMs 는 선택이며 재시작 복구 때 무시한 시각(음성 시간)을 알려 준다."""
+    meeting_id, raw_id = _meeting_id(msg, "off-topic-actions")
+    action = _need(msg, "action", str, "off-topic-actions")
+    if action != "dismiss":
+        raise AdapterError(f"off-topic-actions: 'action' 은 dismiss 여야 함 ({action})")
+    rev = _need(msg, "rev", int, "off-topic-actions")
+    at_ms = msg.get("atMs")
+    if at_ms is not None and (isinstance(at_ms, bool) or not isinstance(at_ms, int) or at_ms < 0):
+        raise AdapterError("off-topic-actions: 'atMs' 는 0 이상의 정수여야 함")
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "action": action, "rev": rev, "at_ms": at_ms}
+
+
 # --------------------------------------------------------------------------------------
 def selftest():
     from meeting_summary import TranscriptStore, build_input
@@ -492,8 +506,22 @@ def selftest():
     c2 = adapt_item_edits({"meetingId": "m", "edits": [{"agendaId": "a", "target": "todo", "itemId": "i", "action": "confirm", "rev": 1}]})
     assert c2["edits"][0]["action"] == "confirm" and "task" not in c2["edits"][0] and "evidence_seqs" not in c2["edits"][0]
 
+    # 주제 변경 제안에 대한 응답
+    a = adapt_offtopic_action({"meetingId": 7, "action": "dismiss", "rev": 3})
+    assert a == {"meeting_id": "7", "meeting_id_raw": 7, "action": "dismiss", "rev": 3, "at_ms": None}, a
+    assert adapt_offtopic_action({"meetingId": "m", "action": "dismiss", "rev": 1, "atMs": 0})["at_ms"] == 0
+    for bad in ({"meetingId": "m", "action": "dismiss"}, {"meetingId": "m", "rev": 1}, {"action": "dismiss", "rev": 1},
+                {"meetingId": "m", "action": "register", "rev": 1}, {"meetingId": "m", "action": "dismiss", "rev": "1"},
+                {"meetingId": "m", "action": "dismiss", "rev": True}, {"meetingId": "m", "action": "dismiss", "rev": 1, "atMs": -1},
+                {"meetingId": "m", "action": "dismiss", "rev": 1, "atMs": "5"}, {"meetingId": "m", "action": "dismiss", "rev": 1, "atMs": 1.5}):
+        try:
+            adapt_offtopic_action(bad)
+            raise SystemExit(f"잘못된 무시 요청을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+
     print("입력 어댑터 자체 시험 통과 (이벤트 4종, 줄 변환, edits, manual, speakerLabel, 잘못된 입력, 안건 목록, 고친 분류, meetingId 문자열·정수, 고친 요약, "
-          "참석자 명단, 고친 의견·할 일)")
+          "참석자 명단, 고친 의견·할 일, 주제 변경 무시 요청)")
 
 
 if __name__ == "__main__":

@@ -50,7 +50,7 @@ AI-08은 새로 요약하지 않고 이 요약을 모아 배치한다. 그래서
 | `basedOnSeq` | 정수 | 이 상태에 반영한 전사 줄 중 가장 큰 `seq`. 어디까지 보고 만든 결과인지를 뜻한다 |
 | `currentAgendaId` | 안건 번호 또는 null | 지금 논의 중인 안건. 줄별 분류 결과(`agenda-classification`)의 `currentAgendaId`와 같은 값이다. 아직 연결된 줄이 없으면 `null` |
 | `agendas` | 배열 | 안건 목록의 모든 안건. 항목은 4.2 |
-| `offTopic` | null | 주제 변경 감지(AI-06) 구현 전까지 항상 `null` |
+| `offTopic` | 객체 또는 null | 주제 변경 감지(AI-06). 제안이 떠 있을 때만 객체이고 아니면 `null`. 모양은 `agenda-offtopic-contract.md` 3장 |
 
 ### 4.2 agendas의 항목
 
@@ -212,7 +212,7 @@ PRD에 없는 기능이라 제안만 하고 구현하지 않는다.
 | 사람이 고친 문장의 잠금 해제, 문장 삭제, 새 문장 추가 | PRD AI-03은 "수정"만 정한다. 필요하면 기획 확인 뒤 `action`을 늘린다 |
 | 고친 뒤 쌓인 발언의 의미가 달라진 것을 감지 | 결정할 수 있는 규칙이 없다. 이번에는 근거가 달라진 경우만 감지한다 (6장 7번) |
 | 현재 안건 별도 요약 | 안건별 요약을 화면에서 강조하는 것으로 대신한다 (1장) |
-| `opinions`, `offTopic` 채우기 | 각각 AI-05, AI-06. 그때까지 빈 배열, `null`로 보낸다. `status`는 AI-04(`agenda-status-contract.md`)가 채운다 |
+| `opinions`, `offTopic` 채우기 | 각각 AI-05(`agenda-opinions-contract.md`), AI-06(`agenda-offtopic-contract.md`)이 채운다. 채울 것이 없으면 빈 배열, `null`로 보낸다. `status`는 AI-04(`agenda-status-contract.md`)가 채운다 |
 | 사전 자료 반영 | 추후 지원 예정 (`agenda-contract.md` 10장) |
 
 ## 11. 협의 상태
@@ -222,7 +222,7 @@ PRD에 없는 기능이라 제안만 하고 구현하지 않는다.
 | 안건 보드(`agenda-board`, 전체 상태, `version`, 최대 초당 1번)로 보낸다 | 연동 API 초안 3.2·7장 4번 기준 |
 | 모든 안건을 각각 요약하고, 현재 안건은 `currentAgendaId`로 강조한다 | AI 제안, 기획·cn 팀 확인 필요 |
 | `summary`를 문자열에서 문장 목록(`id`, `text`, `evidenceSeqs`, `edited`, `needsCheck`)으로 바꾼다 | AI 제안, cn 팀 확인 필요 |
-| AI-05·06 구현 전에는 `opinions` 빈 배열, `offTopic` `null`로 보낸다 (`status`는 AI-04가 채움) | AI 제안, cn 팀 확인 필요 |
+| 채울 것이 없을 때 `opinions` 빈 배열, `offTopic` `null`로 보낸다 (`status`는 AI-04가 채움) | AI 제안, cn 팀 확인 필요 |
 | 줄별 분류 결과(`agenda-classification`)는 별도 주소로 두고, `currentAgendaId`는 두 곳에 같은 값이 간다 | AI 제안, cn 팀 확인 필요 |
 | 안건 보드의 `version`을 시각(밀리초) 기준으로 올린다 | AI 제안, cn 팀 확인 필요 (정수 칸의 크기) |
 | 사람이 고친 요약을 `agenda-summary-edits`로 받는다 (`edit`, `confirm`, `rev`) | AI 제안, cn 팀 확인 필요 |

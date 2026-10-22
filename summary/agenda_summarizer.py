@@ -382,12 +382,13 @@ class AgendaSummarizer:
                     it["needs_check"] = True
 
     # ---------------- 출력 ----------------
-    def take_board(self, status_info=None, opinions=None, todos=None, based_extra=0):
+    def take_board(self, status_info=None, opinions=None, todos=None, based_extra=0, off_topic=None):
         """안건 보드의 전체 상태. 안건 목록을 아직 못 받았거나 마지막으로 낸 것과 같으면 None.
         돌려준 내용은 보낸 것으로 기록한다.
         status_info: 안건 key -> {"status", "reason"} (AgendaStatusJudge.board_status). 없으면 status 는 None으로 낸다.
         opinions, todos: 안건 key -> 보드에 담을 항목 목록 (AgendaOpinions, AgendaTodos 의 board_items). 없으면 빈 배열로 낸다.
-        based_extra: 의견·할 일이 반영한 가장 큰 seq (basedOnSeq 계산에 합친다)."""
+        based_extra: 의견·할 일이 반영한 가장 큰 seq (basedOnSeq 계산에 합친다).
+        off_topic: 주제 변경 제안 (AgendaOffTopic.board). 없으면 null 로 낸다. 바뀌면 보드도 바뀐 것으로 본다."""
         view = self._view()
         with self.lock:
             if not view["agendas"]:
@@ -409,14 +410,14 @@ class AgendaSummarizer:
                     ent["statusReason"] = {"text": r["text"], "evidenceSeqs": list(r["evidenceSeqs"])} if r else None
                 agendas.append(ent)
             cur_id = view["ids"].get(view["current"]) if view["current"] is not None else None
-            sig = _h(json.dumps([cur_id, agendas], ensure_ascii=False, sort_keys=True))
+            sig = _h(json.dumps([cur_id, agendas, off_topic], ensure_ascii=False, sort_keys=True))
             if sig == self.sent_sig:
                 return None
             self.sent_sig = sig
             self.version = max(int(self.now() * 1000), self.version + 1)
             based = max(max((s for st in self.ag.values() for s in st["reflected"]), default=0), based_extra)
             return {"version": self.version, "basedOnSeq": based, "currentAgendaId": cur_id,
-                    "agendas": agendas, "offTopic": None}
+                    "agendas": agendas, "offTopic": dict(off_topic) if off_topic else None}
 
     def info(self):
         """상태 조회용. 전사 내용, 안건 제목, 요약 문장은 넣지 않는다."""
@@ -483,6 +484,12 @@ def selftest():
     assert b["agendas"][0]["summary"] == [] and b["currentAgendaId"] is None and b["offTopic"] is None and b["basedOnSeq"] == 0, b
     assert [a["status"] for a in b["agendas"]] == [None, None] and all(a["opinions"] == [] for a in b["agendas"])
     assert s.take_board() is None, "같은 상태를 다시 냄"
+    ot = {"stage": "SUGGEST", "detectedAt": "2026-10-20T05:21:00Z", "detectedAtMs": 1, "suggestedTitle": "채용 계획", "evidenceSeqs": [1]}
+    b = s.take_board(off_topic=ot)
+    assert b is not None and b["offTopic"] == ot and b["offTopic"] is not ot, "주제 변경 제안이 바뀌면 보드도 바뀐 것으로 보내야 함"
+    assert s.take_board(off_topic=dict(ot)) is None, "같은 제안을 다시 냄"
+    b = s.take_board(off_topic=None)
+    assert b is not None and b["offTopic"] is None, "제안을 거둔 보드를 내야 함"
 
     # 2) 새 줄 2개 이상이면 바로 요약. 그 안건만 부른다. 근거는 그 안건의 줄 번호
     c, s = fresh()

@@ -38,6 +38,7 @@ flowchart LR
 | 안건별 요약 | 구현, 평가 전 | 안건마다 그 안건의 줄만 모아 2~3문장으로 요약하고 문장마다 근거 줄을 붙임. 사람이 고친 문장은 고정하고 근거가 달라지면 "확인 필요" 표시. 안건 보드 전체 상태를 PUT (`docs/api/agenda-summary-contract.md`) |
 | 안건 상태 판정 | 구현, 평가 전 | 안건마다 아직 안 다룸·논의 중·결정·미결·결정 확인 필요 중 하나와 근거 줄을 안건 보드에 담음. 줄이 있는 안건만 모델이 결정 여부를 판정하고, 결정에는 근거 줄이 필수 (`docs/api/agenda-status-contract.md`) |
 | 안건별 의견·할 일 정리 | 구현, 평가 전 | 안건마다 주요 의견·근거와 할 일(담당자·기한)을 안건 보드에 담음. 의견과 할 일은 모델을 따로 부르고 그 안건의 원문 줄만 입력으로 씀. 참석자 명단은 안건 목록 요청의 선택 필드로 받아 담당자 이름을 코드로 맞춤. 사람이 고친 항목은 고정하고 근거가 달라지면 "확인 필요" 표시 (`docs/api/agenda-opinions-contract.md`) |
+| 주제 변경 감지·새 안건 제안 | 구현, 평가 전 | 등록된 안건과 관계없는 이야기(해당 없음)가 끊김 없이 180초 이어지면 안건 보드 `offTopic`에 새 안건 제안(제목 포함)을 담음. 무시한 뒤 180초 더 이어지면 "지금 다른 이야기" 알림. 감지는 분류 결과만 읽고, 모델은 제목을 만들 때 한 번만 부름 (`docs/api/agenda-offtopic-contract.md`) |
 | 안건 보드, 오늘 회의 요약, 회의록 초안, 챗봇 | 미구현 | 연동 API 초안 기준 |
 
 현재 LLM은 기본값이 `echo`(모델을 부르지 않는 테스트용)이고, 실제 요약과 안건 분류는 Gemini로 시험했다.
@@ -51,6 +52,8 @@ flowchart LR
 | `summary/meeting_live_summary_v2.py` | 회의 중 주기 요약 |
 | `summary/agenda_classifier.py` | 안건 자동 분류 |
 | `summary/eval_agenda.py` | 안건 분류 평가 (기본은 비용 0, 유료 호출은 옵션을 켜야 함) |
+| `summary/agenda_offtopic.py` | 주제 변경 감지·새 안건 제안 |
+| `summary/eval_agenda_offtopic.py` | 주제 변경 감지 평가 (오경보 확인은 비용 0, 제목 점검은 유료 옵션) |
 | `summary/input_adapter.py` | 입력 변환 (전사 줄, 안건 목록, 고친 분류) |
 | `docs/api/input-contract.md` | **백엔드 → AI 서비스 입력 형식** (필드, 규칙, 협의 상태) |
 | `docs/api/output-contract.md` | **AI 서비스 → 백엔드 회의 중 요약 형식** |
@@ -74,6 +77,8 @@ flowchart LR
 | 안건 목록 전체 (덮어쓰기) | `PUT /internal/meetings/{meetingId}/agendas` |
 | 사람이 고친 분류 | `POST /internal/meetings/{meetingId}/agenda-corrections` |
 | 사람이 고친 요약 | `POST /internal/meetings/{meetingId}/agenda-summary-edits` |
+| 사람이 고친 의견·할 일 | `POST /internal/meetings/{meetingId}/agenda-item-edits` |
+| 새 안건 제안을 무시했다는 알림 | `POST /internal/meetings/{meetingId}/off-topic-actions` |
 | 상태 확인 | `GET /health` |
 
 - 응답 (자세한 내용은 입력 형식 문서 7장)
@@ -90,13 +95,14 @@ flowchart LR
 - 회의 중 요약은 AI 서비스가 `PUT {백엔드 주소}/internal/meetings/{meetingId}/live-summary`로 보낸다 (`docs/api/output-contract.md`).
 - 줄별 안건 분류 결과는 `PUT {백엔드 주소}/internal/meetings/{meetingId}/agenda-classification`으로 보낸다. 새로 분류했거나 바뀐 줄만 담고, 회의 종료 뒤에는 `final: true` 결과를 보낸다. 안건 목록이 아직 없으면 줄을 모아 두었다가 목록이 오면 분류한다 (`docs/api/agenda-contract.md`).
 - 안건별 요약은 `PUT {백엔드 주소}/internal/meetings/{meetingId}/agenda-board`로 보낸다. 안건 목록의 모든 안건을 담은 전체 상태이고, 담을 값이 바뀌었을 때만 보내며 1초에 한 번보다 자주 보내지 않는다. 가장 큰 `version`이 최신이다 (`docs/api/agenda-summary-contract.md`).
+- 새 안건 제안은 같은 안건 보드의 `offTopic`에 담는다. 제안이 없으면 `null`이고, 사용자가 제안을 닫으면 백엔드가 `POST .../off-topic-actions`로 알린다 (`docs/api/agenda-offtopic-contract.md`).
 - 일시적 실패(408, 429, 5xx, 연결 오류)는 1, 2, 4초 간격으로 3번 다시 보내고, 그 밖의 4xx는 버린다. 백엔드가 어떤 4xx를 돌려주는지는 연동 때 확인한다.
 
 ### 클라우드
 
 - 이미지는 `Dockerfile`로 만들고 포트는 `8000`이다. 배포 설정은 cn 팀이 맡는다.
 - 설정은 환경변수로 주입한다 (아래 표). 비밀키는 이미지에 넣지 않는다.
-- 토큰 사용량 지표는 `GET /metrics`(Prometheus 형식)로 열려 있고, `OTEL_EXPORTER_OTLP_ENDPOINT`를 설정하면 OTLP로도 보낸다. 작업 종류는 `ai.task` 속성이며 `live_summary`(회의 중 요약), `draft`(끝난 회의 요약), `agenda_classification`(안건 분류), `agenda_summary`(안건별 요약), `agenda_status`(안건 상태 판정), `agenda_opinions`(안건별 의견 정리), `agenda_todos`(안건별 할 일 추출) 일곱 가지다.
+- 토큰 사용량 지표는 `GET /metrics`(Prometheus 형식)로 열려 있고, `OTEL_EXPORTER_OTLP_ENDPOINT`를 설정하면 OTLP로도 보낸다. 작업 종류는 `ai.task` 속성이며 `live_summary`(회의 중 요약), `draft`(끝난 회의 요약), `agenda_classification`(안건 분류), `agenda_summary`(안건별 요약), `agenda_status`(안건 상태 판정), `agenda_opinions`(안건별 의견 정리), `agenda_todos`(안건별 할 일 추출), `agenda_offtopic`(새 안건 제목 제안) 여덟 가지다.
 - CPU·메모리 요구량은 측정 전이다.
 
 | 환경변수 | 설명 | 기본값 |
@@ -121,6 +127,9 @@ flowchart LR
 | `MAX_AGENDA_OPINION_CALLS_PER_MEETING` | 회의당 의견 정리 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
 | `AGENDA_TODO_REFRESH_SEC` | 안건에 새 줄이 4개 미만일 때 할 일 추출을 기다리는 시간(음성 시간 초). 4개 이상이면 바로 추출 | 60 |
 | `MAX_AGENDA_TODO_CALLS_PER_MEETING` | 회의당 할 일 추출 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
+| `AGENDA_OFFTOPIC_SEC` | 해당 없음이 이만큼 이어지면 새 안건 제안(음성 시간 초) | 180 |
+| `AGENDA_OFFTOPIC_LONG_SEC` | 제안을 무시한 뒤 이만큼 더 이어지면 "지금 다른 이야기" 알림(초) | 180 |
+| `MAX_AGENDA_OFFTOPIC_CALLS_PER_MEETING` | 회의당 새 안건 제목 호출 상한 (평가 뒤 다시 정함) | 20 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 토큰 지표를 OTLP(HTTP)로도 보낼 주소 | 없음 |
 | `LOG_LEVEL` | 로그 수준 | `INFO` |
 | `GEMINI_API_KEY` | `LLM_PROVIDER=gemini`일 때 필요. 없으면 `503` | 없음 |
@@ -141,6 +150,7 @@ python3 meeting_live_summary_v2.py --selftest
 python3 agenda_status.py --selftest
 python3 agenda_opinions.py --selftest
 python3 agenda_todos.py --selftest
+python3 agenda_offtopic.py --selftest
 python3 input_adapter.py
 ```
 

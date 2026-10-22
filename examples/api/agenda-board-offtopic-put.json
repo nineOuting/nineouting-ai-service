@@ -1,0 +1,187 @@
+{
+  "version": 1792455913004,
+  "basedOnSeq": 48,
+  "currentAgendaId": 102,
+  "agendas": [
+    {
+      "agendaId": 101,
+      "status": "DECISION_CHECK",
+      "statusReason": {
+        "text": "금요일로 미루자는 의견이 나왔으나 합의 표현은 확인되지 않음",
+        "evidenceSeqs": [
+          44,
+          45
+        ]
+      },
+      "summary": [
+        {
+          "id": "k3f9a1-1",
+          "text": "1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴",
+          "evidenceSeqs": [
+            42,
+            43
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "opinions": [
+        {
+          "id": "k3f9a1-6",
+          "text": "배포 날짜를 다음 주 목요일로 하자는 의견",
+          "kind": "OPINION",
+          "evidenceSeqs": [
+            42,
+            43
+          ],
+          "edited": false,
+          "needsCheck": false
+        },
+        {
+          "id": "k3f9a1-7",
+          "text": "목요일은 QA 일정과 겹쳐 부담이 된다는 우려",
+          "kind": "CONCERN",
+          "evidenceSeqs": [
+            44
+          ],
+          "edited": false,
+          "needsCheck": false
+        },
+        {
+          "id": "k3f9a1-8",
+          "text": "QA는 수요일까지 가능하다는 설명",
+          "kind": "EVIDENCE",
+          "evidenceSeqs": [
+            45
+          ],
+          "edited": true,
+          "needsCheck": true
+        },
+        {
+          "id": "k3f9a1-9",
+          "text": "금요일로 미루면 고객 공지 일정은 어떻게 되는지에 대한 질문",
+          "kind": "QUESTION",
+          "evidenceSeqs": [
+            45
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "todos": [
+        {
+          "id": "k3f9a1-10",
+          "task": "QA 일정표 공유",
+          "assigneeName": "철수",
+          "assigneeStatus": "MATCHED",
+          "assigneeUserId": 7,
+          "dueText": "수요일까지",
+          "evidenceSeqs": [
+            46
+          ],
+          "edited": false,
+          "needsCheck": false,
+          "unclear": false
+        },
+        {
+          "id": "k3f9a1-11",
+          "task": "배포 체크리스트 작성",
+          "assigneeName": null,
+          "assigneeStatus": "UNASSIGNED",
+          "assigneeUserId": null,
+          "dueText": null,
+          "evidenceSeqs": [
+            47
+          ],
+          "edited": false,
+          "needsCheck": false,
+          "unclear": false
+        }
+      ]
+    },
+    {
+      "agendaId": 102,
+      "status": "DISCUSSING",
+      "statusReason": {
+        "text": "연결된 발언 2줄이 이어지는 중",
+        "evidenceSeqs": [
+          47,
+          48
+        ]
+      },
+      "summary": [
+        {
+          "id": "k3f9a1-3",
+          "text": "외부 API 비용 한도를 정하기 위해 월 사용량을 먼저 확인하자는 말이 나옴",
+          "evidenceSeqs": [
+            47,
+            48
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "opinions": [
+        {
+          "id": "k3f9a1-12",
+          "text": "비용 한도를 정하기 전에 월 사용량부터 확인하자는 의견",
+          "kind": "OPINION",
+          "evidenceSeqs": [
+            47
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "todos": [
+        {
+          "id": "k3f9a1-13",
+          "task": "월 API 사용량 확인",
+          "assigneeName": "영수",
+          "assigneeStatus": "NOT_IN_ROSTER",
+          "assigneeUserId": null,
+          "dueText": "다음 회의 전까지",
+          "evidenceSeqs": [
+            48
+          ],
+          "edited": false,
+          "needsCheck": false,
+          "unclear": false
+        },
+        {
+          "id": "k3f9a1-14",
+          "task": "사용량 보고 방식 알아보기",
+          "assigneeName": null,
+          "assigneeStatus": "UNASSIGNED",
+          "assigneeUserId": null,
+          "dueText": null,
+          "evidenceSeqs": [
+            48
+          ],
+          "edited": false,
+          "needsCheck": false,
+          "unclear": true
+        }
+      ]
+    },
+    {
+      "agendaId": 103,
+      "status": "NOT_STARTED",
+      "statusReason": null,
+      "summary": [],
+      "opinions": [],
+      "todos": []
+    }
+  ],
+  "offTopic": {
+    "stage": "SUGGEST",
+    "detectedAt": "2026-10-20T05:21:00Z",
+    "detectedAtMs": 1260000,
+    "suggestedTitle": "채용 계획",
+    "evidenceSeqs": [
+      55,
+      56,
+      57
+    ]
+  }
+}

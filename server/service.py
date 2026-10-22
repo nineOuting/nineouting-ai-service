@@ -32,13 +32,14 @@ if SUMMARY_DIR not in sys.path:
     sys.path.insert(0, SUMMARY_DIR)
 
 from input_adapter import (adapt_batch, adapt_event, adapt_agendas, adapt_corrections, adapt_summary_edits,  # noqa: E402
-                           adapt_item_edits, AdapterError)
+                           adapt_item_edits, adapt_offtopic_action, AdapterError)
 from meeting_live_summary_v2 import LiveSummarizer, Cfg  # noqa: E402
 from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
 from agenda_summarizer import AgendaSummarizer, SummarizeCfg  # noqa: E402
 from agenda_status import AgendaStatusJudge, StatusCfg  # noqa: E402
 from agenda_opinions import AgendaOpinions, OpinionCfg  # noqa: E402
 from agenda_todos import AgendaTodos, TodoCfg  # noqa: E402
+from agenda_offtopic import AgendaOffTopic, OffTopicCfg  # noqa: E402
 from .publisher import AGENDA_CLASSIFICATION, AGENDA_BOARD  # noqa: E402
 
 log = logging.getLogger("ai-service")
@@ -168,9 +169,30 @@ def todo_cfg_from_env(env=None, cfg=None):
     return TodoCfg(**kw)
 
 
+def offtopic_cfg_from_env(env=None, cfg=None):
+    """환경변수 -> 주제 변경 감지 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다 (새 안건 제목을 만들 때만 부른다).
+    AGENDA_OFFTOPIC_SEC(해당 없음이 이만큼 이어지면 새 안건 제안, 기본 180초), AGENDA_OFFTOPIC_LONG_SEC(제안을 무시한 뒤 이만큼 더 이어지면
+    "지금 다른 이야기" 알림, 기본 180초), MAX_AGENDA_OFFTOPIC_CALLS_PER_MEETING(회의당 제목 호출 상한, 기본 20)
+    """
+    env = os.environ if env is None else env
+    cfg = cfg or cfg_from_env(env)
+    kw = {"provider": cfg.provider, "model": cfg.model}
+    for name, key in (("threshold_sec", "AGENDA_OFFTOPIC_SEC"), ("long_sec", "AGENDA_OFFTOPIC_LONG_SEC"),
+                      ("max_calls", "MAX_AGENDA_OFFTOPIC_CALLS_PER_MEETING")):
+        if env.get(key):
+            try:
+                kw[name] = int(env[key])
+            except ValueError:
+                raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+            if kw[name] <= 0:
+                raise ConfigError(f"{key} 는 1 이상이어야 함: {env[key]}")
+    return OffTopicCfg(**kw)
+
+
 class MeetingState:
     def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None, summarize_cfg=None, summarize_llm=None,
-                 status_cfg=None, status_llm=None, opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None):
+                 status_cfg=None, status_llm=None, opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None,
+                 offtopic_cfg=None, offtopic_llm=None):
         self.meeting_id = meeting_id
         self.id_raw = meeting_id            # 백엔드가 보낸 meetingId 의 원래 값(숫자일 수 있음). 돌려보내는 본문에 쓴다
         self.summarizer = LiveSummarizer(meeting_id, cfg, llm=llm, verbose=False)
@@ -181,6 +203,8 @@ class MeetingState:
                                        llm=opinion_llm)                  # 분류 결과를 읽어 안건별 의견을 정리
         self.todos = AgendaTodos(self.classifier, todo_cfg or TodoCfg(provider=cfg.provider, model=cfg.model),
                                  llm=todo_llm)                           # 분류 결과를 읽어 안건별 할 일을 뽑음 (참석자 명단은 안건 목록과 함께 받는다)
+        self.offtopic = AgendaOffTopic(self.classifier, offtopic_cfg or OffTopicCfg(provider=cfg.provider, model=cfg.model),
+                                       llm=offtopic_llm)                 # 분류 결과를 읽어 해당 없음이 오래 이어지면 새 안건을 제안
         self.cls_version = 0                # 백엔드로 보낸 안건 분류 결과의 마지막 version
         self.status = "new"                 # new -> running <-> paused -> ended
         self.lock = threading.Lock()
@@ -200,7 +224,7 @@ class MeetingState:
 class Registry:
     def __init__(self, cfg, llm=None, publisher=None, env=None, classify_cfg=None, classify_llm=None,
                  summarize_cfg=None, summarize_llm=None, status_cfg=None, status_llm=None,
-                 opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None):
+                 opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None, offtopic_cfg=None, offtopic_llm=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
         self.publisher = publisher
@@ -215,6 +239,8 @@ class Registry:
         self.opinion_llm = opinion_llm      # 시험용: 안건 의견 정리에서 모델 호출 대신 쓸 함수
         self.todo_cfg = todo_cfg or todo_cfg_from_env(self.env, cfg)
         self.todo_llm = todo_llm            # 시험용: 안건 할 일 추출에서 모델 호출 대신 쓸 함수
+        self.offtopic_cfg = offtopic_cfg or offtopic_cfg_from_env(self.env, cfg)
+        self.offtopic_llm = offtopic_llm    # 시험용: 새 안건 제목 만들기에서 모델 호출 대신 쓸 함수
         self.shutting_down = False
         self.meetings = {}
         self.lock = threading.Lock()
@@ -242,7 +268,8 @@ class Registry:
                 m = self.meetings[meeting_id] = MeetingState(meeting_id, self.cfg, self.llm, self.classify_cfg, self.classify_llm,
                                                              self.summarize_cfg, self.summarize_llm,
                                                              self.status_cfg, self.status_llm,
-                                                             self.opinion_cfg, self.opinion_llm, self.todo_cfg, self.todo_llm)
+                                                             self.opinion_cfg, self.opinion_llm, self.todo_cfg, self.todo_llm,
+                                                             self.offtopic_cfg, self.offtopic_llm)
                 if raw_id is not None:
                     m.id_raw = raw_id
             return m
@@ -382,6 +409,21 @@ class Registry:
             self._ensure_worker(m)
         return {"accepted": True, "result": "accepted" if applied else "stale", "applied": applied, "ignored": ignored}
 
+    def receive_offtopic_action(self, path_meeting_id, msg):
+        """새 안건 제안·"지금 다른 이야기" 알림을 무시했다는 알림 (agenda-offtopic-contract.md 5장)."""
+        self._require_ready()
+        a = adapt_offtopic_action(msg)
+        self._check_same_id(path_meeting_id, a["meeting_id"])
+        m = self._get(a["meeting_id"], a.get("meeting_id_raw"))
+        with m.lock:
+            if m.status == "ended":
+                return {"accepted": False, "result": "ignored", "reason": "ended"}
+        r = m.offtopic.dismiss(a["rev"], at_ms=a["at_ms"])
+        if r == "applied":
+            m.queue.put(("tick", None))                         # 다음 주기에 제안을 거두는 보드를 보낸다
+            self._ensure_worker(m)
+        return {"accepted": True, "result": {"applied": "accepted", "stale": "stale", "not_active": "not_active"}[r], "applied": r == "applied"}
+
     @staticmethod
     def _transition_warning(m, name):
         started = any(e["event"] == "start" for e in m.events)
@@ -451,12 +493,13 @@ class Registry:
         self.publisher.submit(m.meeting_id, payload, kind=AGENDA_CLASSIFICATION)
 
     def _agenda_steps(self, m, final=False):
-        """분류를 마친 직후 같은 흐름에서 상태 판정 -> 안건 요약 -> 의견 -> 할 일 -> 보드 전송 순서로 돈다.
+        """분류를 마친 직후 같은 흐름에서 상태 판정 -> 안건 요약 -> 의견 -> 할 일 -> 주제 변경 -> 보드 전송 순서로 돈다.
         단계마다 따로 가둬서, 한 단계가 실패하거나 멈춰도 다른 단계와 보드 전송은 계속된다."""
         self._step(m, "agenda_status", lambda: m.status_judge.process(final=final))
         self._step(m, "agenda_summary", lambda: m.agenda_summarizer.process(final=final))
         self._step(m, "agenda_opinions", lambda: m.opinions.process(final=final))
         self._step(m, "agenda_todos", lambda: m.todos.process(final=final))
+        self._step(m, "agenda_offtopic", lambda: m.offtopic.process(final=final))
         self._step(m, "agenda_board", lambda: self._publish_board(m))
 
     @staticmethod
@@ -470,13 +513,14 @@ class Registry:
             return None
 
     def _publish_board(self, m):
-        """바뀐 안건 보드 전체 상태(요약, 상태, 의견, 할 일)를 백엔드로 보낸다."""
+        """바뀐 안건 보드 전체 상태(요약, 상태, 의견, 할 일, 주제 변경 제안)를 백엔드로 보낸다."""
         if self.publisher is None or not self.publisher.enabled:
             return
         opinions = self._safe(m, "opinions", m.opinions.board_items)
         todos = self._safe(m, "todos", m.todos.board_items)
+        off_topic = self._safe(m, "offtopic", m.offtopic.board)
         board = m.agenda_summarizer.take_board(status_info=m.status_judge.board_status(), opinions=opinions, todos=todos,
-                                               based_extra=max(m.opinions.based_on_seq(), m.todos.based_on_seq()))
+                                               based_extra=max(m.opinions.based_on_seq(), m.todos.based_on_seq()), off_topic=off_topic)
         if board is not None:
             self.publisher.submit(m.meeting_id, board, kind=AGENDA_BOARD)
 
@@ -536,5 +580,6 @@ class Registry:
                 "agendaStatus": m.status_judge.info(),
                 "agendaOpinions": m.opinions.info(),
                 "agendaTodos": m.todos.info(),
+                "agendaOffTopic": m.offtopic.info(),
                 "publisher": self.publisher.info() if self.publisher else {"enabled": False},
             }

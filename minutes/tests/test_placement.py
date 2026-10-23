@@ -48,8 +48,8 @@ def test_지난_답의_문제를_붙인다(materials):
 
 
 def test_지시문을_읽는다():
-    assert load_prompt().version == "placement-v4"                  # 번호가 가장 큰 파일
-    for version in ("v1", "v2", "v3", "v4"):
+    assert load_prompt().version == "placement-v5"                  # 번호가 가장 큰 파일
+    for version in ("v1", "v2", "v3", "v4", "v5"):
         prompt = load_prompt(version)
         assert prompt.version == f"placement-{version}"
         assert "JSON" in prompt.text and "결정 확인 필요" in prompt.text
@@ -137,16 +137,33 @@ def test_다시_시켜도_안_되면_CHECK_FAILED(materials):
     assert len(llm.replies) == 1                                     # 네 번째는 부르지 않음
 
 
-@pytest.mark.parametrize("error, code", [(LLMTimeout("ReadTimeout"), LLM_TIMEOUT), (LLMError("APIError"), LLM_FAILED)])
-def test_호출이_실패하면_다시_시키지_않는다(materials, error, code):
+@pytest.mark.parametrize("error", [LLMTimeout("ReadTimeout"), LLMError("APIError")])
+def test_호출이_한_번_실패하면_같은_입력으로_다시_부른다(materials, error):
     llm = ScriptLLM(error, GOOD)
     outcome = place(ITEMS, materials, llm, timeout_s=60)
-    assert outcome.error_code == code and outcome.attempts == 1 and len(llm.calls) == 1
+    assert outcome.error_code is None and outcome.attempts == 2
+    assert llm.calls[0][1] == llm.calls[1][1]                        # 문제 목록을 붙이지 않은 같은 입력
 
 
-def test_다시_시키는_중에_호출이_실패해도_그_코드로_끝낸다(materials):
-    outcome = place(ITEMS, materials, ScriptLLM("x", LLMTimeout("ReadTimeout")), timeout_s=60)
-    assert outcome.error_code == LLM_TIMEOUT and outcome.attempts == 2
+@pytest.mark.parametrize("errors, code", [
+    ((LLMError("APIError"), LLMTimeout("ReadTimeout")), LLM_TIMEOUT),     # 마지막 실패로 코드를 정한다
+    ((LLMTimeout("ReadTimeout"), LLMError("APIError")), LLM_FAILED),
+])
+def test_호출이_두_번_실패하면_마지막_실패의_코드로_끝낸다(materials, errors, code):
+    llm = ScriptLLM(*errors, GOOD)
+    outcome = place(ITEMS, materials, llm, timeout_s=60)
+    assert outcome.error_code == code and outcome.attempts == 2 and len(llm.replies) == 1
+
+
+def test_호출을_다시_부른_횟수는_검사_다시_시키기와_따로_센다(materials):
+    llm = ScriptLLM("x", LLMTimeout("ReadTimeout"), "x", GOOD)
+    outcome = place(ITEMS, materials, llm, timeout_s=60, max_retries=2)
+    assert outcome.error_code is None and outcome.attempts == 4
+
+
+def test_호출을_다시_부르지_않게_할_수_있다(materials):
+    outcome = place(ITEMS, materials, ScriptLLM(LLMTimeout("ReadTimeout"), GOOD), timeout_s=60, call_retries=0)
+    assert outcome.error_code == LLM_TIMEOUT and outcome.attempts == 1
 
 
 def test_지시문을_바꿔_넣을_수_있다(materials):

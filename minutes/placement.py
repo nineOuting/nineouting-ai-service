@@ -4,7 +4,9 @@
   AI 의 답          {"placements": [{"m", "section", "text"}], "unplaced": [...]}
   검사              형식, 칸 번호, 재료 번호, 한 번만, 빠짐, 다듬은 글(빈 글·줄바꿈·새 숫자)
   다시 시키기       검사에 걸리면 걸린 이유를 붙여 다시 묻는다 (max_retries 번). 넘으면 CHECK_FAILED
-  호출 실패         시간 초과는 LLM_TIMEOUT, 그 밖은 LLM_FAILED. 다시 시키지 않는다 (RAG 답변과 같음)
+  호출 실패         같은 입력으로 call_retries 번(기본 1번) 다시 부른다. 그래도 실패하면 마지막 실패가
+                    시간 초과면 LLM_TIMEOUT, 그 밖은 LLM_FAILED. 초안은 접수 후 콜백으로 알리므로
+                    사용자가 화면에서 기다리는 RAG 답변(다시 부르지 않음)과 달리 한 번 더 시도한다
 
 검사 오류 글에는 재료 번호와 숫자가 들어간다. AI 에게만 보내고 로그에 남기지 않는다.
 """
@@ -160,18 +162,23 @@ def _text_problem(m: Material, text) -> str | None:
 
 
 def place(items: list[str], materials: list[Material], llm, timeout_s: float, max_retries: int = 2,
-          prompt: Prompt | None = None) -> Outcome:
-    """재료가 1개 이상일 때 부른다. 처음 1번 + 다시 시키기 max_retries 번."""
+          prompt: Prompt | None = None, call_retries: int = 1) -> Outcome:
+    """재료가 1개 이상일 때 부른다. 검사에 걸리면 max_retries 번 다시 시키고,
+    호출이 실패하면(시간 초과·오류) 같은 입력으로 call_retries 번 다시 부른다. 두 횟수는 따로 센다."""
     prompt = prompt or load_prompt()
     problems, attempts, tokens_in, tokens_out = [], 0, 0, 0
-    while attempts <= max_retries:
+    checks = call_failures = 0
+    while checks <= max_retries:
         attempts += 1
         try:
             reply = llm.generate(prompt.text, build_user(items, materials, problems), timeout_s)
-        except LLMTimeout:
-            return Outcome(None, LLM_TIMEOUT, attempts, tokens_in, tokens_out)
-        except LLMError:
-            return Outcome(None, LLM_FAILED, attempts, tokens_in, tokens_out)
+        except LLMError as e:                                # LLMTimeout 도 여기에 걸린다
+            call_failures += 1
+            if call_failures > call_retries:
+                code = LLM_TIMEOUT if isinstance(e, LLMTimeout) else LLM_FAILED
+                return Outcome(None, code, attempts, tokens_in, tokens_out)
+            continue
+        checks += 1
         tokens_in += reply.input_tokens or 0
         tokens_out += reply.output_tokens or 0
         placement, problems = check(parse_reply(reply.text), materials, len(items))

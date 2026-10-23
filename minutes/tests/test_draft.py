@@ -59,8 +59,8 @@ def test_재료가_상한을_넘으면_AI를_부르지_않고_실패(body):
 
 
 @pytest.mark.parametrize("replies, code", [
-    ((LLMTimeout("ReadTimeout"),), "LLM_TIMEOUT"),
-    ((LLMError("APIError"),), "LLM_FAILED"),
+    ((LLMTimeout("ReadTimeout"), LLMTimeout("ReadTimeout")), "LLM_TIMEOUT"),
+    ((LLMError("APIError"), LLMError("APIError")), "LLM_FAILED"),
     (("x", "x", "x"), "CHECK_FAILED"),
 ])
 def test_AI가_실패하면_실패_본문(body, replies, code):

@@ -48,8 +48,8 @@ def test_지난_답의_문제를_붙인다(materials):
 
 
 def test_지시문을_읽는다():
-    assert load_prompt().version == "placement-v3"                  # 번호가 가장 큰 파일
-    for version in ("v1", "v2", "v3"):
+    assert load_prompt().version == "placement-v4"                  # 번호가 가장 큰 파일
+    for version in ("v1", "v2", "v3", "v4"):
         prompt = load_prompt(version)
         assert prompt.version == f"placement-{version}"
         assert "JSON" in prompt.text and "결정 확인 필요" in prompt.text

@@ -9,6 +9,10 @@
   summary         요약 문장 하나                AI 가 다듬는다 (사람이 고친 문장은 그대로)
   opinion         의견 하나                     AI 가 다듬는다 (사람이 고친 의견은 그대로)
   todo            할 일 하나                    글: {할 일} ({담당자}, {기한}[, 할 일 확인 필요])
+
+STT 불확실 표시(「」 인용, "STT 불확실", "…로 읽힘")가 있는 글은 AI 가 다듬지 않고 원래 글 그대로 쓴다.
+요약 단계(summary/agenda_*.py)가 일부러 남긴 표시인데, AI 가 다듬으면서 지우거나 한쪽으로 해석해 확정한 일이 있었다
+(실제 회의 요약 시험, 2026-10-23: 「세개」(3개로 읽힘) → "3개", 「일본」(STT 불확실) 대신 → 빠짐).
 """
 from .models import KIND_RANK, Material
 
@@ -16,6 +20,16 @@ OPINION_LABELS = {"OPINION": "의견", "EVIDENCE": "근거", "CONCERN": "우려"
 NO_ASSIGNEE = "담당자 미정"
 NO_DUE = "기한 미정"
 TODO_UNCLEAR = "할 일 확인 필요"
+STT_MARKS = ("「", "STT 불확실", "로 읽힘")
+
+
+def has_stt_mark(text: str) -> bool:
+    return any(mark in text for mark in STT_MARKS)
+
+
+def _keep_if_marked(item: dict, text: str) -> str | None:
+    """사람이 고쳤거나 STT 불확실 표시가 있으면 원래 글 그대로(고정), 아니면 None(AI 가 다듬음)."""
+    return text if item.get("edited") or has_stt_mark(text) else None
 
 
 def build_materials(agendas: list[dict], summary: dict) -> list[Material]:
@@ -27,10 +41,10 @@ def build_materials(agendas: list[dict], summary: dict) -> list[Material]:
         drafts += _status_items(ai, agenda, info)
         for i, item in enumerate(agenda.get("summary") or []):
             drafts.append(_item(ai, "summary", i, item, "요약", item["text"],
-                                fixed=item["text"] if item.get("edited") else None))
+                                fixed=_keep_if_marked(item, item["text"])))
         for i, item in enumerate(agenda.get("opinions") or []):
             drafts.append(_item(ai, "opinion", i, item, OPINION_LABELS.get(item.get("kind"), "의견"), item["text"],
-                                fixed=item["text"] if item.get("edited") else None))
+                                fixed=_keep_if_marked(item, item["text"])))
         for i, item in enumerate(agenda.get("todos") or []):
             text = todo_text(item)
             drafts.append(_item(ai, "todo", i, item, "할 일", text, fixed=text))
@@ -58,7 +72,7 @@ def _status_items(ai, agenda, info):
     why = (reason.get("text") or "").strip()
     status_line = {"id": None, "evidenceSeqs": reason.get("evidenceSeqs") or [], "edited": False, "needsCheck": False}
     if status == "DECIDED":
-        return [_item(ai, "decision", 0, status_line, "결정", why, fixed=None)] if why else []
+        return [_item(ai, "decision", 0, status_line, "결정", why, fixed=_keep_if_marked({}, why))] if why else []
     if status not in ("UNDECIDED", "DECISION_CHECK"):
         return []
     # 결정할 사항이 없으면 글을 비워, 줄에는 안건 제목만 남게 한다 (lines.line_text). 제목이 두 번 나오지 않게

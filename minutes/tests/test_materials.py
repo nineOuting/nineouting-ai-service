@@ -104,3 +104,33 @@ def test_요약이_비면_재료도_없다(request_body):
     body = copy.deepcopy(request_body)
     body["summary"]["agendas"] = []
     assert materials_of(body) == []
+
+
+@pytest.mark.parametrize("text", [
+    "클라우드 자격증 「세개」(3개로 읽힘)를 따겠다는 계획이 나옴",
+    "「기라」(지라로 읽힘, STT 불확실)를 쓰자는 제안이 나옴",
+    "STT 불확실 구간에서 일정 이야기가 나옴",
+])
+def test_STT_불확실_표시가_있는_요약과_의견은_다듬지_않는다(request_body, text):
+    agenda(request_body)["summary"][0]["text"] = text
+    agenda(request_body)["opinions"][0]["text"] = text
+    ms = materials_of(request_body)
+    for kind in ("summary", "opinion"):
+        m = by_kind(ms, kind)[0]
+        assert not m.rewrite and m.fixed_text == text
+
+
+def test_STT_불확실_표시가_있는_판정_이유도_결정_문장으로_다듬지_않는다(request_body):
+    reason = "「목요일」(STT 불확실) 배포로 정하고 동의함"
+    agenda(request_body)["statusReason"]["text"] = reason
+    m = by_kind(materials_of(request_body), "decision")[0]
+    assert not m.rewrite and m.fixed_text == reason
+
+
+def test_표시가_없으면_그대로_AI가_다듬는다(request_body):
+    ms = materials_of(request_body)
+    assert by_kind(ms, "decision")[0].rewrite and by_kind(ms, "summary")[0].rewrite
+
+
+def agenda(body, i=0):
+    return body["summary"]["agendas"][i]

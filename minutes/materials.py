@@ -6,13 +6,15 @@
   decision        DECIDED 안건의 판정 이유      AI 가 결정 문장으로 다듬는다. 회의 끝 요약은 결정 문장을 따로 만들지 않는다
   undecided       UNDECIDED 안건                글: {결정할 사항}
   decisionCheck   DECISION_CHECK 안건           글: {결정할 사항} (결정 확인 필요: {판정 이유})
-  summary         요약 문장 하나                AI 가 다듬는다 (사람이 고친 문장은 그대로)
-  opinion         의견 하나                     AI 가 다듬는다 (사람이 고친 의견은 그대로)
+  summary         요약 문장 하나                원래 글 그대로
+  opinion         의견 하나                     원래 글 그대로
   todo            할 일 하나                    글: {할 일} ({담당자}, {기한}[, 할 일 확인 필요])
 
-STT 불확실 표시(「」 인용, "STT 불확실", "…로 읽힘")가 있는 글은 AI 가 다듬지 않고 원래 글 그대로 쓴다.
-요약 단계(summary/agenda_*.py)가 일부러 남긴 표시인데, AI 가 다듬으면서 지우거나 한쪽으로 해석해 확정한 일이 있었다
-(실제 회의 요약 시험, 2026-10-23: 「세개」(3개로 읽힘) → "3개", 「일본」(STT 불확실) 대신 → 빠짐).
+AI 가 글을 다듬는 재료는 결정(판정 이유 → 결정 문장) 하나뿐이다. 요약 문장과 의견은 요약 단계에서 이미 정리된 글이라
+다시 다듬지 않고 칸만 고른다. 다듬게 했을 때 얻는 것은 말끝 정도였고, 잃는 것이 더 많았다
+(실제 회의 요약 시험, 2026-10-23: STT 불확실 표시 삭제 「세개」(3개로 읽힘) → "3개", 내용 누락 「일본」(STT 불확실) 대신 → 빠짐,
+"이야기가 나옴" → "이야기가 나왔다는 의견이 나옴" 같은 겹문장).
+판정 이유에 STT 불확실 표시(「」 인용, "STT 불확실", "…로 읽힘")가 있으면 결정도 다듬지 않고 원래 글 그대로 쓴다.
 """
 from .models import KIND_RANK, Material
 
@@ -40,11 +42,10 @@ def build_materials(agendas: list[dict], summary: dict) -> list[Material]:
         info = titles[agenda["agendaId"]]
         drafts += _status_items(ai, agenda, info)
         for i, item in enumerate(agenda.get("summary") or []):
-            drafts.append(_item(ai, "summary", i, item, "요약", item["text"],
-                                fixed=_keep_if_marked(item, item["text"])))
+            drafts.append(_item(ai, "summary", i, item, "요약", item["text"], fixed=item["text"]))
         for i, item in enumerate(agenda.get("opinions") or []):
             drafts.append(_item(ai, "opinion", i, item, OPINION_LABELS.get(item.get("kind"), "의견"), item["text"],
-                                fixed=_keep_if_marked(item, item["text"])))
+                                fixed=item["text"]))
         for i, item in enumerate(agenda.get("todos") or []):
             text = todo_text(item)
             drafts.append(_item(ai, "todo", i, item, "할 일", text, fixed=text))

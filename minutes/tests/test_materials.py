@@ -74,14 +74,16 @@ def test_아직_안_다룬_안건은_줄이_없다(request_body):
     assert not [m for m in materials_of(request_body) if m.agenda_id == 104]
 
 
-def test_요약과_의견은_AI가_다듬고_사람이_고친_것은_그대로(request_body):
+def test_요약과_의견은_다듬지_않고_원래_글_그대로(request_body):
     ms = materials_of(request_body)
     summary_101, summary_102 = by_kind(ms, "summary")
-    assert summary_101.rewrite and summary_101.text == "1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴"
+    assert not summary_101.rewrite and summary_101.fixed_text == "1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴"
     assert not summary_102.rewrite and summary_102.fixed_text == "광고 예산은 월 사용량을 확인한 뒤 정하기로 함"
     assert summary_102.edited
     opinion = by_kind(ms, "opinion")[0]
-    assert opinion.rewrite and opinion.label == "우려"
+    assert not opinion.rewrite and opinion.fixed_text == "목요일은 QA 일정과 겹쳐 부담이 된다는 우려"
+    assert opinion.label == "우려"
+    assert [m.ref for m in ms if m.rewrite] == ["m1"]                  # AI 가 다듬는 재료는 결정뿐
 
 
 def test_할_일은_담당자와_기한을_붙이고_없으면_미정(request_body):
@@ -127,9 +129,8 @@ def test_STT_불확실_표시가_있는_판정_이유도_결정_문장으로_다
     assert not m.rewrite and m.fixed_text == reason
 
 
-def test_표시가_없으면_그대로_AI가_다듬는다(request_body):
-    ms = materials_of(request_body)
-    assert by_kind(ms, "decision")[0].rewrite and by_kind(ms, "summary")[0].rewrite
+def test_표시가_없는_판정_이유는_AI가_결정_문장으로_다듬는다(request_body):
+    assert by_kind(materials_of(request_body), "decision")[0].rewrite
 
 
 def agenda(body, i=0):

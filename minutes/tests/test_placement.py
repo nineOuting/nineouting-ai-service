@@ -48,8 +48,8 @@ def test_지난_답의_문제를_붙인다(materials):
 
 
 def test_지시문을_읽는다():
-    assert load_prompt().version == "placement-v5"                  # 번호가 가장 큰 파일
-    for version in ("v1", "v2", "v3", "v4", "v5"):
+    assert load_prompt().version == "placement-v6"                  # 번호가 가장 큰 파일
+    for version in ("v1", "v2", "v3", "v4", "v5", "v6"):
         prompt = load_prompt(version)
         assert prompt.version == f"placement-{version}"
         assert "JSON" in prompt.text and "결정 확인 필요" in prompt.text
@@ -72,7 +72,7 @@ def test_맞는_답은_0부터_센_칸_위치와_다듬은_글이_된다(materia
     result, problems = check(GOOD, materials, len(ITEMS))
     assert problems == []
     assert result.sections["m1"] == 1 and result.sections["m4"] == 3
-    assert result.texts["m2"] == "1차 배포일을 다음 주 목요일로 하자는 제안이 나왔다."
+    assert result.texts == {"m1": "1차 배포를 10월 30일(목)로 정했다."}   # 다듬기 재료는 결정뿐, 고정 재료의 글은 버림
     assert result.unplaced == ("m9",)
 
 
@@ -92,8 +92,8 @@ def test_고정_재료의_글은_받아도_쓰지_않는다(materials):
     (with_change(m4={"section": 4}), "m(재료 번호)이 없음"),
     (with_change(m5={"m": "m4", "section": 3}), "m4를 두 번 이상 씀"),
     (with_change(m5=None), "m5가 placements에도 unplaced에도 없음"),
-    (with_change(m2={"m": "m2", "section": 1}), "m2는 (다듬기) 재료인데 text가 비었음"),
-    (with_change(m2={"m": "m2", "section": 1, "text": "첫 줄\n둘째 줄"}), "m2의 text에 줄바꿈"),
+    (with_change(m1={"m": "m1", "section": 2}), "m1는 (다듬기) 재료인데 text가 비었음"),
+    (with_change(m1={"m": "m1", "section": 2, "text": "첫 줄\n둘째 줄"}), "m1의 text에 줄바꿈"),
     (with_change(m1={"m": "m1", "section": 2, "text": "1차 배포를 10월 31일로 정했다."}), "원래 글에 없는 숫자 31"),
 ])
 def test_검사에_걸리면_문제를_돌려준다(materials, answer, expected):

@@ -19,11 +19,11 @@ def _no_db(reason):
 def _db_session():
     try:
         import psycopg
-        from minutes.db import connect, test_database_url
+        from minutes.db import connect, database_url_for_tests
         from minutes.migrate import migrate
     except ImportError as e:
         _no_db(f"패키지 없음 ({e.name})")
-    url = test_database_url()
+    url = database_url_for_tests()
     if not url:
         _no_db("MINUTES_TEST_DATABASE_URL 이나 RAG_TEST_DATABASE_URL 이 없음")
     try:
@@ -44,7 +44,7 @@ def conn(_db_session):
 @pytest.fixture
 def other_conn(conn):
     """동시성 시험용 두 번째 연결 (같은 시험 DB)."""
-    from minutes.db import connect, test_database_url
-    c = connect(url=test_database_url())
+    from minutes.db import connect, database_url_for_tests
+    c = connect(url=database_url_for_tests())
     yield c
     c.close()

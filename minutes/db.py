@@ -18,7 +18,7 @@ def timeout_options(statement_timeout_ms=None, idle_tx_timeout_ms=None):
     return " ".join(options)
 
 
-def test_database_url(env=None):
+def database_url_for_tests(env=None):
     env = os.environ if env is None else env
     return next((env[k] for k in TEST_DATABASE_ENVS if env.get(k)), None)
 

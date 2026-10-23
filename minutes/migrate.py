@@ -34,11 +34,11 @@ def migrate(conn) -> list[str]:
 
 
 def main(argv=None):
-    from .db import connect, test_database_url
+    from .db import connect, database_url_for_tests
 
     argv = sys.argv[1:] if argv is None else argv
     if "--test" in argv:
-        url = test_database_url()
+        url = database_url_for_tests()
         if not url:
             sys.exit("MINUTES_TEST_DATABASE_URL 이나 RAG_TEST_DATABASE_URL 이 없음")
         conn = connect(url=url)

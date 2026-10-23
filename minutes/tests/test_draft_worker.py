@@ -131,3 +131,18 @@ def test_환경변수로_작업자를_만든다():
     assert w.prompt.version == "placement-v3"
     assert w.callback.allowed == frozenset({"minutes-service:8084"})
     assert from_env({}, llm=ScriptLLM()).prompt == load_prompt()          # 버전을 안 주면 가장 큰 번호
+
+
+class StopAfterFirstWait(threading.Event):
+    """반복을 한 바퀴만 돌게 한다 (오류 뒤 기다리는 순간 멈춤 표시)."""
+
+    def wait(self, timeout=None):
+        self.set()
+        return True
+
+
+def test_대기열_표가_없으면_마이그레이션_안내를_로그에_남기고_멈추지_않는다(other_conn, caplog):
+    other_conn.execute("SET search_path TO pg_catalog")       # 표를 지우지 않고 안 보이게 한다
+    with caplog.at_level("ERROR", logger="minutes.worker"):
+        worker(other_conn, ScriptLLM()).run(StopAfterFirstWait())
+    assert "error=UndefinedTable (대기열 표 없음, python -m minutes.migrate 필요)" in caplog.text

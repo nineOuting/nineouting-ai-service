@@ -115,7 +115,7 @@ X-Request-Id: (선택)
 | `202` | 접수함. 결과는 API 2로 알린다 | `{"requestId": "...", "status": "ACCEPTED"}` |
 | `202` | 같은 `requestId`가 처리 중이거나 성공 결과를 이미 보냄. 다시 만들지 않는다 | `{"requestId": "...", "status": "DUPLICATE"}` [ai-service 제안] |
 | `400` | 형식 오류: 필수 칸 없음, 타입 틀림, 칸 이름 겹침, 상한 초과, 허용하지 않은 `callbackUrl` 등 | `{"error": "INVALID_INPUT", "detail": "이유"}`. 같은 요청은 다시 보내도 같은 결과 |
-| `503` | 대기열 DB를 쓸 수 없거나 AI 설정이 틀림 | `{"error": "NOT_READY", "detail": "이유"}`. 잠시 뒤 다시 요청 |
+| `503` | 대기열 DB를 쓸 수 없음, 대기열 표가 없음(배포 때 마이그레이션을 하지 않음, 2.4), AI 설정이 틀림 | `{"error": "NOT_READY", "detail": "이유"}`. 잠시 뒤 다시 요청 |
 
 초안 기능을 켜지 않은 ai-service(2.4)에는 이 주소가 없어 `404`로 답한다.
 
@@ -408,7 +408,7 @@ RAG 명세의 API를 그대로 쓰고, 아래만 **덧붙인다.** 기존 칸과
 | 코드 | 어디로 | 경우 |
 |---|---|---|
 | `INVALID_INPUT` | API 1 응답 `400` | 요청 형식 오류 |
-| `NOT_READY` | API 1 응답 `503` | 대기열이나 AI 설정을 쓸 수 없음 |
+| `NOT_READY` | API 1 응답 `503` | 대기열 DB·대기열 표·AI 설정을 쓸 수 없음 |
 | `INPUT_TOO_LONG` | API 2 실패 | 요약 항목이 상한을 넘음. 백엔드 원안의 `TRANSCRIPT_TOO_LONG` 대신 [ai-service 제안] |
 | `LLM_TIMEOUT` | API 2 실패 | AI가 정해진 시간 안에 답하지 않음 (한 번 더 불러도 실패한 경우, 7.5) |
 | `LLM_FAILED` | API 2 실패 | AI 호출 오류 (한 번 더 불러도 실패한 경우, 7.5) |

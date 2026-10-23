@@ -16,6 +16,8 @@ import signal
 import threading
 import time
 
+from psycopg.errors import UndefinedTable
+
 from rag.callback import CallbackSender, allowed_hosts_from_env
 
 from .draft import INTERNAL_ERROR, MESSAGES, failed, make_draft
@@ -89,7 +91,8 @@ class Worker:
                 if not self.process_one():
                     stop.wait(poll_s)
             except Exception as e:                    # DB 접속 실패·연결 끊김 등. 반복은 멈추지 않는다
-                log.error("작업자 오류 error=%s", type(e).__name__)
+                hint = " (대기열 표 없음, python -m minutes.migrate 필요)" if isinstance(e, UndefinedTable) else ""
+                log.error("작업자 오류 error=%s%s", type(e).__name__, hint)
                 stop.wait(poll_s * 5)
 
     def _ensure_conn(self):

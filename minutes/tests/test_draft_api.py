@@ -97,6 +97,18 @@ def test_DB를_쓸_수_없으면_503():
     assert r.status_code == 503 and r.json() == {"error": "NOT_READY", "detail": "DB 를 쓸 수 없음"}
 
 
+def test_대기열_표가_없으면_503(conn, caplog):
+    """마이그레이션을 하지 않은 DB. 표를 지우지 않고 search_path 로 표가 안 보이게 한다."""
+    from psycopg_pool import ConnectionPool
+    pool = ConnectionPool(database_url_for_tests(), min_size=1, max_size=1, timeout=5, open=True,
+                          kwargs={"autocommit": True, "options": "-c search_path=pg_catalog"}, name="minutes-test-empty")
+    with caplog.at_level("ERROR", logger="minutes.api"), app_with(pool) as c:
+        r = c.post(URL, json=load_request())
+    pool.close()
+    assert r.status_code == 503 and r.json() == {"error": "NOT_READY", "detail": "대기열 표 없음"}
+    assert "minutes.migrate 필요" in caplog.text
+
+
 def test_런타임은_주소를_붙이고_작업자를_띄웠다가_멈춘다(conn):
     env = {"MINUTES_DATABASE_URL": database_url_for_tests(), "MINUTES_CALLBACK_ALLOWED_HOSTS": "minutes-service:8084",
            "RAG_LLM_PROVIDER": "fake"}

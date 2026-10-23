@@ -5,7 +5,7 @@
   202  {"requestId", "status": "ACCEPTED"}    접수함
   202  {"requestId", "status": "DUPLICATE"}   같은 requestId 가 처리 중이거나 성공 결과를 이미 보냄 (실패로 끝났으면 새로 받음)
   400  INVALID_INPUT   요청 형식 오류, 허용하지 않은 callbackUrl (오류 글에는 칸 위치만, 값은 넣지 않는다)
-  503  NOT_READY       DB 를 쓸 수 없거나 AI 설정이 틀림
+  503  NOT_READY       DB 를 쓸 수 없거나, 대기열 표가 없거나(마이그레이션 안 함), AI 설정이 틀림
 
 로그에는 요청 번호, 회의록 번호, 결과, 추적 번호만 남긴다. 요약·초안 내용은 남기지 않는다.
 """
@@ -64,6 +64,7 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
     """pool: psycopg_pool.ConnectionPool (autocommit 연결).
     config_error: AI 설정 오류 글. 있으면 요청을 받지 않고 503 으로 답한다 (받아도 처리할 수 없으므로)."""
     from psycopg import OperationalError
+    from psycopg.errors import UndefinedTable
     from psycopg_pool import PoolTimeout
 
     db_down = (OperationalError, PoolTimeout)
@@ -97,6 +98,10 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
         except db_down as e:
             log.error("초안 요청 DB 오류 request_id=%s trace=%s error=%s", body["requestId"], trace, type(e).__name__)
             return not_ready("DB 를 쓸 수 없음")
+        except UndefinedTable:                       # DB 는 있는데 마이그레이션을 하지 않음
+            log.error("초안 요청 대기열 표 없음 request_id=%s trace=%s, python -m minutes.migrate 필요",
+                      body["requestId"], trace)
+            return not_ready("대기열 표 없음")
         log.info("초안 요청 request_id=%s minutes=%s status=%s trace=%s", body["requestId"], body["minutesId"], status, trace)
         return JSONResponse(status_code=202, content={"requestId": body["requestId"], "status": status})
 

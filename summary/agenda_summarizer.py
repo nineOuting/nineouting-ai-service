@@ -39,6 +39,7 @@ from meeting_summary import (SYSTEM_PROMPT, build_input, validate_items, call_ll
 from meeting_live_summary_v2 import echo_llm, window_range  # noqa: E402
 from agenda_classifier import _clean  # noqa: E402
 from agenda_leftover import build_leftover  # noqa: E402
+from agenda_today_summary import build_today_summary, counts as today_counts  # noqa: E402
 
 log = logging.getLogger("ai-service.agenda-summary")
 
@@ -110,6 +111,9 @@ class AgendaSummarizer:
         self.errors = 0
         self.err_streak = 0
         self.halted = None            # 멈춘 이유 (None이면 정상)
+        self.today_built = False      # 마지막으로 낸 보드에 정리본(todaySummary)이 있었나 (상태 조회용)
+        self.today_counts = today_counts(None)
+        self.today_failures = 0       # 정리본을 만들다 실패한 횟수. 실패하면 그 보드의 정리본만 null 로 낸다
 
     # ---------------- 분류기에서 읽기 ----------------
     def _view(self):
@@ -391,7 +395,8 @@ class AgendaSummarizer:
         based_extra: 의견·할 일이 반영한 가장 큰 seq (basedOnSeq 계산에 합친다).
         off_topic: 주제 변경 제안 (AgendaOffTopic.board). 없으면 null 로 낸다. 바뀌면 보드도 바뀐 것으로 본다.
         leftover: 미결 안건 목록의 재료 {"requestRev", "final", "status_info"} (AgendaLeftover.state + board_status(preview_final=True)).
-                  없으면 leftover 칸은 null 이다. 넘길 후보를 거르고 요약 문장을 복사해 담는다(agenda_leftover.build_leftover)."""
+                  없으면 leftover 칸은 null 이다. 넘길 후보를 거르고 요약 문장을 복사해 담는다(agenda_leftover.build_leftover).
+                  같은 재료로 오늘 회의 요약 정리본(todaySummary, AI-08)도 만든다. 만들다 실패하면 그 칸만 null 이다."""
         view = self._view()
         with self.lock:
             if not view["agendas"]:
@@ -414,15 +419,28 @@ class AgendaSummarizer:
                 agendas.append(ent)
                 ents.append((a["key"], ent))
             lf = build_leftover(leftover, ents) if leftover else None
+            ts = None
+            if leftover:
+                try:
+                    ts = build_today_summary(leftover, ents)
+                except Exception as e:                    # 정리본 하나가 보드 전송을 막지 않는다. 로그에는 오류 종류만 남긴다
+                    self.today_failures += 1
+                    log.error("오늘 회의 요약 정리본 만들기 실패 error=%s", type(e).__name__)
+            self.today_built, self.today_counts = ts is not None, today_counts(ts)
             cur_id = view["ids"].get(view["current"]) if view["current"] is not None else None
-            sig = _h(json.dumps([cur_id, agendas, off_topic, lf], ensure_ascii=False, sort_keys=True))
+            sig = _h(json.dumps([cur_id, agendas, off_topic, lf, ts], ensure_ascii=False, sort_keys=True))
             if sig == self.sent_sig:
                 return None
             self.sent_sig = sig
             self.version = max(int(self.now() * 1000), self.version + 1)
             based = max(max((s for st in self.ag.values() for s in st["reflected"]), default=0), based_extra)
             return {"version": self.version, "basedOnSeq": based, "currentAgendaId": cur_id,
-                    "agendas": agendas, "offTopic": dict(off_topic) if off_topic else None, "leftover": lf}
+                    "agendas": agendas, "offTopic": dict(off_topic) if off_topic else None, "leftover": lf, "todaySummary": ts}
+
+    def today_info(self):
+        """상태 조회용. 정리본의 개수만 담는다. 내용, 안건 제목, 문장은 넣지 않는다."""
+        with self.lock:
+            return {"built": self.today_built, **self.today_counts, "failures": self.today_failures}
 
     def info(self):
         """상태 조회용. 전사 내용, 안건 제목, 요약 문장은 넣지 않는다."""
@@ -744,6 +762,54 @@ def selftest():
     assert b and b["leftover"]["final"] is True
     b = s.take_board(status_info=main_status)
     assert b and b["leftover"] is None, "이어서 논의하기: 칸이 null 로 돌아간다"
+    json.dumps(b)
+
+    # 17-3) todaySummary (AI-08): leftover 와 같은 시점에, 같은 재료로 정리본을 만든다. 만들다 실패해도 보드는 나간다
+    assert b["todaySummary"] is None and "todaySummary" in b, "종료 버튼 전에는 null"
+    assert s.today_info() == {"built": False, "agendas": 0, "decided": 0, "todos": 0, "failures": 0}
+    preview2 = {"a1": {"status": "DECIDED", "reason": {"text": "목요일로 확정", "evidenceSeqs": [2]}}, "a2": {"status": "NOT_STARTED", "reason": None}}
+    lf2 = lambda rev, info, final=False: {"requestRev": rev, "final": final, "status_info": info}
+    b = s.take_board(status_info=main_status, leftover=lf2(5, preview))
+    ts = b["todaySummary"]
+    assert ts["requestRev"] == 5 and ts["final"] is False and [x["agendaId"] for x in ts["agendas"]] == [x["agendaId"] for x in b["agendas"]], ts
+    assert all(set(x) == {"agendaId", "status", "statusReason", "summary", "opinions", "todos"} for x in ts["agendas"])
+    assert [(x["agendaId"], x["status"]) for x in ts["agendas"] if x["status"] != "DECIDED"] == [(x["agendaId"], x["status"]) for x in b["leftover"]["agendas"]], \
+        "결정이 아닌 안건의 상태는 미결 안건 목록과 같다"
+    b = s.take_board(status_info=main_status, leftover=lf2(5, preview2))
+    ts = b["todaySummary"]
+    t1 = [x for x in ts["agendas"] if x["agendaId"] == "a1"][0]
+    assert [(x["agendaId"], x["status"]) for x in ts["agendas"]] == [("a1", "DECIDED"), ("a2", "NOT_STARTED")], ts
+    assert t1["summary"] == board_of(b, "a1")["summary"] and t1["summary"], "보드의 요약 문장과 같다"
+    assert t1["summary"] is not board_of(b, "a1")["summary"], "복사해 담는다"
+    assert t1["statusReason"] == {"text": "목요일로 확정", "evidenceSeqs": [2]} and "decision" not in t1
+    assert t1["opinions"] == board_of(b, "a1")["opinions"] and t1["todos"] == board_of(b, "a1")["todos"]
+    assert [(x["agendaId"], x["status"]) for x in b["leftover"]["agendas"]] == [("a2", "NOT_STARTED")]
+    assert s.today_info() == {"built": True, "agendas": 2, "decided": 1, "todos": len(t1["todos"]) + len(ts["agendas"][1]["todos"]), "failures": 0}
+    assert s.take_board(status_info=main_status, leftover=lf2(5, preview2)) is None, "같은 내용이면 다시 보내지 않는다"
+    lf_before = b["leftover"]
+    preview3 = {"a1": {"status": "DECIDED", "reason": {"text": "다시 확정", "evidenceSeqs": [1, 2]}}, "a2": preview2["a2"]}
+    b = s.take_board(status_info=main_status, leftover=lf2(5, preview3))
+    assert b and b["todaySummary"]["agendas"][0]["statusReason"]["evidenceSeqs"] == [1, 2], "정리본만 바뀌어도 보드를 다시 낸다"
+    assert b["leftover"] == lf_before, "미결 안건 목록은 그대로다 (정리본의 변화만으로 보드가 다시 나간다)"
+    real_build = globals()["build_today_summary"]
+
+    def broken(meta, ents):
+        raise ValueError("기밀단어를 담은 오류 메시지")
+    globals()["build_today_summary"] = broken
+    try:
+        b = s.take_board(status_info=main_status, leftover=lf2(6, preview2))
+    finally:
+        globals()["build_today_summary"] = real_build
+    assert globals()["build_today_summary"] is real_build, "시험용 바꿔치기를 원래대로 되돌렸다"
+    assert b is not None and b["todaySummary"] is None and b["leftover"] and b["leftover"]["requestRev"] == 6, "정리본만 null, 보드와 leftover 는 나간다"
+    assert s.today_info() == {"built": False, "agendas": 0, "decided": 0, "todos": 0, "failures": 1}
+    b = s.take_board(status_info=main_status, leftover=lf2(6, preview2))
+    assert b and b["todaySummary"] and b["todaySummary"]["requestRev"] == 6, "다음 보드에서는 다시 만든다"
+    b = s.take_board(status_info=main_status, leftover=lf2(6, preview2, True))
+    assert b and b["todaySummary"]["final"] is True
+    b = s.take_board(status_info=main_status)
+    assert b and b["todaySummary"] is None and b["leftover"] is None, "이어서 논의하기: 정리본도 거둔다"
+    assert s.today_info()["built"] is False
     json.dumps(b)
 
     # 18) 로그에는 전사, 안건 제목, 요약 문장이 남지 않는다

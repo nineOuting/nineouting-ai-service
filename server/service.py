@@ -541,7 +541,7 @@ class Registry:
         return {**st, "status_info": m.status_judge.board_status(preview_final=True)}
 
     def _publish_board(self, m):
-        """바뀐 안건 보드 전체 상태(요약, 상태, 의견, 할 일, 주제 변경 제안, 미결 안건 목록)를 백엔드로 보낸다."""
+        """바뀐 안건 보드 전체 상태(요약, 상태, 의견, 할 일, 주제 변경 제안, 미결 안건 목록, 오늘 회의 요약 정리본)를 백엔드로 보낸다."""
         if self.publisher is None or not self.publisher.enabled:
             return
         opinions = self._safe(m, "opinions", m.opinions.board_items)
@@ -612,5 +612,6 @@ class Registry:
                 "agendaTodos": m.todos.info(),
                 "agendaOffTopic": m.offtopic.info(),
                 "agendaLeftover": m.leftover.info(),
+                "agendaTodaySummary": m.agenda_summarizer.today_info(),
                 "publisher": self.publisher.info() if self.publisher else {"enabled": False},
             }

@@ -1,0 +1,4 @@
+# 회의록 초안(minutes/) 의존성. 버전은 rag/requirements.txt 와 같게 맞춘다 (같은 이미지에 함께 설치됨)
+# AI 호출(rag/llm.py)과 콜백(rag/callback.py)은 RAG 코드를 함께 쓴다. google-genai 와 fastapi 는 루트 requirements.txt
+psycopg[binary]==3.3.6
+psycopg-pool==3.3.3

@@ -18,8 +18,7 @@
       {
         "agendaId": 101,
         "status": "DECIDED",
-        "statusReason": {"text": "목요일 배포에 참석자가 동의함", "evidenceSeqs": [40, 42]},
-        "decision": {"id": "d-101", "text": "10월 30일(목) 배포", "context": "QA가 수요일까지 가능하다고 확인", "evidenceSeqs": [40, 42], "edited": false, "needsCheck": false},
+        "statusReason": {"text": "1차 배포를 10월 30일(목)로 정하고 참석자가 동의함", "evidenceSeqs": [40, 42]},
         "summary": [
           {"id": "k3f9a1-1", "text": "1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴", "evidenceSeqs": [38, 39], "edited": false, "needsCheck": false}
         ],
@@ -34,7 +33,6 @@
         "agendaId": 102,
         "status": "UNDECIDED",
         "statusReason": {"text": "광고 예산 승인 여부를 정하지 못함", "evidenceSeqs": [88]},
-        "decision": null,
         "summary": [
           {"id": "k3f9a1-3", "text": "광고 예산은 월 사용량을 확인한 뒤 정하기로 함", "evidenceSeqs": [86, 87], "edited": true, "needsCheck": false}
         ],
@@ -47,18 +45,18 @@
         "agendaId": 103,
         "status": "DECISION_CHECK",
         "statusReason": {"text": "강남역 근처로 하자는 말은 있으나 합의 표현이 없음", "evidenceSeqs": [101, 102]},
-        "decision": null,
         "summary": [],
         "opinions": [
           {"id": "k3f9a1-20", "text": "회식 예산이 1인당 3만 원을 넘으면 안 된다는 의견", "kind": "OPINION", "evidenceSeqs": [103], "edited": false, "needsCheck": true}
         ],
-        "todos": []
+        "todos": [
+          {"id": "k3f9a1-21", "task": "식당 후보 알아보기", "assigneeName": null, "assigneeStatus": "UNASSIGNED", "assigneeUserId": null, "dueText": null, "evidenceSeqs": [104], "edited": false, "needsCheck": false, "unclear": true}
+        ]
       },
       {
         "agendaId": 104,
         "status": "NOT_STARTED",
         "statusReason": null,
-        "decision": null,
         "summary": [],
         "opinions": [],
         "todos": []

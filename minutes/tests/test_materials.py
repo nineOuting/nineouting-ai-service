@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from minutes.materials import NO_ASSIGNEE, NO_DUE, build_materials, decision_text, todo_text
+from minutes.materials import NO_ASSIGNEE, NO_DUE, TODO_UNCLEAR, build_materials, todo_text
 
 FIXTURE = Path(__file__).parent / "fixtures" / "draft_request.json"
 
@@ -28,18 +28,23 @@ def test_안건_순서와_종류_순서로_번호를_붙인다(request_body):
     assert [(m.ref, m.agenda_id, m.kind) for m in ms] == [
         ("m1", 101, "decision"), ("m2", 101, "summary"), ("m3", 101, "opinion"), ("m4", 101, "todo"),
         ("m5", 102, "undecided"), ("m6", 102, "summary"), ("m7", 102, "todo"),
-        ("m8", 103, "decisionCheck"), ("m9", 103, "opinion"),
+        ("m8", 103, "decisionCheck"), ("m9", 103, "opinion"), ("m10", 103, "todo"),
     ]
     assert [m.order for m in ms] == sorted(m.order for m in ms)
 
 
-def test_결정은_결정과_맥락을_코드가_잇는다(request_body):
+def test_결정은_판정_이유를_AI가_결정_문장으로_다듬는다(request_body):
     m = by_kind(materials_of(request_body), "decision")[0]
-    assert m.fixed_text == "10월 30일(목) 배포 (QA가 수요일까지 가능하다고 확인)"
-    assert not m.rewrite
-    assert m.source() == {"agendaId": 101, "kind": "decision", "id": "d-101"}
+    assert m.rewrite and m.fixed_text is None
+    assert m.text == "1차 배포를 10월 30일(목)로 정하고 참석자가 동의함"
+    assert m.source() == {"agendaId": 101, "kind": "decision", "id": None}
     assert m.evidence_seqs == (40, 42)
-    assert decision_text({"text": "목요일 배포", "context": None}) == "목요일 배포"
+    assert (m.edited, m.needs_check) == (False, False)
+
+
+def test_판정_이유가_없는_DECIDED는_결정_줄이_없다(request_body):
+    request_body["summary"]["agendas"][0]["statusReason"] = None
+    assert not by_kind(materials_of(request_body), "decision")
 
 
 def test_미결은_결정할_사항을_쓰고_근거는_판정_이유의_줄(request_body):
@@ -56,10 +61,8 @@ def test_결정_확인_필요는_판정_이유를_붙이고_결정할_사항이_
     assert m.evidence_seqs == (101, 102)
 
 
-def test_아직_안_다룬_안건과_결정_없는_DECIDED는_상태_줄이_없다(request_body):
+def test_아직_안_다룬_안건은_줄이_없다(request_body):
     assert not [m for m in materials_of(request_body) if m.agenda_id == 104]
-    request_body["summary"]["agendas"][0]["decision"] = None
-    assert not by_kind(materials_of(request_body), "decision")
 
 
 def test_요약과_의견은_AI가_다듬고_사람이_고친_것은_그대로(request_body):
@@ -73,9 +76,10 @@ def test_요약과_의견은_AI가_다듬고_사람이_고친_것은_그대로(r
 
 
 def test_할_일은_담당자와_기한을_붙이고_없으면_미정(request_body):
-    todo_101, todo_102 = by_kind(materials_of(request_body), "todo")
+    todo_101, todo_102, todo_103 = by_kind(materials_of(request_body), "todo")
     assert todo_101.fixed_text == "QA 일정표 공유 (김철수, 수요일까지)"
     assert todo_102.fixed_text == f"회의실 예약 (이영희, {NO_DUE})"
+    assert todo_103.fixed_text == f"식당 후보 알아보기 ({NO_ASSIGNEE}, {NO_DUE}, {TODO_UNCLEAR})"
     assert todo_text({"task": "체크리스트 작성", "assigneeName": None, "dueText": None}) == \
         f"체크리스트 작성 ({NO_ASSIGNEE}, {NO_DUE})"
 

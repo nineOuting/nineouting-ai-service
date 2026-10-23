@@ -1,6 +1,6 @@
 """회의 끝 요약 → 재료 목록. 명세 7.1·7.2
 
-요약 형식에 기대는 곳은 이 파일뿐이다. 형식(docs/api/meeting-summary-proposal.md)이 바뀌면 여기만 고친다.
+요약 형식에 기대는 곳은 이 파일뿐이다. 형식(안건 보드 todaySummary, docs/api/agenda-today-summary-contract.md)이 바뀌면 여기만 고친다.
 입력은 요청 검사(request.py)를 통과한 값이라고 본다.
 
   decision        DECIDED 안건의 판정 이유      AI 가 결정 문장으로 다듬는다. 회의 끝 요약은 결정 문장을 따로 만들지 않는다

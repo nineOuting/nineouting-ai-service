@@ -8,7 +8,7 @@
 
 실행: 서버 안에서 스레드로 (runtime), 또는 따로 .venv/bin/python -m minutes.worker
 설정: MINUTES_DATABASE_URL, MINUTES_CALLBACK_ALLOWED_HOSTS, MINUTES_LLM_TIMEOUT_S(기본 60),
-      MINUTES_PROMPT_VERSION(없으면 가장 큰 번호), AI 공급자·모델·키는 RAG 답변과 같은 RAG_LLM_* 를 쓴다
+      MINUTES_PROMPT_VERSION(없으면 가장 큰 번호), AI 공급자·모델은 MINUTES_LLM_* (없으면 RAG_LLM_*, llm_config.py)
 """
 import logging
 import os
@@ -112,7 +112,7 @@ class Worker:
 
 
 def from_env(env=None, llm=None, prompt=None):
-    """환경변수로 작업자를 만든다. llm 을 주지 않으면 RAG_LLM_* 설정으로 만든다 (설정이 틀리면 LLMConfigError).
+    """환경변수로 작업자를 만든다. llm 을 주지 않으면 llm_config 의 설정으로 만든다 (설정이 틀리면 LLMConfigError).
     DB 에는 여기서 접속하지 않는다. run() 이 처음 돌 때 접속하고, 끊기면 다시 접속한다 (DB 가 늦게 떠도 서버는 뜬다)."""
     from functools import partial
 
@@ -125,8 +125,8 @@ def from_env(env=None, llm=None, prompt=None):
                          idle_tx_timeout_ms=env.get("MINUTES_DB_IDLE_TX_TIMEOUT_MS", 60000),
                          connect_timeout_s=env.get("MINUTES_DB_CONNECT_TIMEOUT_S", 10))
     if llm is None:
-        from rag.llm import make_llm
-        llm, _ = make_llm(env)                        # 시간 제한은 MINUTES_LLM_TIMEOUT_S 를 따로 쓴다
+        from .llm_config import make_minutes_llm
+        llm, _, _ = make_minutes_llm(env)
     allowed = allowed_hosts_from_env(env, key="MINUTES_CALLBACK_ALLOWED_HOSTS")
     if allowed is None:
         log.warning("MINUTES_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")

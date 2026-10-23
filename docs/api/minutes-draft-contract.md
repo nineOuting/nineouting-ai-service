@@ -143,7 +143,8 @@ X-Request-Id: (선택)
 |---|---|---|
 | `MINUTES_DATABASE_URL` | 대기열 DB 주소. 있으면 초안 기능이 켜진다 | 없음 (꺼짐) |
 | `MINUTES_CALLBACK_ALLOWED_HOSTS` | API 2를 보낼 수 있는 `호스트:포트` 목록 (쉼표로 구분, 예: `minutes-service:8084`). **운영에서는 반드시 넣는다.** 비우면 모든 주소를 허용한다 (개발용) | 없음 |
-| `RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`, `GEMINI_API_KEY` | AI 설정. RAG 답변과 같은 값을 쓴다. `RAG_LLM_PROVIDER`가 기본값(`fake`)이면 초안을 만들지 못한다 | `fake` |
+| `MINUTES_LLM_PROVIDER`, `MINUTES_LLM_MODEL` | 초안 AI 공급자·모델. 넣지 않으면 RAG 답변 설정(`RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`)을 그대로 쓴다. 공급자가 기본값(`fake`)이면 초안을 만들지 못한다 | 없음 (RAG 설정) |
+| `GEMINI_API_KEY` | API 키. RAG 답변과 같이 쓴다 | 없음 |
 | `MINUTES_LLM_TIMEOUT_S` | AI 응답 시간 제한(초) | 60 |
 | `MINUTES_WORKER_IN_PROCESS` | `0`이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker`로 따로 띄울 때) | `1` |
 | `MINUTES_DB_POOL_MAX` | 접수 주소의 DB 연결 수 상한 | 3 |

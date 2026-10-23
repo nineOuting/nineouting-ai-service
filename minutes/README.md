@@ -30,6 +30,7 @@
 | `draft.py` | 위를 묶어 결과 JSON 하나를 만든다 (`make_draft`) |
 | `jobs.py`, `worker.py` | 대기열 표와 작업자 |
 | `api.py`, `runtime.py` | 접수 주소와 `server/main.py` 에 붙이는 곳 |
+| `llm_config.py` | 초안 AI 설정 고르기. AI 연결(`rag/llm.py`)과 콜백 보내기(`rag/callback.py`)는 RAG 코드를 같이 쓴다 |
 | `prompts/placement/v*.md` | 칸 배치 지시문. `MINUTES_PROMPT_VERSION` 이 없으면 번호가 가장 큰 파일 |
 
 ## 서버에 붙이기
@@ -47,7 +48,8 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 |---|---|---|
 | `MINUTES_DATABASE_URL` | 대기열 DB. 있으면 초안 기능이 켜진다 | 없음 |
 | `MINUTES_CALLBACK_ALLOWED_HOSTS` | 콜백을 보낼 수 있는 `호스트:포트` (쉼표 구분). 운영에서는 반드시 넣는다. 비우면 모두 허용 (개발용) | 없음 |
-| `RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`, `GEMINI_API_KEY` | AI 설정. RAG 답변과 같은 값을 쓴다. 틀리면 서버는 뜨고 초안 주소만 503 | `fake` |
+| `MINUTES_LLM_PROVIDER`, `MINUTES_LLM_MODEL` | 초안 AI 공급자·모델. 공급자가 있으면 둘을 한 묶음으로 쓰고, 없으면 RAG 답변 설정(`RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`)을 그대로 쓴다. 모델만 넣으면 설정 오류. 틀리면 서버는 뜨고 초안 주소만 503 (`llm_config.py`) | 없음 (RAG 설정, 그 기본값은 `fake`) |
+| `GEMINI_API_KEY` | API 키. RAG 답변과 같이 쓴다 | 없음 |
 | `MINUTES_LLM_TIMEOUT_S` | AI 응답 시간 제한(초) | 60 |
 | `MINUTES_PROMPT_VERSION` | 지시문 버전 (예: `v6`) | 가장 큰 번호 |
 | `MINUTES_WORKER_IN_PROCESS` | `0` 이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker` 로 따로) | `1` |
@@ -72,7 +74,7 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 
 ```bash
 .venv/bin/python -m minutes.try_draft                           # 합성 요청, 가짜 AI (비용 없음)
-.venv/bin/python -m minutes.try_draft --real                    # 실제 AI (rag/.env 의 RAG_LLM_* 와 키). 호출마다 요금이 나간다
+.venv/bin/python -m minutes.try_draft --real                    # 실제 AI (MINUTES_LLM_*, 없으면 rag/.env 의 RAG_LLM_*). 호출마다 요금이 나간다
 .venv/bin/python -m minutes.try_draft --file 요청.json --real --show-io   # AI 입력·출력·토큰까지
 ```
 

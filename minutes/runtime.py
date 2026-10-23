@@ -7,7 +7,7 @@ RAG 와 따로 켜고 끈다. 같은 PostgreSQL 을 써도 되지만 연결 풀�
   runtime.start()  서버 시작 때: 연결 풀을 열고, MINUTES_WORKER_IN_PROCESS 가 0 이 아니면 작업자 스레드를 띄운다
   runtime.stop()   서버 종료 때: 작업자는 처리 중인 작업을 마치고 멈추고, 연결 풀을 닫는다
 
-AI 설정(RAG_LLM_*)이 틀리면 서버는 그대로 뜨고 초안 요청만 503 으로 답한다 (요약·RAG 까지 멈추지 않게).
+AI 설정(MINUTES_LLM_*, 없으면 RAG_LLM_*. llm_config.py)이 틀리면 서버는 그대로 뜨고 초안 요청만 503 으로 답한다 (요약·RAG 까지 멈추지 않게).
 """
 import logging
 
@@ -54,8 +54,9 @@ def setup(app, env) -> MinutesRuntime:
     from psycopg_pool import ConnectionPool
 
     from rag.callback import allowed_hosts_from_env
-    from rag.llm import LLMConfigError, make_llm
+    from rag.llm import LLMConfigError
 
+    from .llm_config import make_minutes_llm
     from .placement import load_prompt
 
     options = timeout_options(env.get("MINUTES_DB_STATEMENT_TIMEOUT_MS", 30000),
@@ -69,13 +70,13 @@ def setup(app, env) -> MinutesRuntime:
 
     llm, config_error, prompt = None, None, None
     try:
-        llm, _ = make_llm(env)
+        llm, _, source = make_minutes_llm(env)
         prompt = load_prompt(env.get("MINUTES_PROMPT_VERSION") or None)
     except (LLMConfigError, ValueError) as e:                 # 지시문 오류(PromptError)도 ValueError
         llm, config_error = None, str(e)
         log.error("회의록 초안 설정 오류: %s", e)
     else:
-        log.info("회의록 초안 AI %s/%s, 지시문 %s", llm.name, llm.model, prompt.version)
+        log.info("회의록 초안 AI %s/%s (%s_* 설정), 지시문 %s", llm.name, llm.model, source, prompt.version)
 
     app.include_router(make_router(pool, allowed, env.get("MINUTES_REQUEST_ID_HEADER", REQUEST_ID_HEADER),
                                    env.get("MINUTES_API_PREFIX", PREFIX), config_error=config_error))

@@ -1,7 +1,7 @@
 """회의록 초안을 손으로 시험하는 도구. 요청 JSON 을 넣고 칸별 글을 본다. 서버는 띄우지 않는다.
 
   .venv/bin/python -m minutes.try_draft                          합성 요청, 가짜 AI
-  .venv/bin/python -m minutes.try_draft --real                   합성 요청, 실제 AI (rag/.env 의 RAG_LLM_* 와 API 키)
+  .venv/bin/python -m minutes.try_draft --real                   합성 요청, 실제 AI (MINUTES_LLM_* 없으면 RAG_LLM_*, 그리고 API 키)
   .venv/bin/python -m minutes.try_draft --file 요청.json --real   다른 요청 파일
   .venv/bin/python -m minutes.try_draft --real --json            결과 JSON 전체도 출력
 
@@ -17,10 +17,11 @@ import re
 import sys
 from pathlib import Path
 
-from rag.llm import LLMConfigError, Reply, make_llm
+from rag.llm import LLMConfigError, Reply
 from rag.try_answer import load_env_file
 
 from .draft import make_draft
+from .llm_config import make_minutes_llm
 from .request import InvalidInput, validate_request
 
 SAMPLE = Path(__file__).parent / "tests" / "fixtures" / "draft_request.json"
@@ -69,11 +70,11 @@ def show_io(calls):
 def real_llm():
     env = {**load_env_file(ENV_FILE), **os.environ}
     try:
-        llm, _ = make_llm(env)                     # 시간 제한은 이 도구의 --timeout 을 쓴다
+        llm, _, source = make_minutes_llm(env)     # 시간 제한은 이 도구의 --timeout 을 쓴다
     except LLMConfigError as e:
         sys.exit(f"실제 AI 설정 오류: {e}")
     if llm.name == "fake":
-        sys.exit("RAG_LLM_PROVIDER 가 fake 다. rag/.env 에 gemini 나 openai 를 넣어야 실제 AI 로 돈다")
+        sys.exit(f"{source}_PROVIDER 가 fake 다. rag/.env 에 gemini 나 openai 를 넣어야 실제 AI 로 돈다")
     return llm
 
 

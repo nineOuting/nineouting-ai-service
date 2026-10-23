@@ -6,7 +6,7 @@
   재료가 상한 초과  AI 를 부르지 않고 FAILED / INPUT_TOO_LONG
   AI 실패           FAILED / LLM_TIMEOUT · LLM_FAILED · CHECK_FAILED
 
-요청 검사(형식 오류 → 400)는 이 함수를 부르기 전에 한다 (request.py, 따로 붙인다).
+요청 검사(형식 오류 → 400)는 이 함수를 부르기 전에 한다 (request.validate_request). 여기서는 다시 하지 않는다.
 로그에는 요청 번호, 회의록 번호, 개수, 시도 횟수, 상태, 오류 코드, 토큰, 걸린 시간만 남긴다. 요약·칸 이름·초안 글은 남기지 않는다.
 """
 import logging

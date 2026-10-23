@@ -21,6 +21,7 @@ from rag.llm import LLMConfigError, Reply, make_llm
 from rag.try_answer import load_env_file
 
 from .draft import make_draft
+from .request import InvalidInput, validate_request
 
 SAMPLE = Path(__file__).parent / "tests" / "fixtures" / "draft_request.json"
 ENV_FILE = Path(__file__).resolve().parent.parent / "rag" / ".env"
@@ -98,12 +99,13 @@ def main():
 
     logging.basicConfig(level=logging.INFO, format="[로그] %(message)s")
     body = json.loads(args.file.read_text(encoding="utf-8"))
+    try:
+        validate_request(body)
+    except InvalidInput as e:
+        sys.exit(f"요청 형식 오류 (API 였다면 400): {e}")
     llm = Recorder(real_llm() if args.real else PlaceAllFakeLLM())
     print(f"요청: {args.file.name} / AI: {llm.name} ({llm.model})", flush=True)
-    try:
-        result = make_draft(body, llm, timeout_s=args.timeout, max_retries=args.retries)
-    except (KeyError, TypeError) as e:          # 요청 검사(request.py)를 붙이기 전까지
-        sys.exit(f"요청 형식이 맞지 않음: {type(e).__name__} {e}")
+    result = make_draft(body, llm, timeout_s=args.timeout, max_retries=args.retries)
     if args.show_io:
         show_io(llm.calls)
     show(result)

@@ -17,6 +17,7 @@ on:
       - 'summary/**'
       - 'server/**'
       - 'rag/**'
+      - 'minutes/**'
       - 'requirements.txt'
       - 'Dockerfile'
       - '.dockerignore'
@@ -26,6 +27,7 @@ on:
       - 'summary/**'
       - 'server/**'
       - 'rag/**'
+      - 'minutes/**'
       - 'requirements.txt'
       - 'Dockerfile'
       - '.dockerignore'
@@ -114,6 +116,17 @@ jobs:
           verify_model_files()
           E5Embedder()
           print('모델 확인 uid=%d arch=%s' % (os.getuid(), platform.machine()))
+          "
+
+      # 회의록 초안 코드와 마이그레이션 파일이 이미지에 들어갔는지 확인 (DB 에는 붙지 않음)
+      - name: 회의록 초안 확인
+        run: |
+          docker run --rm --network none "$REF" python -c "
+          import minutes.api, minutes.runtime, minutes.worker
+          from minutes.migrate import MIGRATIONS
+          files = sorted(p.name for p in MIGRATIONS.glob('*.sql'))
+          assert files, '마이그레이션 파일 없음'
+          print('회의록 초안 확인', files)
           "
 
       - name: digest 넘기기

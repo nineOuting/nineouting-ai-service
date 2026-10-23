@@ -1,4 +1,4 @@
-# 회의록 초안 API 명세 (AI-10·AI-11) v0.3 초안
+# 회의록 초안 API 명세 (AI-10·AI-11) v0.4 초안
 
 > 회의록 초안을 만드는 API와, 확정 회의록을 검색 대상으로 넣을 때 바뀌는 RAG API를 다룬다. 백엔드(minutes-service)의 연동 형식 5.1(생성 요청)·5.2(결과 콜백)를 기준으로 하고, 원안에 없던 칸과 규칙은 **[ai-service 제안]**으로 표시한다. 확정되면 이 문서를 최신 전체본 하나로 교체한다.
 > 요청 안의 요약 형식은 회의 끝 요약 명세 `agenda-today-summary-contract.md`(AI-08), 전사 줄(`seq`)의 정의는 `input-contract.md`를 따른다.
@@ -113,18 +113,41 @@ X-Request-Id: (선택)
 | 코드 | 경우 | 본문 |
 |---|---|---|
 | `202` | 접수함. 결과는 API 2로 알린다 | `{"requestId": "...", "status": "ACCEPTED"}` |
-| `202` | 같은 `requestId`가 처리 중이거나 이미 끝남. 다시 만들지 않는다 | `{"requestId": "...", "status": "DUPLICATE"}` [ai-service 제안] |
+| `202` | 같은 `requestId`가 처리 중이거나 성공 결과를 이미 보냄. 다시 만들지 않는다 | `{"requestId": "...", "status": "DUPLICATE"}` [ai-service 제안] |
 | `400` | 형식 오류: 필수 칸 없음, 타입 틀림, 칸 이름 겹침, 상한 초과, 허용하지 않은 `callbackUrl` 등 | `{"error": "INVALID_INPUT", "detail": "이유"}`. 같은 요청은 다시 보내도 같은 결과 |
-| `503` | 대기열이나 AI 설정을 쓸 수 없음 | `{"error": "NOT_READY", "detail": "이유"}`. 잠시 뒤 다시 요청 |
+| `503` | 대기열 DB를 쓸 수 없음, 대기열 표가 없음(배포 때 마이그레이션을 하지 않음, 2.4), AI 설정이 틀림 | `{"error": "NOT_READY", "detail": "이유"}`. 잠시 뒤 다시 요청 |
+
+초안 기능을 켜지 않은 ai-service(2.4)에는 이 주소가 없어 `404`로 답한다.
 
 ### 2.3 접수 규칙
 
 | 항목 | 규칙 |
 |---|---|
-| 처리 | 접수한 요청은 대기열에서 하나씩 처리하고, 끝나면 API 2로 알린다 |
-| 중복 | `requestId`를 7일 동안 기억한다 (저장소는 11장 ai-service 항목) |
-| 보관 | 요청 내용은 처리가 끝나면 지운다. `requestId`, 상태, 오류 코드만 남긴다 |
+| 처리 | 접수한 요청은 대기열 표(`minutes_jobs`)에 넣고, 작업자가 하나씩 꺼내 처리한 뒤 API 2로 알린다. ai-service가 재시작돼도 대기열의 요청은 남는다 |
+| 중복 | `requestId`를 7일 동안 기억한다. 처리 중이거나 성공으로 끝났으면 `DUPLICATE`. **실패로 끝난 요청(API 2 `FAILED`, 콜백 전달 실패)은 같은 `requestId`로 다시 보내면 새로 받는다** |
+| 작업자 오류 | 예상하지 못한 오류(DB 끊김 등)는 30초, 2분 뒤에 다시 시도한다. 3번째도 실패하면 `INTERNAL_ERROR`로 알린다. 처리 중 작업자가 멈추면 10분 뒤 다른 작업자가 다시 잡는다 |
+| 보관 | 요청 내용은 처리가 끝나면 지운다. `requestId`, 상태, 오류 코드만 남기고 7일 뒤 지운다 |
 | 로그 | 요약, 칸 이름, 초안 글을 남기지 않는다. `requestId`, `minutesId`, 개수, 상태, 오류 코드, 걸린 시간만 남긴다 |
+
+### 2.4 켜는 방법과 설정 (ai-service 배포) [ai-service 제안]
+
+초안 기능은 `MINUTES_DATABASE_URL`이 있을 때만 켜진다. 요약·RAG와 따로 켜고 끈다.
+
+| 순서 | 할 일 |
+|---|---|
+| 1 | 대기열 DB를 정한다. RAG와 같은 PostgreSQL을 써도 되며, 표 이름이 `minutes_`로 시작해 겹치지 않는다. pgvector는 필요 없다 |
+| 2 | 처음 배포 전에 같은 이미지로 `python -m minutes.migrate`를 한 번 돌린다 (`minutes_jobs` 표를 만든다). 여러 번 돌려도 된다 |
+| 3 | 아래 설정을 넣고 서버를 띄운다 |
+
+| 환경변수 | 설명 | 기본값 |
+|---|---|---|
+| `MINUTES_DATABASE_URL` | 대기열 DB 주소. 있으면 초안 기능이 켜진다 | 없음 (꺼짐) |
+| `MINUTES_CALLBACK_ALLOWED_HOSTS` | API 2를 보낼 수 있는 `호스트:포트` 목록 (쉼표로 구분, 예: `minutes-service:8084`). **운영에서는 반드시 넣는다.** 비우면 모든 주소를 허용한다 (개발용) | 없음 |
+| `MINUTES_LLM_PROVIDER`, `MINUTES_LLM_MODEL` | 초안 AI 공급자·모델. 넣지 않으면 RAG 답변 설정(`RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`)을 그대로 쓴다. 공급자가 기본값(`fake`)이면 초안을 만들지 못한다 | 없음 (RAG 설정) |
+| `GEMINI_API_KEY` | API 키. RAG 답변과 같이 쓴다 | 없음 |
+| `MINUTES_LLM_TIMEOUT_S` | AI 응답 시간 제한(초) | 60 |
+| `MINUTES_WORKER_IN_PROCESS` | `0`이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker`로 따로 띄울 때) | `1` |
+| `MINUTES_DB_POOL_MAX` | 접수 주소의 DB 연결 수 상한 | 3 |
 
 ## 3. API 2 — 초안 결과 콜백
 
@@ -385,11 +408,12 @@ RAG 명세의 API를 그대로 쓰고, 아래만 **덧붙인다.** 기존 칸과
 | 코드 | 어디로 | 경우 |
 |---|---|---|
 | `INVALID_INPUT` | API 1 응답 `400` | 요청 형식 오류 |
-| `NOT_READY` | API 1 응답 `503` | 대기열이나 AI 설정을 쓸 수 없음 |
+| `NOT_READY` | API 1 응답 `503` | 대기열 DB·대기열 표·AI 설정을 쓸 수 없음 |
 | `INPUT_TOO_LONG` | API 2 실패 | 요약 항목이 상한을 넘음. 백엔드 원안의 `TRANSCRIPT_TOO_LONG` 대신 [ai-service 제안] |
 | `LLM_TIMEOUT` | API 2 실패 | AI가 정해진 시간 안에 답하지 않음 (한 번 더 불러도 실패한 경우, 7.5) |
 | `LLM_FAILED` | API 2 실패 | AI 호출 오류 (한 번 더 불러도 실패한 경우, 7.5) |
 | `CHECK_FAILED` | API 2 실패 | 다시 시켜도 7.3의 검사를 통과하지 못함 |
+| `INTERNAL_ERROR` | API 2 실패 | 예상하지 못한 오류로 3번 시도해도 만들지 못함 (2.3). 같은 `requestId`로 다시 요청할 수 있다 [ai-service 제안] |
 
 ## 7. 동작 규칙 — 초안 만들기 (API 1·2)
 
@@ -468,7 +492,15 @@ AI의 결과를 검사하고, 걸리면 걸린 이유를 붙여 다시 시킨다
 | 호출 실패(시간 초과·오류) 뒤 다시 부르기 | 1번. 같은 입력으로 부른다. 접수 후 콜백으로 알리는 기능이라 화면에서 기다리는 RAG 답변(다시 부르지 않음)과 다르게 둔다 | `LLM_TIMEOUT` / `LLM_FAILED` |
 | 검사 실패 후 다시 시키기 | 2번. 호출 실패 뒤 다시 부르기와 따로 센다 | `CHECK_FAILED` |
 
-정해 둔 설계값이며 측정값이 아니다. 처리 시간은 아직 재지 않았고, 실제 회의로 재 본 뒤 조정한다.
+위 상한은 정해 둔 설계값이다. 아래는 2026-10-23에 `gemini-3.5-flash-lite`로 잰 **측정값**이며, 크기마다 한 번씩만 쟀다.
+
+| 요약 항목 수 | 초안 만들기 시간 (대기·콜백 제외) | AI 호출 | 입력 / 출력 토큰 | 결과 |
+|---|---|---|---|---|
+| 100 | 5.8초 | 1번 | 6,719 / 2,398 | 성공, 넣지 못한 항목 0 |
+| 300 (상한) | 11.4초 | 1번 | 18,475 / 5,233 | 성공, 넣지 못한 항목 0 |
+
+- 300개 요청은 실제 회의 요약 하나와 합성 요청을 이어 붙여 만들었다. 상한에서도 시간 제한(60초)에 여유가 있다.
+- 한 번씩 잰 값이라 AI 응답 시간의 흔들림은 반영하지 않았다. 운영 지표가 쌓이면 다시 본다.
 
 ## 8. 동작 규칙 — 양식 변경 시 다시 배치 (API 1의 `previousLines`) [ai-service 제안, 화면 대기]
 
@@ -541,7 +573,7 @@ ai-service API가 없다. API 2 결과의 줄(`Line`)에 붙은 정보를 백엔
 | 10 | 빈 칸 처리 없음 | `"해당 내용 없음"`, `evidence: []` | PRD 문구 |
 | 11 | `evidence[]` = `sentence`, `transcriptSeqs` | `edited`, `needsCheck`, `sources` 추가 | 표시 유지, 다시 배치, 30일 뒤 결정 맥락 |
 | 12 | 넣지 못한 내용 알림 없음 | `unplaced`, `unplacedLines` | 내용이 조용히 사라지지 않게 |
-| 13 | 오류 코드 `TRANSCRIPT_TOO_LONG` | `INPUT_TOO_LONG`, `LLM_TIMEOUT`, `LLM_FAILED`, `CHECK_FAILED` | 전사를 안 쓰고, 실패 이유를 나눔 |
+| 13 | 오류 코드 `TRANSCRIPT_TOO_LONG` | `INPUT_TOO_LONG`, `LLM_TIMEOUT`, `LLM_FAILED`, `CHECK_FAILED`, `INTERNAL_ERROR` | 전사를 안 쓰고, 실패 이유를 나눔 |
 | 14 | 콜백 재전송 "몇 번" | 3회, 1·2·4초, `408`·`429`·`5xx`만 | RAG 콜백과 같은 규칙 |
 
 ## 11. 확인할 것
@@ -563,9 +595,16 @@ ai-service API가 없다. API 2 결과의 줄(`Line`)에 붙은 정보를 백엔
 | 볼 수 있는 회의록 수 | 답변 요청의 `docIds`는 최대 1,000개. 한 사용자가 볼 수 있는 확정 회의록이 이보다 많을 수 있는지 |
 | 원문 문서 | 코드 주석이 가리키는 `docs/services/minutes-service.md`의 위치. 이 명세는 전달받은 4장·5장·6장을 기준으로 썼다 |
 
+**CN팀 (배포)**
+
+| 항목 | 내용 |
+|---|---|
+| 대기열 DB | `MINUTES_DATABASE_URL`에 넣을 DB. RAG와 같은 PostgreSQL을 쓰는 것을 권한다 (2.4) |
+| 마이그레이션 | 배포 전과 infra 통합 시험에서 `python -m minutes.migrate`를 `rag.migrate`와 함께 돌릴 수 있는지 |
+| 콜백 허용 호스트 | `MINUTES_CALLBACK_ALLOWED_HOSTS`에 넣을 minutes-service의 호스트와 포트 (위 "콜백 호스트"와 같은 값) |
+
 **ai-service (저희)**
 
 | 항목 | 내용 |
 |---|---|
-| `requestId` 기억 저장소 | 7일 기억하려면 저장소가 필요하다. RAG용 PostgreSQL에 표를 더하면 초안 기능도 RAG DB가 있어야 켜진다 |
-| 상한 값 | 7.5의 값을 실제 회의로 재 본 뒤 조정 |
+| 상한 값 | 7.5의 측정값은 한 번씩 잰 것이다. 운영 지표가 쌓이면 다시 본다 |

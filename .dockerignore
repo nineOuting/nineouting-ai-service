@@ -18,3 +18,5 @@ examples/
 rag/tests/
 rag/docker-compose.yml
 rag/db/
+# 회의록 초안 시험 (이미지에는 필요 없음)
+minutes/tests/

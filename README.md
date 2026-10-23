@@ -41,7 +41,8 @@ flowchart LR
 | 주제 변경 감지·새 안건 제안 | 구현, 평가 전 | 등록된 안건과 관계없는 이야기(해당 없음)가 끊김 없이 180초 이어지면 안건 보드 `offTopic`에 새 안건 제안(제목 포함)을 담음. 무시한 뒤 180초 더 이어지면 "지금 다른 이야기" 알림. 감지는 분류 결과만 읽고, 모델은 제목을 만들 때 한 번만 부름 (`docs/api/agenda-offtopic-contract.md`) |
 | 미결 안건 추출 | 구현, 모델 호출 없음 | 종료 버튼을 누르면 안건 상태를 종료 확정으로 가정해 다음 회의로 넘길 후보(미결·아직 안 다룸·결정 확인 필요)와 지금까지의 논의 요약(AI-03 요약 문장)을 안건 보드 `leftover`에 담음. 종료 직전 마지막 판정(flush)을 한 번 하고, 이어서 논의하기로 거둘 수 있음 (`docs/api/agenda-leftover-contract.md`) |
 | 오늘 회의 요약 정리본 | 구현, 모델 호출 없음 | 종료 버튼을 누르면(미결 안건과 같은 시점) 안건마다 상태·판정 근거·요약 문장·의견·할 일을 묶은 정리본을 안건 보드 `todaySummary`에 담음. 새로 요약하지 않고 보드의 값을 복사해 배치만 하며 결정 문장은 만들지 않음(회의록 초안이 판정 근거로 씀) (`docs/api/agenda-today-summary-contract.md`) |
-| 회의록 초안, 챗봇 | 미구현 | 연동 API 초안 기준 |
+| 회의록 초안 | 구현, 평가 전 | 회의 끝 요약(`todaySummary`)과 양식을 받아 칸마다 근거가 붙은 줄 목록을 만들고 콜백으로 돌려줌. AI 는 칸 고르기와 결정 문장 다듬기만 함. `MINUTES_DATABASE_URL`이 있을 때만 켜짐 (`minutes/README.md`, `docs/api/minutes-draft-contract.md`) |
+| 챗봇 | 미구현 | 연동 API 초안 기준 |
 
 현재 LLM은 기본값이 `echo`(모델을 부르지 않는 테스트용)이고, 실제 요약과 안건 분류는 Gemini로 시험했다.
 
@@ -60,6 +61,7 @@ flowchart LR
 | `summary/eval_today_summary.py` | 정리본 정합성 점검 (확정 정답으로 만든 보드로 조합이 맞는지 확인. 모델 호출 없음, 비용 0원) |
 | `summary/eval_agenda_offtopic.py` | 주제 변경 감지 평가 (오경보 확인은 비용 0, 제목 점검은 유료 옵션) |
 | `summary/input_adapter.py` | 입력 변환 (전사 줄, 안건 목록, 고친 분류) |
+| `minutes/` | 회의록 초안 (접수 주소, 대기열·작업자, 칸 배치). 설명은 `minutes/README.md` |
 | `docs/api/input-contract.md` | **백엔드 → AI 서비스 입력 형식** (필드, 규칙, 협의 상태) |
 | `docs/api/output-contract.md` | **AI 서비스 → 백엔드 회의 중 요약 형식** |
 | `docs/api/agenda-contract.md` | **안건 목록·분류 결과·고친 분류 형식** (v0.1 초안) |

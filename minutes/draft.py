@@ -21,9 +21,11 @@ log = logging.getLogger("minutes.draft")
 
 MAX_MATERIALS = 300
 INPUT_TOO_LONG = "INPUT_TOO_LONG"
+INTERNAL_ERROR = "INTERNAL_ERROR"               # 작업자가 쓴다: 예상하지 못한 오류로 다시 시도해도 끝내 못 만듦
 SUCCEEDED, FAILED = "SUCCEEDED", "FAILED"
 MESSAGES = {                                    # 실패 설명. 요약·초안 내용은 넣지 않는다
     INPUT_TOO_LONG: "요약 항목이 너무 많음",
+    INTERNAL_ERROR: "초안을 만드는 중 알 수 없는 오류",
     "LLM_TIMEOUT": "AI 응답 시간 초과",
     "LLM_FAILED": "AI 호출 실패",
     "CHECK_FAILED": "AI 결과가 검사를 통과하지 못함",

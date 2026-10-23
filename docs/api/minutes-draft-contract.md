@@ -1,7 +1,7 @@
 # 회의록 초안 API 명세 (AI-10·AI-11) v0.3 초안
 
 > 회의록 초안을 만드는 API와, 확정 회의록을 검색 대상으로 넣을 때 바뀌는 RAG API를 다룬다. 백엔드(minutes-service)의 연동 형식 5.1(생성 요청)·5.2(결과 콜백)를 기준으로 하고, 원안에 없던 칸과 규칙은 **[ai-service 제안]**으로 표시한다. 확정되면 이 문서를 최신 전체본 하나로 교체한다.
-> 요청 안의 요약 형식은 `meeting-summary-proposal.md`, 전사 줄(`seq`)의 정의는 `input-contract.md`를 따른다.
+> 요청 안의 요약 형식은 회의 끝 요약 명세 `agenda-today-summary-contract.md`(AI-08), 전사 줄(`seq`)의 정의는 `input-contract.md`를 따른다.
 
 - 근거: PRD AI-10 회의록 초안, AI-11 근거·맥락 연결, LLM 공통 규칙(R1~R12), 백엔드 연동 형식 4장·5.1·5.2, RAG 명세
 - 지라: SCRUM-95 (에픽), SCRUM-96 (이 문서), SCRUM-97 (초안 생성), SCRUM-98 (다시 배치), SCRUM-99 (근거·맥락 연결), SCRUM-100 (확정 회의록 검색 대상 넣기)
@@ -10,7 +10,7 @@
 
 | # | 장 | 방향 | 메서드 | 주소 | 용도 | 응답 | 상태 |
 |---|---|---|---|---|---|---|---|
-| 1 | [2장](#2-api-1--초안-생성-요청) | minutes-service → ai-service | `POST` | `/internal/minutes/drafts` | 초안 생성 요청 (양식 변경 시 다시 배치 포함) | `202` / `400` / `503` | **새 API.** 입력의 요약 형식은 요약 담당 합의 대기 |
+| 1 | [2장](#2-api-1--초안-생성-요청) | minutes-service → ai-service | `POST` | `/internal/minutes/drafts` | 초안 생성 요청 (양식 변경 시 다시 배치 포함) | `202` / `400` / `503` | **새 API.** 입력의 요약 형식은 AI-08 명세(`agenda-today-summary-contract.md`)를 따른다 |
 | 2 | [3장](#3-api-2--초안-결과-콜백) | ai-service → minutes-service | `POST` | `{callbackUrl}` | 초안 결과 알림 | `2xx` | **새 API.** 줄 목록은 확정 가능, 글 모양은 화면 대기 |
 | 3 | [4장](#4-api-34--rag-api-수정-scrum-100-ai-service-제안) | minutes-service → ai-service | `POST` | `/internal/rag/documents` | 확정 회의록을 검색 대상으로 넣기 | `202` / `400` / `409` / `503` | **기존 API 수정**: `minutes` 칸 형식만 바뀜 |
 | 4 | [4장](#4-api-34--rag-api-수정-scrum-100-ai-service-제안) | minutes-service → ai-service | `POST` | `/internal/rag/answer` | 회의록 질문 답변 | `200` / `400` / `503` | **기존 API 수정**: 근거 위치 종류 하나 추가 |
@@ -53,7 +53,7 @@ X-Request-Id: (선택)
 | `template` | `object` | 예 | 회의록 양식 |
 | `template.items` | `string[]` | 예 | 칸 이름 목록. 1~20개, 이름마다 1~100자, 서로 겹치지 않는다. 고정 양식이 아니며 사용자가 추가한 칸도 그대로 담는다. 결과는 이 순서·이름 그대로 돌려준다 |
 | `agendas` | [`Agenda[]`](#51-agenda) | 예 | 안건 번호·제목·결정할 사항 |
-| `summary` | [`MeetingSummary`](#52-meetingsummary) | 예 | 점검을 마친 회의 끝 요약. ai-service가 보낸 회의 끝 요약과 같은 형식에 사용자가 고친 내용을 반영한 것 [ai-service 제안, 요약 담당 합의 대기] |
+| `summary` | [`MeetingSummary`](#52-meetingsummary) | 예 | 점검을 마친 회의 끝 요약. ai-service가 안건 보드의 `todaySummary` 칸으로 보낸 값(`final: true`)에 사용자가 고친 내용을 반영한 것 (5.2) |
 | `previousLines` | [`PreviousLine[]`](#57-previousline) | 아니요 | 양식을 바꿔 다시 배치할 때 지금 초안의 줄 전부 (8장). 없거나 빈 목록이면 처음 만들기 [ai-service 제안] |
 | `transcripts` | `array` | 아니요 | 백엔드 원안에 있으나 쓰지 않는다. 초안은 요약에서만 만든다. 보내면 무시한다 [ai-service 제안] |
 | `callbackUrl` | `string` (URL) | 예 | 결과를 보낼 주소. 허용한 호스트만 받는다 (3.3) |
@@ -299,14 +299,14 @@ RAG 명세의 API를 그대로 쓰고, 아래만 **덧붙인다.** 기존 칸과
 
 ### 5.2 MeetingSummary
 
-[요약 담당 합의 대기] 자세한 정의와 이유는 `meeting-summary-proposal.md`에 있다.
-
-회의 종료 뒤 마지막 안건 보드 본문 그대로다. 백엔드는 칸을 더하거나 빼지 않고, 점검에서 고친 내용만 반영한다.
+회의 끝 요약(AI-08)이 안건 보드의 **`todaySummary` 칸**으로 보낸 값 그대로다. 정의는 `agenda-today-summary-contract.md` 3장에 있다. 백엔드는 회의가 끝난 뒤의 값(`final: true`)을 저장했다가, 점검에서 고친 내용만 반영해 그대로 담는다. 칸을 빼거나 더할 필요는 없다 (초안은 `agendas`만 읽는다).
 
 | 칸 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `agendas` | [`SummaryAgenda[]`](#53-summaryagenda와-요약-항목) | 예 | 안건 순서 그대로. 초안은 이 칸만 읽는다 |
-| `version`, `basedOnSeq`, `currentAgendaId`, `offTopic`, `leftover` | 보드 문서 그대로 | 아니요 | 읽지 않는다. 있어도 되고 없어도 된다 |
+| `requestRev`, `final`, `meetingId` | `todaySummary` 그대로 | 아니요 | 읽지 않는다. 있어도 되고 없어도 된다. AI-08 명세 9장의 "`requestRev`, `final`을 빼고 `meetingId`를 붙인다"는 하지 않아도 된다 |
+
+공식 예시(`examples/api/agenda-board-today-summary-put.json`)의 `todaySummary`를 그대로 넣어 초안이 만들어지는지 시험으로 확인한다 (`minutes/tests/test_today_summary.py`).
 
 ### 5.3 SummaryAgenda와 요약 항목
 
@@ -325,7 +325,7 @@ RAG 명세의 API를 그대로 쓰고, 아래만 **덧붙인다.** 기존 칸과
 
 | 칸 | 타입 | 필수 | 설명 |
 |---|---|---|---|
-| `id` | `string` | 예 | 회의 안에서 겹치지 않는 항목 번호. 사람이 점검에서 넣은 항목은 백엔드가 붙인다 (예: `u-1`) |
+| `id` | `string` | 예 | 회의 안에서 겹치지 않는 항목 번호. 뜻이 없는 문자열이며 사람이 고친 항목도 같은 번호를 유지한다 (안건 보드 규칙). 사람이 점검에서 넣은 항목은 백엔드가 붙이고, ai-service 번호와 겹치지 않게 접두어를 쓴다 (예: `u-1`). 초안 줄의 출처(`sources`)가 이 번호를 가리킨다 |
 | `evidenceSeqs` | `int[]` | 예 | 근거 전사 줄. 빈 목록이면 사람이 점검에서 새로 넣은 항목 |
 | `edited` | `boolean` | 예 | 사람이 점검에서 고친 항목이면 `true` |
 | `needsCheck` | `boolean` | 예 | 고친 항목의 근거가 달라져 확인이 필요하면 `true` |
@@ -402,7 +402,7 @@ RAG 명세의 API를 그대로 쓰고, 아래만 **덧붙인다.** 기존 칸과
 | 재료 (`kind`) | 어디서 | 줄의 근거 |
 |---|---|---|
 | `decision` | `status`가 `DECIDED`인 안건의 판정 이유(`statusReason`) | `statusReason.evidenceSeqs` |
-| `undecided` | `status`가 `UNDECIDED`인 안건 | `statusReason.evidenceSeqs` |
+| `undecided` | `status`가 `UNDECIDED`인 안건 | `statusReason.evidenceSeqs`. 미결의 증거가 아니라 그 안건에 연결된 마지막 발언 줄이다 (AI-08 명세 3.2). 판정 이유 글은 코드가 쓴 문구라 줄 글에 쓰지 않는다 |
 | `decisionCheck` | `status`가 `DECISION_CHECK`인 안건 | `statusReason.evidenceSeqs` |
 | `summary` | 안건의 `summary[]` 문장 하나 | 그 문장의 `evidenceSeqs` |
 | `opinion` | 안건의 `opinions[]` 하나 | 그 항목의 `evidenceSeqs` |
@@ -531,7 +531,7 @@ ai-service API가 없다. API 2 결과의 줄(`Line`)에 붙은 정보를 백엔
 |---|---|---|---|
 | 1 | 주소 `/drafts` | `/internal/minutes/drafts` | 내부 API 주소 규칙 |
 | 2 | `transcripts` 필수, 관련 발언 고르기는 AI가 판단 | 쓰지 않음 | 초안은 점검을 마친 요약에서만 만든다 |
-| 3 | `summary` = 4장 형식 (`decisions`, `undecidedAgendaIds`, `uncertain`, `todos`) | 안건별 형식 (`meeting-summary-proposal.md`) | 안건별 논의를 채울 재료, 항목 번호, 수정 표시 |
+| 3 | `summary` = 4장 형식 (`decisions`, `undecidedAgendaIds`, `uncertain`, `todos`) | 안건 보드 `todaySummary` (AI-08, 안건별 형식) | 안건별 논의를 채울 재료, 항목 번호, 수정 표시. AI-08 명세에 반영됨 |
 | 4 | `agendas[].status` | `summary` 안의 상태를 씀 | 같은 정보가 두 곳에 있지 않게 |
 | 5 | 다시 만들기 입력 없음 | `previousLines` | 양식 변경 시 고친 줄 유지 |
 | 6 | 접수 응답 `202`만 | `202` 본문(`ACCEPTED`/`DUPLICATE`), `400`, `503` | 잘못된 요청을 바로 알림 |
@@ -546,19 +546,13 @@ ai-service API가 없다. API 2 결과의 줄(`Line`)에 붙은 정보를 백엔
 
 ## 11. 확인할 것
 
-**요약 담당**
-
-| 항목 | 내용 |
-|---|---|
-| 요약 형식 | `meeting-summary-proposal.md`의 형식을 회의 끝 요약(AI-08) 응답과 API 1의 `summary`로 쓸지 |
-
 **CN팀 (백엔드)**
 
 | 항목 | 내용 |
 |---|---|
 | **초안 줄 저장** | API 2의 줄마다 근거·표시·출처·초안에서 고쳤는지를 저장할 곳. 지금 minutes-service의 칸은 이름과 글만 저장한다. 이것이 없으면 근거 보여 주기(9장)와 다시 배치(8장)를 할 수 없다 |
-| 요약 돌려보내기 | 받은 회의 끝 요약을 저장했다가, 사용자가 점검에서 고친 내용을 반영해 같은 형식으로 `summary`에 담을 수 있는지 (`meeting-summary-proposal.md` 4장) |
-| 쓰는 요약 값 | `summary`는 회의 종료 뒤 마지막 안건 보드(`leftover.final: true`, 가장 큰 `version`) 본문 그대로인지 (5.2) |
+| 요약 돌려보내기 | 안건 보드의 `todaySummary`(`final: true`)를 저장했다가, 사용자가 점검에서 고친 내용을 반영해 같은 형식으로 `summary`에 담을 수 있는지. 고친 항목은 `edited`를 켜고, 새로 넣은 항목은 근거 줄을 비우고 `u-` 같은 접두어로 `id`를 붙임 (5.3) |
+| 쓰는 요약 값 | `summary`는 안건 보드 `todaySummary`의 `final: true` 값 그대로인지. `requestRev`·`final`을 빼거나 `meetingId`를 붙이지 않아도 됨 (5.2) |
 | 점검 수정의 저장 위치 | 점검은 회의 종료 뒤의 일이고 ai-service는 회의 상태를 메모리에만 두어 재시작 때 잃을 수 있으므로, 수정은 백엔드 복사본에 저장하는 쪽이 안전하다 (요약 담당과 함께 정함) |
 | "전사 수정됨" 표시 | 백엔드의 전사 수정 기록으로 표시할 수 있는지 (9장) |
 | 원안과 다른 곳 | 10장의 표 |

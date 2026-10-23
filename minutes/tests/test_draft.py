@@ -6,6 +6,7 @@ import pytest
 
 from minutes.draft import FAILED, INPUT_TOO_LONG, MAX_MATERIALS, SUCCEEDED, make_draft
 from minutes.lines import EMPTY_SECTION
+from minutes.placement import load_prompt
 from minutes_fakes import GOOD, ScriptLLM, load_request
 from rag.llm import LLMError, LLMTimeout
 
@@ -81,6 +82,6 @@ def test_로그에_회의_내용이_남지_않는다(body, caplog):
     make_draft(body, ScriptLLM(GOOD))
     make_draft(body, ScriptLLM("x", "x", "x"))
     text = caplog.text
-    assert "초안 완료" in text and "CHECK_FAILED" in text and "placement-v1" in text
+    assert "초안 완료" in text and "CHECK_FAILED" in text and load_prompt().version in text
     for word in ["배포", "QA", "예산", "회식", "김철수", "안건별 논의", "결정 사항"]:
         assert word not in text

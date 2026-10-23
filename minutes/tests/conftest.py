@@ -1,6 +1,6 @@
 """회의록 초안 시험의 DB 준비.
 
-DB 시험은 MINUTES_TEST_DATABASE_URL(없으면 RAG_TEST_DATABASE_URL)의 DB 를 쓰고, 시험마다 minutes_jobs 표만 비운다.
+DB 시험은 MINUTES_TEST_DATABASE_URL(없으면 RAG_TEST_DATABASE_URL)의 DB 를 쓰고, 시험마다 그리고 끝날 때 minutes_jobs 표만 비운다.
 RAG 표와 개발 DB 는 건드리지 않는다. DB 에 접속할 수 없으면 건너뛰고, MINUTES_REQUIRE_DB=1 이면 실패시킨다.
 """
 import os
@@ -32,6 +32,7 @@ def _db_session():
         _no_db(f"접속 실패 ({type(e).__name__})")      # 메시지에 주소가 섞일 수 있어 예외 이름만
     migrate(conn)
     yield conn
+    conn.execute("TRUNCATE minutes_jobs RESTART IDENTITY")    # 남은 작업을 같은 DB 에 띄운 서버가 처리하지 않게
     conn.close()
 
 

@@ -44,9 +44,13 @@ registry = Registry(cfg_from_env(), publisher=publisher)          # 잘못된 �
 async def lifespan(app):
     if rag_runtime:
         rag_runtime.start()                 # RAG: 연결 풀 열기, 작업자 스레드 시작
+    if minutes_runtime:
+        minutes_runtime.start()             # 회의록 초안: 연결 풀 열기, 작업자 스레드 시작
     yield
     registry.shutting_down = True           # 종료 중에는 503 으로 답해 백엔드가 나중에 다시 보내게 한다
     publisher.wait_idle(5.0)
+    if minutes_runtime:
+        minutes_runtime.stop()              # 회의록 초안: 처리 중인 작업을 마치고 멈춤
     if rag_runtime:
         rag_runtime.stop()                  # RAG: 처리 중인 작업을 마치고 멈춤
     metrics.shutdown()
@@ -59,6 +63,12 @@ rag_runtime = None
 if os.environ.get("RAG_DATABASE_URL"):
     from rag.runtime import setup as rag_setup
     rag_runtime = rag_setup(app, os.environ)
+
+# 회의록 초안 (minutes/): MINUTES_DATABASE_URL 이 있을 때만 붙인다. RAG 와 따로 켜고 끈다
+minutes_runtime = None
+if os.environ.get("MINUTES_DATABASE_URL"):
+    from minutes.runtime import setup as minutes_setup
+    minutes_runtime = minutes_setup(app, os.environ)
 
 
 def invalid(detail):

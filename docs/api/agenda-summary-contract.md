@@ -51,6 +51,7 @@ AI-08은 새로 요약하지 않고 이 요약을 모아 배치한다. 그래서
 | `currentAgendaId` | 안건 번호 또는 null | 지금 논의 중인 안건. 줄별 분류 결과(`agenda-classification`)의 `currentAgendaId`와 같은 값이다. 아직 연결된 줄이 없으면 `null` |
 | `agendas` | 배열 | 안건 목록의 모든 안건. 항목은 4.2 |
 | `offTopic` | 객체 또는 null | 주제 변경 감지(AI-06). 제안이 떠 있을 때만 객체이고 아니면 `null`. 모양은 `agenda-offtopic-contract.md` 3장 |
+| `leftover` | 객체 또는 null | 미결 안건 추출(AI-07). 종료 버튼 요청을 받았거나 회의가 끝났을 때만 객체이고 아니면 `null`. 모양은 `agenda-leftover-contract.md` 3장 |
 
 ### 4.2 agendas의 항목
 
@@ -245,6 +246,7 @@ AI-02·03·04·05·06의 결과가 모두 안건 보드로 모이도록, 어디�
 | 안건 상태와 판정 근거 | 보드 `agendas[].status`, `statusReason` (`agenda-status-contract.md`) | AI-04 |
 | 의견·근거 | 보드 `agendas[].opinions` | AI-05 |
 | 주제 변경 | 보드 `offTopic` | AI-06 |
+| 미결 안건 목록과 논의 요약 | 보드 `leftover` (`agenda-leftover-contract.md`) | AI-07 |
 
 연동 API 초안 3.2와 다른 점은 `summary`의 형식 하나이다. 나머지 칸은 초안을 그대로 쓴다.
 

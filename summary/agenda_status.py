@@ -194,15 +194,16 @@ class AgendaStatusJudge:
         return {"agendas": agendas, "keys": keys, "rows": rows, "current": current, "ids": ids, "now_ms": now_ms}
 
     # ---------------- 판정 ----------------
-    def process(self, final=False):
-        """판정할 때가 된 안건을 판정한다. 반환: 모델을 부른 횟수."""
+    def process(self, final=False, flush=False):
+        """판정할 때가 된 안건을 판정한다. 반환: 모델을 부른 횟수.
+        flush: 새 줄이 1개일 때 기다리는 규칙만 건너뛴다(종료 버튼을 눌렀을 때). 종료 확정(final)은 켜지 않는다."""
         view = self._view()
         with self.lock:
             if final:
                 self.final = True
             if self.halted:
                 return 0
-            jobs = self._plan(view, final)
+            jobs = self._plan(view, final or flush)
         calls = 0
         for job in jobs:
             calls += self._run_job(job)
@@ -333,9 +334,11 @@ class AgendaStatusJudge:
         log.info("안건 상태 판정 meeting=%s verdict=%s calls=%s", self.c.meeting_id, verdict, self.calls)
 
     # ---------------- 출력 ----------------
-    def board_status(self):
+    def board_status(self, preview_final=False):
         """안건 key -> {"status", "reason": {"text", "evidenceSeqs"} 또는 None}. 안건 보드에 합쳐 보낸다.
-        모델이 판정하지 않는 상태(아직 안 다룸, 논의 중, 미결)의 근거는 규칙으로 만든다."""
+        모델이 판정하지 않는 상태(아직 안 다룸, 논의 중, 미결)의 근거는 규칙으로 만든다.
+        preview_final: 종료 확정을 가정한 값을 돌려준다(논의 중이던 안건은 미결). 판정기 상태는 바꾸지 않는다.
+        종료 버튼을 눌렀을 때 미결 목록(AI-07)을 만드는 데 쓴다. 이어서 논의하기로 돌아가면 보드의 상태는 그대로 논의 중이다."""
         view = self._view()
         with self.lock:
             out = {}
@@ -354,6 +357,9 @@ class AgendaStatusJudge:
                 elif self.final:
                     out[key] = {"status": UNDECIDED, "reason": {
                         "text": f"회의가 끝날 때까지 결정 표현을 찾지 못함 (연결된 발언 {n}줄)", "evidenceSeqs": [last]}}
+                elif view["current"] == key and preview_final:
+                    out[key] = {"status": UNDECIDED, "reason": {
+                        "text": f"종료를 요청한 시점까지 결정 표현을 찾지 못함 (연결된 발언 {n}줄)", "evidenceSeqs": [last]}}
                 elif view["current"] == key:
                     out[key] = {"status": DISCUSSING, "reason": {
                         "text": f"연결된 발언 {n}줄이 이어지는 중", "evidenceSeqs": [last]}}
@@ -504,6 +510,32 @@ def selftest():
     assert j.process() == 0
     assert j.process(final=True) == 1 and stat(j)["status"] == UNDECIDED and "끝날 때까지" in stat(j)["reason"]["text"]
     assert j.board_status()["a2"]["status"] == NOT_STARTED, "줄이 없는 안건은 끝나도 아직 안 다룸"
+
+    # 12-2) flush: 기다리는 규칙만 건너뛰고 종료 확정은 켜지 않는다 (종료 버튼, AI-07)
+    seen = []
+    c, j = fresh(llm=lambda u: seen.append(u) or answer("decided", "합의함", [(1, 1)]))
+    feed(c, [ln(1, 0, "배포 일정 확정해요")], 1000)
+    assert j.process() == 0 and not seen, "줄 1개는 기다린다"
+    assert j.process(flush=True) == 1 and len(seen) == 1 and j.final is False, "flush는 기다리지 않지만 확정하지는 않는다"
+    assert stat(j)["status"] == DECIDED
+    assert j.process(flush=True) == 0, "새 줄이 없으면 flush해도 다시 부르지 않는다"
+
+    # 12-3) preview_final: 종료를 가정한 상태를 돌려주되 판정기 상태는 바꾸지 않는다. 끝난 뒤에는 확정한 값과 같다
+    c, j = fresh(llm=lambda u: answer("none"))
+    feed(c, [ln(1, 0, "배포 일정 얘기"), ln(2, 4000, "배포 날짜 후보")], 5000)
+    j.process()
+    assert stat(j)["status"] == DISCUSSING
+    pv = j.board_status(preview_final=True)
+    assert pv["a1"]["status"] == UNDECIDED and "종료를 요청한" in pv["a1"]["reason"]["text"] and pv["a1"]["reason"]["evidenceSeqs"] == [2], pv
+    assert pv["a2"] == {"status": NOT_STARTED, "reason": None} and j.final is False
+    assert j.board_status()["a1"]["status"] == DISCUSSING, "미리보기는 판정기 상태를 바꾸지 않는다(이어서 논의하기로 돌아갈 수 있다)"
+    j.process(final=True)
+    assert j.board_status()["a1"]["status"] == UNDECIDED and "끝날 때까지" in j.board_status()["a1"]["reason"]["text"]
+    assert j.board_status(preview_final=True) == j.board_status(), "확정한 뒤에는 미리보기와 같다"
+    c, j = fresh(llm=lambda u: answer("decided", "합의함", [(1, 1)]))
+    feed(c, [ln(1, 0, "배포 일정 확정해요"), ln(2, 4000, "네 좋아요 배포 일정")], 5000)
+    j.process()
+    assert j.board_status(preview_final=True)["a1"]["status"] == DECIDED, "결정은 미리보기에서도 결정"
 
     # 13) 호출이 연속 3번 실패하면 모델 판정만 멈춘다. 규칙 판정은 계속
     def boom(u):

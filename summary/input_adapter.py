@@ -276,6 +276,18 @@ def adapt_offtopic_action(msg):
     return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "action": action, "rev": rev, "at_ms": at_ms}
 
 
+def adapt_end_request(msg):
+    """종료 버튼 요청 (agenda-leftover-contract.md 4장)
+    -> {"meeting_id", "action", "rev"}. action: request(종료 버튼을 누름) / cancel(이어서 논의하기).
+    rev 는 회의 안에서 커지는 정수이며 시작값은 상관없다(무시 알림의 rev 와 같은 규칙)."""
+    meeting_id, raw_id = _meeting_id(msg, "end-requests")
+    action = _need(msg, "action", str, "end-requests")
+    if action not in ("request", "cancel"):
+        raise AdapterError(f"end-requests: 'action' 은 request 또는 cancel 이어야 함 ({action})")
+    rev = _need(msg, "rev", int, "end-requests")
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "action": action, "rev": rev}
+
+
 # --------------------------------------------------------------------------------------
 def selftest():
     from meeting_summary import TranscriptStore, build_input
@@ -520,8 +532,21 @@ def selftest():
         except AdapterError:
             pass
 
+    # 종료 버튼 요청 (AI-07)
+    e = adapt_end_request({"meetingId": 7, "action": "request", "rev": 3})
+    assert e == {"meeting_id": "7", "meeting_id_raw": 7, "action": "request", "rev": 3}, e
+    assert adapt_end_request({"meetingId": "m", "action": "cancel", "rev": 0})["action"] == "cancel"
+    for bad in ({"meetingId": "m"}, {"meetingId": "m", "action": "end", "rev": 1}, {"meetingId": "m", "action": "request"},
+                {"meetingId": "m", "action": "request", "rev": "1"}, {"meetingId": "m", "action": "request", "rev": True},
+                {"action": "request", "rev": 1}, {"meetingId": "m", "action": 3, "rev": 1}):
+        try:
+            adapt_end_request(bad)
+            raise SystemExit(f"잘못된 종료 버튼 요청을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+
     print("입력 어댑터 자체 시험 통과 (이벤트 4종, 줄 변환, edits, manual, speakerLabel, 잘못된 입력, 안건 목록, 고친 분류, meetingId 문자열·정수, 고친 요약, "
-          "참석자 명단, 고친 의견·할 일, 주제 변경 무시 요청)")
+          "참석자 명단, 고친 의견·할 일, 주제 변경 무시 요청, 종료 버튼 요청)")
 
 
 if __name__ == "__main__":

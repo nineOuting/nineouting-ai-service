@@ -33,3 +33,11 @@ class Material:
     def source(self) -> dict:
         """결과의 sources·unplaced 항목."""
         return {"agendaId": self.agenda_id, "kind": self.kind, "id": self.item_id}
+
+
+@dataclass(frozen=True)
+class Placement:
+    """검사를 통과한 AI 배치 결과. 모든 재료가 sections 나 unplaced 중 한 곳에만 있다."""
+    sections: dict[str, int]        # 재료 번호 → 칸 위치 (template.items 의 0부터 순서)
+    texts: dict[str, str]           # 재료 번호 → AI 가 다듬은 글. AI 가 다듬는 재료만 쓰고, 고정 재료의 글은 무시한다
+    unplaced: tuple[str, ...]       # 어느 칸에도 넣지 못한 재료 번호

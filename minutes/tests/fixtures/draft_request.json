@@ -1,0 +1,68 @@
+{
+  "requestId": "6f1c2a9e-1b7d-4c55-9d1a-3a8e0f4b2c10",
+  "minutesId": 41,
+  "meetingId": 31,
+  "title": "주간 회의 (합성 시험 데이터)",
+  "meetingStartAt": "2026-10-20T14:00:00",
+  "attendees": [{"userId": 7, "name": "김철수"}, {"userId": 8, "name": "이영희"}],
+  "template": {"items": ["안건별 논의", "결정 사항", "미결 안건", "할 일"]},
+  "agendas": [
+    {"agendaId": 101, "title": "배포 일정", "decisionPoint": "배포 날짜 확정"},
+    {"agendaId": 102, "title": "예산", "decisionPoint": "광고 예산 승인"},
+    {"agendaId": 103, "title": "회식 장소", "decisionPoint": null},
+    {"agendaId": 104, "title": "채용 일정", "decisionPoint": "서류 마감일"}
+  ],
+  "summary": {
+    "meetingId": 31,
+    "agendas": [
+      {
+        "agendaId": 101,
+        "status": "DECIDED",
+        "statusReason": {"text": "1차 배포를 10월 30일(목)로 정하고 참석자가 동의함", "evidenceSeqs": [40, 42]},
+        "summary": [
+          {"id": "k3f9a1-1", "text": "1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴", "evidenceSeqs": [38, 39], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [
+          {"id": "k3f9a1-7", "text": "목요일은 QA 일정과 겹쳐 부담이 된다는 우려", "kind": "CONCERN", "evidenceSeqs": [41], "edited": false, "needsCheck": false}
+        ],
+        "todos": [
+          {"id": "k3f9a1-10", "task": "QA 일정표 공유", "assigneeName": "김철수", "assigneeStatus": "MATCHED", "assigneeUserId": 7, "dueText": "수요일까지", "evidenceSeqs": [43], "edited": false, "needsCheck": false, "unclear": false}
+        ]
+      },
+      {
+        "agendaId": 102,
+        "status": "UNDECIDED",
+        "statusReason": {"text": "광고 예산 승인 여부를 정하지 못함", "evidenceSeqs": [88]},
+        "summary": [
+          {"id": "k3f9a1-3", "text": "광고 예산은 월 사용량을 확인한 뒤 정하기로 함", "evidenceSeqs": [86, 87], "edited": true, "needsCheck": false}
+        ],
+        "opinions": [],
+        "todos": [
+          {"id": "u-1", "task": "회의실 예약", "assigneeName": "이영희", "assigneeStatus": null, "assigneeUserId": null, "dueText": null, "evidenceSeqs": [], "edited": true, "needsCheck": false, "unclear": false}
+        ]
+      },
+      {
+        "agendaId": 103,
+        "status": "DECISION_CHECK",
+        "statusReason": {"text": "강남역 근처로 하자는 말은 있으나 합의 표현이 없음", "evidenceSeqs": [101, 102]},
+        "summary": [],
+        "opinions": [
+          {"id": "k3f9a1-20", "text": "회식 예산이 1인당 3만 원을 넘으면 안 된다는 의견", "kind": "OPINION", "evidenceSeqs": [103], "edited": false, "needsCheck": true}
+        ],
+        "todos": [
+          {"id": "k3f9a1-21", "task": "식당 후보 알아보기", "assigneeName": null, "assigneeStatus": "UNASSIGNED", "assigneeUserId": null, "dueText": null, "evidenceSeqs": [104], "edited": false, "needsCheck": false, "unclear": true}
+        ]
+      },
+      {
+        "agendaId": 104,
+        "status": "NOT_STARTED",
+        "statusReason": null,
+        "summary": [],
+        "opinions": [],
+        "todos": []
+      }
+    ]
+  },
+  "previousLines": [],
+  "callbackUrl": "http://minutes-service:8084/internal/minutes/41/draft-result"
+}

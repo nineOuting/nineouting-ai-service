@@ -42,6 +42,29 @@ class PlaceAllFakeLLM:
         return Reply(json.dumps({"placements": placements, "unplaced": []}, ensure_ascii=False), None, None)
 
 
+class Recorder:
+    """AI 호출을 감싸 지시문·입력·원래 답·토큰을 기록한다 (--show-io)."""
+
+    def __init__(self, llm):
+        self.llm, self.calls = llm, []
+        self.name, self.model = llm.name, llm.model
+
+    def generate(self, system, user, timeout_s):
+        reply = self.llm.generate(system, user, timeout_s)
+        self.calls.append((system, user, reply))
+        return reply
+
+
+def show_io(calls):
+    for i, (system, user, reply) in enumerate(calls, 1):
+        print(f"\n========== AI 호출 {i}번 ==========")
+        if i == 1:
+            print(f"--- 지시문 (system)\n{system}")
+        print(f"--- 입력 (user)\n{user}")
+        print(f"--- AI 답 (원래 글)\n{reply.text}")
+        print(f"--- 토큰: 입력 {reply.input_tokens}, 출력 {reply.output_tokens}")
+
+
 def real_llm():
     env = {**load_env_file(ENV_FILE), **os.environ}
     try:
@@ -70,16 +93,19 @@ def main():
     p.add_argument("--timeout", type=float, default=60.0, help="AI 응답을 기다리는 초")
     p.add_argument("--retries", type=int, default=2, help="검사에 걸렸을 때 다시 시키는 횟수")
     p.add_argument("--json", action="store_true", help="결과 JSON 전체도 출력")
+    p.add_argument("--show-io", action="store_true", help="AI 호출마다 지시문·입력·원래 답·토큰을 출력")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="[로그] %(message)s")
     body = json.loads(args.file.read_text(encoding="utf-8"))
-    llm = real_llm() if args.real else PlaceAllFakeLLM()
+    llm = Recorder(real_llm() if args.real else PlaceAllFakeLLM())
     print(f"요청: {args.file.name} / AI: {llm.name} ({llm.model})", flush=True)
     try:
         result = make_draft(body, llm, timeout_s=args.timeout, max_retries=args.retries)
     except (KeyError, TypeError) as e:          # 요청 검사(request.py)를 붙이기 전까지
         sys.exit(f"요청 형식이 맞지 않음: {type(e).__name__} {e}")
+    if args.show_io:
+        show_io(llm.calls)
     show(result)
     if args.json:
         print("\n" + json.dumps(result, ensure_ascii=False, indent=2))

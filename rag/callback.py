@@ -24,9 +24,10 @@ class CallbackNotAllowed(ValueError):
     """콜백 주소가 형식에 맞지 않거나 허용 목록에 없다."""
 
 
-def allowed_hosts_from_env(env):
-    """RAG_CALLBACK_ALLOWED_HOSTS="host" 또는 "host:port" 를 쉼표로. 비어 있으면 None (모두 허용, 개발용)."""
-    raw = (env.get("RAG_CALLBACK_ALLOWED_HOSTS") or "").strip()
+def allowed_hosts_from_env(env, key="RAG_CALLBACK_ALLOWED_HOSTS"):
+    """RAG_CALLBACK_ALLOWED_HOSTS="host" 또는 "host:port" 를 쉼표로. 비어 있으면 None (모두 허용, 개발용).
+    회의록 초안은 key="MINUTES_CALLBACK_ALLOWED_HOSTS" 로 따로 읽는다."""
+    raw = (env.get(key) or "").strip()
     if not raw:
         return None
     return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
@@ -72,13 +73,14 @@ class CallbackSender:
         self.sender = sender                   # 시험용: fn(url, body, headers) -> (성공, 재시도 가능, 상태 코드)
         self.sleep = sleep
 
-    def send(self, url, body, request_id=None):
-        """보냈으면 True. 끝내 실패하면 False (로그만 남기고 예외는 내지 않는다)."""
-        doc_id = body.get("docId")
+    def send(self, url, body, request_id=None, ref=None):
+        """보냈으면 True. 끝내 실패하면 False (로그만 남기고 예외는 내지 않는다).
+        ref 는 로그에 남길 대상 표시다. 없으면 doc=<docId> (RAG). 회의록 초안은 minutes_request=<requestId> 를 넘긴다."""
+        ref = ref or f"doc={body.get('docId')}"
         try:
             check_callback_url(url, self.allowed)
         except CallbackNotAllowed as e:
-            log.error("콜백 거부 doc=%s reason=%s", doc_id, e)
+            log.error("콜백 거부 %s reason=%s", ref, e)
             return False
         headers = {"Content-Type": "application/json", **auth_headers()}
         if request_id:
@@ -86,12 +88,12 @@ class CallbackSender:
         for attempt in range(len(self.backoffs) + 1):
             ok, retryable, code = self._send(url, body, headers)
             if ok:
-                log.info("콜백 성공 doc=%s status=%s request_id=%s", doc_id, code, request_id)
+                log.info("콜백 성공 %s status=%s request_id=%s", ref, code, request_id)
                 return True
             if not retryable or attempt == len(self.backoffs):
-                log.error("콜백 실패 doc=%s status=%s request_id=%s", doc_id, code, request_id)
+                log.error("콜백 실패 %s status=%s request_id=%s", ref, code, request_id)
                 return False
-            log.warning("콜백 재시도 doc=%s status=%s %s번째", doc_id, code, attempt + 1)
+            log.warning("콜백 재시도 %s status=%s %s번째", ref, code, attempt + 1)
             self.sleep(self.backoffs[attempt])
         return False
 

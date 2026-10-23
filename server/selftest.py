@@ -1459,7 +1459,7 @@ def test_agenda_leftover_isolated():
     assert st["errors"] > 0 and boards() and by_agenda(boards()[-1], 101)["status"] == "UNDECIDED", st
     assert st["agendaClassification"]["classified"] == 2 and st["publisher"]["enabled"]
 
-    real_meta = Registry._leftover_meta
+    real_meta = Registry.__dict__["_leftover_meta"]                     # staticmethod 객체 그대로 보관해야 되돌릴 때 모양이 바뀌지 않는다
 
     def broken(m):
         raise RuntimeError("읽기 실패")
@@ -1474,6 +1474,7 @@ def test_agenda_leftover_isolated():
     b = boards()[-1]
     assert b["leftover"] is None and by_agenda(b, 101)["agendaId"] == 101, "읽기 실패는 칸만 비우고 보드는 보낸다"
     assert reg.status(path)["errors"] > 0
+    assert isinstance(Registry.__dict__["_leftover_meta"], staticmethod), "시험이 끝난 뒤 원래대로 돌아와야 한다"
 
 
 def test_api_end_request():

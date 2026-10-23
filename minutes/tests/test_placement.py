@@ -1,50 +1,17 @@
 """AI 에게 묻기·검사·다시 시키기 시험. AI 는 정해 둔 답을 차례로 내는 가짜를 쓴다."""
-import json
-from pathlib import Path
-
 import pytest
 
 from minutes import placement as placement_mod
 from minutes.materials import build_materials
 from minutes.placement import (CHECK_FAILED, LLM_FAILED, LLM_TIMEOUT, PromptError, build_user, check, load_prompt,
                                parse_reply, place)
-from rag.llm import LLMError, LLMTimeout, Reply
-
-FIXTURE = Path(__file__).parent / "fixtures" / "draft_request.json"
-ITEMS = ["안건별 논의", "결정 사항", "미결 안건", "할 일"]
-
-# 다듬기 재료: m1(결정), m2(요약), m3(우려), m9(의견). 나머지는 고정
-GOOD = {
-    "placements": [
-        {"m": "m1", "section": 2, "text": "1차 배포를 10월 30일(목)로 정했다."},
-        {"m": "m2", "section": 1, "text": "1차 배포일을 다음 주 목요일로 하자는 제안이 나왔다."},
-        {"m": "m3", "section": 1, "text": "목요일은 QA 일정과 겹쳐 부담이 된다는 우려가 있었다."},
-        {"m": "m4", "section": 4}, {"m": "m5", "section": 3}, {"m": "m6", "section": 1},
-        {"m": "m7", "section": 4}, {"m": "m8", "section": 3}, {"m": "m10", "section": 4},
-    ],
-    "unplaced": ["m9"],
-}
-
-
-class ScriptLLM:
-    """정해 둔 답(글 또는 예외)을 차례로 낸다. 받은 입력을 기록한다."""
-    name = "script"
-    model = "script"
-
-    def __init__(self, *replies):
-        self.replies, self.calls = list(replies), []
-
-    def generate(self, system, user, timeout_s):
-        self.calls.append((system, user, timeout_s))
-        r = self.replies.pop(0)
-        if isinstance(r, Exception):
-            raise r
-        return Reply(r if isinstance(r, str) else json.dumps(r, ensure_ascii=False), 100, 20)
+from minutes_fakes import GOOD, ITEMS, ScriptLLM, load_request
+from rag.llm import LLMError, LLMTimeout
 
 
 @pytest.fixture
 def materials():
-    body = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    body = load_request()
     return build_materials(body["agendas"], body["summary"])
 
 

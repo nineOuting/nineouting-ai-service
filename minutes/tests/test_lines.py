@@ -49,6 +49,18 @@ def test_줄_앞에_안건_제목을_붙이고_고정_글과_AI_글을_쓴다(ma
     assert section(sections, "결정 사항")["evidence"][0]["sentence"] == "배포 일정: 1차 배포를 10월 30일(목)로 정했다."
 
 
+def test_결정할_사항이_없으면_안건_제목이_두_번_나오지_않는다(materials):
+    sections, _ = build_sections(ITEMS, materials, placement())
+    assert [line["sentence"] for line in section(sections, "미결 안건")["evidence"]] == [
+        "예산: 광고 예산 승인",
+        "회식 장소: (결정 확인 필요: 강남역 근처로 하자는 말은 있으나 합의 표현이 없음)",
+    ]
+    body = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    body["agendas"][1]["decisionPoint"] = None
+    sections, _ = build_sections(ITEMS, build_materials(body["agendas"], body["summary"]), placement())
+    assert section(sections, "미결 안건")["evidence"][0]["sentence"] == "예산"
+
+
 def test_칸_안_순서는_AI_순서가_아니라_재료_순서(materials):
     shuffled = dict(reversed(list(SECTIONS.items())))
     sections, _ = build_sections(ITEMS, materials, placement(sections=shuffled))

@@ -55,10 +55,19 @@ def test_미결은_결정할_사항을_쓰고_근거는_판정_이유의_줄(req
     assert (m.edited, m.needs_check) == (False, False)
 
 
-def test_결정_확인_필요는_판정_이유를_붙이고_결정할_사항이_없으면_안건_제목(request_body):
+def test_결정_확인_필요는_판정_이유를_붙이고_결정할_사항이_없으면_표시만(request_body):
     m = by_kind(materials_of(request_body), "decisionCheck")[0]
-    assert m.fixed_text == "회식 장소 (결정 확인 필요: 강남역 근처로 하자는 말은 있으나 합의 표현이 없음)"
+    assert m.fixed_text == "(결정 확인 필요: 강남역 근처로 하자는 말은 있으나 합의 표현이 없음)"
     assert m.evidence_seqs == (101, 102)
+    request_body["agendas"][2]["decisionPoint"] = "회식 장소 확정"
+    m = by_kind(materials_of(request_body), "decisionCheck")[0]
+    assert m.fixed_text == "회식 장소 확정 (결정 확인 필요: 강남역 근처로 하자는 말은 있으나 합의 표현이 없음)"
+
+
+def test_결정할_사항이_없는_미결은_글이_비어_안건_제목만_남는다(request_body):
+    request_body["agendas"][1]["decisionPoint"] = None
+    m = by_kind(materials_of(request_body), "undecided")[0]
+    assert m.fixed_text == ""
 
 
 def test_아직_안_다룬_안건은_줄이_없다(request_body):

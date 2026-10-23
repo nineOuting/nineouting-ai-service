@@ -26,8 +26,9 @@ def build_sections(items: list[str], materials: list[Material], placement: Place
 
 
 def line_text(m: Material, placement: Placement) -> str:
+    """글이 비면(결정할 사항이 없는 미결 안건) 안건 제목만 쓴다."""
     body = m.fixed_text if m.fixed_text is not None else placement.texts[m.ref]
-    return f"{m.agenda_title}: {body}"
+    return f"{m.agenda_title}: {body}" if body else m.agenda_title
 
 
 def line_of(m: Material, placement: Placement) -> dict:

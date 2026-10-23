@@ -61,12 +61,14 @@ def _status_items(ai, agenda, info):
         return [_item(ai, "decision", 0, status_line, "결정", why, fixed=None)] if why else []
     if status not in ("UNDECIDED", "DECISION_CHECK"):
         return []
-    point = (info.get("decisionPoint") or "").strip() or info["title"]
+    # 결정할 사항이 없으면 글을 비워, 줄에는 안건 제목만 남게 한다 (lines.line_text). 제목이 두 번 나오지 않게
+    point = (info.get("decisionPoint") or "").strip()
     if status == "UNDECIDED":
         kind, label, text = "undecided", "미결", point
     else:
         kind, label = "decisionCheck", "결정 확인 필요"
-        text = f"{point} (결정 확인 필요: {why})" if why else f"{point} (결정 확인 필요)"
+        mark = f"(결정 확인 필요: {why})" if why else "(결정 확인 필요)"
+        text = f"{point} {mark}" if point else mark
     return [_item(ai, kind, 0, status_line, label, text, fixed=text)]
 
 

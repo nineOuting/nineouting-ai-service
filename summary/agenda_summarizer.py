@@ -38,6 +38,7 @@ if HERE not in sys.path:
 from meeting_summary import (SYSTEM_PROMPT, build_input, validate_items, call_llm, parse_llm_json, mmss)  # noqa: E402
 from meeting_live_summary_v2 import echo_llm, window_range  # noqa: E402
 from agenda_classifier import _clean  # noqa: E402
+from agenda_leftover import build_leftover  # noqa: E402
 
 log = logging.getLogger("ai-service.agenda-summary")
 
@@ -382,20 +383,22 @@ class AgendaSummarizer:
                     it["needs_check"] = True
 
     # ---------------- 출력 ----------------
-    def take_board(self, status_info=None, opinions=None, todos=None, based_extra=0, off_topic=None):
+    def take_board(self, status_info=None, opinions=None, todos=None, based_extra=0, off_topic=None, leftover=None):
         """안건 보드의 전체 상태. 안건 목록을 아직 못 받았거나 마지막으로 낸 것과 같으면 None.
         돌려준 내용은 보낸 것으로 기록한다.
         status_info: 안건 key -> {"status", "reason"} (AgendaStatusJudge.board_status). 없으면 status 는 None으로 낸다.
         opinions, todos: 안건 key -> 보드에 담을 항목 목록 (AgendaOpinions, AgendaTodos 의 board_items). 없으면 빈 배열로 낸다.
         based_extra: 의견·할 일이 반영한 가장 큰 seq (basedOnSeq 계산에 합친다).
-        off_topic: 주제 변경 제안 (AgendaOffTopic.board). 없으면 null 로 낸다. 바뀌면 보드도 바뀐 것으로 본다."""
+        off_topic: 주제 변경 제안 (AgendaOffTopic.board). 없으면 null 로 낸다. 바뀌면 보드도 바뀐 것으로 본다.
+        leftover: 미결 안건 목록의 재료 {"requestRev", "final", "status_info"} (AgendaLeftover.state + board_status(preview_final=True)).
+                  없으면 leftover 칸은 null 이다. 넘길 후보를 거르고 요약 문장을 복사해 담는다(agenda_leftover.build_leftover)."""
         view = self._view()
         with self.lock:
             if not view["agendas"]:
                 return None
             self._refresh_flags(view)
             by_id = view["by_id"]
-            agendas = []
+            agendas, ents = [], []
             for a in view["agendas"]:
                 st = self.ag.get(a["key"]) or _new_state()
                 rows = [it for it in st["items"] if it["evidence"]]
@@ -409,15 +412,17 @@ class AgendaSummarizer:
                     r = si["reason"] if si else None
                     ent["statusReason"] = {"text": r["text"], "evidenceSeqs": list(r["evidenceSeqs"])} if r else None
                 agendas.append(ent)
+                ents.append((a["key"], ent))
+            lf = build_leftover(leftover, ents) if leftover else None
             cur_id = view["ids"].get(view["current"]) if view["current"] is not None else None
-            sig = _h(json.dumps([cur_id, agendas, off_topic], ensure_ascii=False, sort_keys=True))
+            sig = _h(json.dumps([cur_id, agendas, off_topic, lf], ensure_ascii=False, sort_keys=True))
             if sig == self.sent_sig:
                 return None
             self.sent_sig = sig
             self.version = max(int(self.now() * 1000), self.version + 1)
             based = max(max((s for st in self.ag.values() for s in st["reflected"]), default=0), based_extra)
             return {"version": self.version, "basedOnSeq": based, "currentAgendaId": cur_id,
-                    "agendas": agendas, "offTopic": dict(off_topic) if off_topic else None}
+                    "agendas": agendas, "offTopic": dict(off_topic) if off_topic else None, "leftover": lf}
 
     def info(self):
         """상태 조회용. 전사 내용, 안건 제목, 요약 문장은 넣지 않는다."""
@@ -714,6 +719,32 @@ def selftest():
     assert "18. 지금 주는 전사는" in AGENDA_SYSTEM_PROMPT and "[사람이 확정한 항목" in seen[-1] and "[이전 요약" in seen[-1]
     assert "- (근거 줄 1~1) 사람이 쓴 문장" in seen[-1] and "제목: 배포 일정" in seen[-1] and "항목은 " in seen[-1]
     assert seen[0].count("[이전 요약") == 0, "처음에는 이전 요약이 없다"
+
+    # 17-2) leftover (AI-07): 없으면 null. 있으면 넘길 후보만 담고 요약 문장은 복사해 담는다. 바뀌면 보드를 다시 낸다
+    c, s = fresh()
+    feed(c, [ln(1, 0, "배포는 목요일로"), ln(2, 4000, "배포 날짜는 목요일")], 5000)
+    s.process()
+    main_status = {"a1": {"status": "DISCUSSING", "reason": {"text": "논의 중", "evidenceSeqs": [2]}}, "a2": {"status": "NOT_STARTED", "reason": None}}
+    preview = {"a1": {"status": "UNDECIDED", "reason": {"text": "종료 요청까지 결정 없음", "evidenceSeqs": [2]}}, "a2": {"status": "NOT_STARTED", "reason": None}}
+    lf_meta = lambda rev, final=False: {"requestRev": rev, "final": final, "status_info": preview}
+    b = s.take_board(status_info=main_status)
+    assert b["leftover"] is None and "leftover" in b
+    b = s.take_board(status_info=main_status, leftover=lf_meta(3))
+    assert b is not None, "leftover 가 생기면 보드가 바뀐 것이다"
+    lf = b["leftover"]
+    assert lf["requestRev"] == 3 and lf["final"] is False and [x["agendaId"] for x in lf["agendas"]] == ["a1", "a2"], lf
+    assert board_of(b, "a1")["status"] == "DISCUSSING" and lf["agendas"][0]["status"] == "UNDECIDED", "보드의 상태는 그대로, 목록은 종료를 가정한 값"
+    assert lf["agendas"][0]["summary"] == board_of(b, "a1")["summary"] and lf["agendas"][0]["summary"], "보드의 요약 문장과 같다"
+    assert lf["agendas"][0]["summary"] is not board_of(b, "a1")["summary"], "복사해 담는다"
+    assert lf["agendas"][1]["summary"] == [] and lf["agendas"][1]["statusReason"] is None
+    assert s.take_board(status_info=main_status, leftover=lf_meta(3)) is None, "같은 내용이면 다시 보내지 않는다"
+    b = s.take_board(status_info=main_status, leftover=lf_meta(4))
+    assert b and b["leftover"]["requestRev"] == 4, "요청 번호가 바뀌면 다시 보낸다"
+    b = s.take_board(status_info=main_status, leftover=lf_meta(4, True))
+    assert b and b["leftover"]["final"] is True
+    b = s.take_board(status_info=main_status)
+    assert b and b["leftover"] is None, "이어서 논의하기: 칸이 null 로 돌아간다"
+    json.dumps(b)
 
     # 18) 로그에는 전사, 안건 제목, 요약 문장이 남지 않는다
     logging.getLogger("ai-service").removeHandler(h)

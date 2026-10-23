@@ -39,6 +39,7 @@ flowchart LR
 | 안건 상태 판정 | 구현, 평가 전 | 안건마다 아직 안 다룸·논의 중·결정·미결·결정 확인 필요 중 하나와 근거 줄을 안건 보드에 담음. 줄이 있는 안건만 모델이 결정 여부를 판정하고, 결정에는 근거 줄이 필수 (`docs/api/agenda-status-contract.md`) |
 | 안건별 의견·할 일 정리 | 구현, 평가 전 | 안건마다 주요 의견·근거와 할 일(담당자·기한)을 안건 보드에 담음. 의견과 할 일은 모델을 따로 부르고 그 안건의 원문 줄만 입력으로 씀. 참석자 명단은 안건 목록 요청의 선택 필드로 받아 담당자 이름을 코드로 맞춤. 사람이 고친 항목은 고정하고 근거가 달라지면 "확인 필요" 표시 (`docs/api/agenda-opinions-contract.md`) |
 | 주제 변경 감지·새 안건 제안 | 구현, 평가 전 | 등록된 안건과 관계없는 이야기(해당 없음)가 끊김 없이 180초 이어지면 안건 보드 `offTopic`에 새 안건 제안(제목 포함)을 담음. 무시한 뒤 180초 더 이어지면 "지금 다른 이야기" 알림. 감지는 분류 결과만 읽고, 모델은 제목을 만들 때 한 번만 부름 (`docs/api/agenda-offtopic-contract.md`) |
+| 미결 안건 추출 | 구현, 모델 호출 없음 | 종료 버튼을 누르면 안건 상태를 종료 확정으로 가정해 다음 회의로 넘길 후보(미결·아직 안 다룸·결정 확인 필요)와 지금까지의 논의 요약(AI-03 요약 문장)을 안건 보드 `leftover`에 담음. 종료 직전 마지막 판정(flush)을 한 번 하고, 이어서 논의하기로 거둘 수 있음 (`docs/api/agenda-leftover-contract.md`) |
 | 안건 보드, 오늘 회의 요약, 회의록 초안, 챗봇 | 미구현 | 연동 API 초안 기준 |
 
 현재 LLM은 기본값이 `echo`(모델을 부르지 않는 테스트용)이고, 실제 요약과 안건 분류는 Gemini로 시험했다.
@@ -53,6 +54,7 @@ flowchart LR
 | `summary/agenda_classifier.py` | 안건 자동 분류 |
 | `summary/eval_agenda.py` | 안건 분류 평가 (기본은 비용 0, 유료 호출은 옵션을 켜야 함) |
 | `summary/agenda_offtopic.py` | 주제 변경 감지·새 안건 제안 |
+| `summary/agenda_leftover.py` | 미결 안건 추출 (종료 버튼 요청 상태, 넘길 후보 거르기. 모델을 부르지 않음) |
 | `summary/eval_agenda_offtopic.py` | 주제 변경 감지 평가 (오경보 확인은 비용 0, 제목 점검은 유료 옵션) |
 | `summary/input_adapter.py` | 입력 변환 (전사 줄, 안건 목록, 고친 분류) |
 | `docs/api/input-contract.md` | **백엔드 → AI 서비스 입력 형식** (필드, 규칙, 협의 상태) |
@@ -79,6 +81,7 @@ flowchart LR
 | 사람이 고친 요약 | `POST /internal/meetings/{meetingId}/agenda-summary-edits` |
 | 사람이 고친 의견·할 일 | `POST /internal/meetings/{meetingId}/agenda-item-edits` |
 | 새 안건 제안을 무시했다는 알림 | `POST /internal/meetings/{meetingId}/off-topic-actions` |
+| 종료 버튼·이어서 논의하기 알림 | `POST /internal/meetings/{meetingId}/end-requests` |
 | 상태 확인 | `GET /health` |
 
 - 응답 (자세한 내용은 입력 형식 문서 7장)
@@ -96,6 +99,7 @@ flowchart LR
 - 줄별 안건 분류 결과는 `PUT {백엔드 주소}/internal/meetings/{meetingId}/agenda-classification`으로 보낸다. 새로 분류했거나 바뀐 줄만 담고, 회의 종료 뒤에는 `final: true` 결과를 보낸다. 안건 목록이 아직 없으면 줄을 모아 두었다가 목록이 오면 분류한다 (`docs/api/agenda-contract.md`).
 - 안건별 요약은 `PUT {백엔드 주소}/internal/meetings/{meetingId}/agenda-board`로 보낸다. 안건 목록의 모든 안건을 담은 전체 상태이고, 담을 값이 바뀌었을 때만 보내며 1초에 한 번보다 자주 보내지 않는다. 가장 큰 `version`이 최신이다 (`docs/api/agenda-summary-contract.md`).
 - 새 안건 제안은 같은 안건 보드의 `offTopic`에 담는다. 제안이 없으면 `null`이고, 사용자가 제안을 닫으면 백엔드가 `POST .../off-topic-actions`로 알린다 (`docs/api/agenda-offtopic-contract.md`).
+- 미결 안건 목록은 같은 안건 보드의 `leftover`에 담는다. 종료 버튼 요청이 없으면 `null`, 남은 안건이 없으면 `agendas`가 빈 배열이다. 사용자가 회의 종료를 누르면 백엔드가 `POST .../end-requests`(`request`)로, 이어서 논의하기를 고르면 `cancel`로 알린다. `end`는 회의가 정말 끝날 때만 보낸다 (`docs/api/agenda-leftover-contract.md`).
 - 일시적 실패(408, 429, 5xx, 연결 오류)는 1, 2, 4초 간격으로 3번 다시 보내고, 그 밖의 4xx는 버린다. 백엔드가 어떤 4xx를 돌려주는지는 연동 때 확인한다.
 
 ### 클라우드
@@ -151,6 +155,7 @@ python3 agenda_status.py --selftest
 python3 agenda_opinions.py --selftest
 python3 agenda_todos.py --selftest
 python3 agenda_offtopic.py --selftest
+python3 agenda_leftover.py
 python3 input_adapter.py
 ```
 

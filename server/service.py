@@ -32,7 +32,7 @@ if SUMMARY_DIR not in sys.path:
     sys.path.insert(0, SUMMARY_DIR)
 
 from input_adapter import (adapt_batch, adapt_event, adapt_agendas, adapt_corrections, adapt_summary_edits,  # noqa: E402
-                           adapt_item_edits, adapt_offtopic_action, AdapterError)
+                           adapt_item_edits, adapt_offtopic_action, adapt_end_request, AdapterError)
 from meeting_live_summary_v2 import LiveSummarizer, Cfg  # noqa: E402
 from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
 from agenda_summarizer import AgendaSummarizer, SummarizeCfg  # noqa: E402
@@ -40,6 +40,7 @@ from agenda_status import AgendaStatusJudge, StatusCfg  # noqa: E402
 from agenda_opinions import AgendaOpinions, OpinionCfg  # noqa: E402
 from agenda_todos import AgendaTodos, TodoCfg  # noqa: E402
 from agenda_offtopic import AgendaOffTopic, OffTopicCfg  # noqa: E402
+from agenda_leftover import AgendaLeftover  # noqa: E402
 from .publisher import AGENDA_CLASSIFICATION, AGENDA_BOARD  # noqa: E402
 
 log = logging.getLogger("ai-service")
@@ -205,6 +206,7 @@ class MeetingState:
                                  llm=todo_llm)                           # 분류 결과를 읽어 안건별 할 일을 뽑음 (참석자 명단은 안건 목록과 함께 받는다)
         self.offtopic = AgendaOffTopic(self.classifier, offtopic_cfg or OffTopicCfg(provider=cfg.provider, model=cfg.model),
                                        llm=offtopic_llm)                 # 분류 결과를 읽어 해당 없음이 오래 이어지면 새 안건을 제안
+        self.leftover = AgendaLeftover()    # 종료 버튼을 누르면 미결 안건 목록을 만든다 (모델을 부르지 않는다)
         self.cls_version = 0                # 백엔드로 보낸 안건 분류 결과의 마지막 version
         self.status = "new"                 # new -> running <-> paused -> ended
         self.lock = threading.Lock()
@@ -424,6 +426,21 @@ class Registry:
             self._ensure_worker(m)
         return {"accepted": True, "result": {"applied": "accepted", "stale": "stale", "not_active": "not_active"}[r], "applied": r == "applied"}
 
+    def receive_end_request(self, path_meeting_id, msg):
+        """종료 버튼 요청·이어서 논의하기 (agenda-leftover-contract.md 4장). 목록은 다음 안건 보드의 leftover 칸으로 나간다."""
+        self._require_ready()
+        a = adapt_end_request(msg)
+        self._check_same_id(path_meeting_id, a["meeting_id"])
+        m = self._get(a["meeting_id"], a.get("meeting_id_raw"))
+        with m.lock:
+            if m.status == "ended":
+                return {"accepted": False, "result": "ignored", "reason": "ended"}
+        r = m.leftover.request(a["action"], a["rev"])
+        if r == "applied":
+            m.queue.put(("flush", None))                        # 앞서 받은 줄을 모두 처리한 뒤, 대기를 건너뛰고 한 번 더 돌려 보드를 보낸다
+            self._ensure_worker(m)
+        return {"accepted": True, "result": {"applied": "accepted", "stale": "stale", "not_active": "not_active"}[r], "applied": r == "applied"}
+
     @staticmethod
     def _transition_warning(m, name):
         started = any(e["event"] == "start" for e in m.events)
@@ -458,9 +475,10 @@ class Registry:
                     self._step(m, "end", finish_summary)
                     self._step(m, "classify", lambda: self._classify(m, end_ms=payload["at_ms"], final=True))
                     self._agenda_steps(m, final=True)
-                elif kind == "tick":
-                    self._step(m, "classify", lambda: self._classify(m))
-                    self._agenda_steps(m)
+                elif kind in ("tick", "flush"):
+                    flush = m.leftover.take_flush() if kind == "flush" else False   # 종료 버튼: 대기를 건너뛰고 한 번 돌린다 (AI-07)
+                    self._step(m, "classify", lambda: self._classify(m, flush=flush))
+                    self._agenda_steps(m, flush=flush)
             finally:
                 m.queue.task_done()
 
@@ -472,13 +490,13 @@ class Registry:
             m.errors += 1
             log.error("처리 실패 meeting=%s kind=%s error=%s", m.meeting_id, name, type(e).__name__)
 
-    def _classify(self, m, batch=None, end_ms=None, final=False):
-        """줄 묶음을 분류기에 넘기고, 분류할 때가 되었으면 분류한 뒤 바뀐 것을 백엔드로 보낸다."""
+    def _classify(self, m, batch=None, end_ms=None, final=False, flush=False):
+        """줄 묶음을 분류기에 넘기고, 분류할 때가 되었으면 분류한 뒤 바뀐 것을 백엔드로 보낸다. flush 이면 기다리지 않고 분류한다."""
         if batch is not None:
             m.classifier.receive(batch)
         if end_ms is not None:
             m.classifier.advance(end_ms)
-        m.classifier.process(final=final)
+        m.classifier.process(final=final or flush)
         self._publish_classification(m, final)
 
     def _publish_classification(self, m, final):
@@ -492,14 +510,16 @@ class Registry:
                    **{k: v for k, v in r.items() if k not in ("schemaVersion", "meetingId")}}
         self.publisher.submit(m.meeting_id, payload, kind=AGENDA_CLASSIFICATION)
 
-    def _agenda_steps(self, m, final=False):
-        """분류를 마친 직후 같은 흐름에서 상태 판정 -> 안건 요약 -> 의견 -> 할 일 -> 주제 변경 -> 보드 전송 순서로 돈다.
-        단계마다 따로 가둬서, 한 단계가 실패하거나 멈춰도 다른 단계와 보드 전송은 계속된다."""
-        self._step(m, "agenda_status", lambda: m.status_judge.process(final=final))
-        self._step(m, "agenda_summary", lambda: m.agenda_summarizer.process(final=final))
+    def _agenda_steps(self, m, final=False, flush=False):
+        """분류를 마친 직후 같은 흐름에서 상태 판정 -> 안건 요약 -> 의견 -> 할 일 -> 주제 변경 -> 미결 안건 -> 보드 전송 순서로 돈다.
+        단계마다 따로 가둬서, 한 단계가 실패하거나 멈춰도 다른 단계와 보드 전송은 계속된다.
+        flush: 종료 버튼을 눌렀을 때. 상태 판정과 안건 요약은 새 줄이 1개일 때 기다리는 규칙을 건너뛴다(종료 확정은 아니다). 의견·할 일은 이월하지 않아 건너뛰지 않는다."""
+        self._step(m, "agenda_status", lambda: m.status_judge.process(final=final, flush=flush))
+        self._step(m, "agenda_summary", lambda: m.agenda_summarizer.process(final=final or flush))
         self._step(m, "agenda_opinions", lambda: m.opinions.process(final=final))
         self._step(m, "agenda_todos", lambda: m.todos.process(final=final))
         self._step(m, "agenda_offtopic", lambda: m.offtopic.process(final=final))
+        self._step(m, "agenda_leftover", lambda: m.leftover.process(final=final))
         self._step(m, "agenda_board", lambda: self._publish_board(m))
 
     @staticmethod
@@ -512,15 +532,25 @@ class Registry:
             log.error("보드 값 읽기 실패 meeting=%s kind=%s error=%s", m.meeting_id, name, type(e).__name__)
             return None
 
+    @staticmethod
+    def _leftover_meta(m):
+        """보드의 leftover 칸 재료. 종료 버튼이 눌리지 않았고 회의도 끝나지 않았으면 None. 목록의 상태는 종료 확정을 가정한 값이다."""
+        st = m.leftover.state()
+        if st is None:
+            return None
+        return {**st, "status_info": m.status_judge.board_status(preview_final=True)}
+
     def _publish_board(self, m):
-        """바뀐 안건 보드 전체 상태(요약, 상태, 의견, 할 일, 주제 변경 제안)를 백엔드로 보낸다."""
+        """바뀐 안건 보드 전체 상태(요약, 상태, 의견, 할 일, 주제 변경 제안, 미결 안건 목록)를 백엔드로 보낸다."""
         if self.publisher is None or not self.publisher.enabled:
             return
         opinions = self._safe(m, "opinions", m.opinions.board_items)
         todos = self._safe(m, "todos", m.todos.board_items)
         off_topic = self._safe(m, "offtopic", m.offtopic.board)
+        leftover = self._safe(m, "leftover", lambda: self._leftover_meta(m))     # 읽지 못하면 칸을 비운다(null). 보드 전송은 계속한다
         board = m.agenda_summarizer.take_board(status_info=m.status_judge.board_status(), opinions=opinions, todos=todos,
-                                               based_extra=max(m.opinions.based_on_seq(), m.todos.based_on_seq()), off_topic=off_topic)
+                                               based_extra=max(m.opinions.based_on_seq(), m.todos.based_on_seq()), off_topic=off_topic,
+                                               leftover=leftover)
         if board is not None:
             self.publisher.submit(m.meeting_id, board, kind=AGENDA_BOARD)
 
@@ -581,5 +611,6 @@ class Registry:
                 "agendaOpinions": m.opinions.info(),
                 "agendaTodos": m.todos.info(),
                 "agendaOffTopic": m.offtopic.info(),
+                "agendaLeftover": m.leftover.info(),
                 "publisher": self.publisher.info() if self.publisher else {"enabled": False},
             }

@@ -1254,6 +1254,265 @@ def test_api_offtopic_action():
         main.registry.shutting_down = False
 
 
+def lo_line(seq, text):
+    return {"seq": seq, "startMs": (seq - 1) * 4000, "endMs": (seq - 1) * 4000 + 3500, "text": text,
+            "kind": None, "lowConfidence": False, "recovered": False, "manual": False}
+
+
+def leftover_meeting(mid, **kw):
+    """안건 3개(배포 일정, 예산 배분, QA 담당 정하기)를 받아 둔 회의. 반환: (reg, path, 줄 묶음 보내기, 보드 목록, 안건 고르기, 보낸 목록)."""
+    from agenda_classifier import ClassifyCfg
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+    reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=ClassifyCfg(refresh_sec=0), **kw)
+    path = str(mid)
+    n = {"batch": 0}
+
+    def send(lines):
+        n["batch"] += 1
+        reg.receive_batch(path, {"meetingId": mid, "batch": n["batch"], "lines": lines, "edits": []})
+        assert reg.wait_idle(path) and pub.wait_idle()
+    boards = lambda: [p for u, p in sent if u.endswith("/agenda-board")]
+    reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(path, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
+    assert reg.wait_idle(path) and pub.wait_idle()
+    return reg, path, send, boards, pub
+
+
+def by_agenda(board, aid):
+    return next(a for a in board["agendas"] if a["agendaId"] == aid)
+
+
+def test_agenda_leftover_flow(cap):
+    """종료 버튼을 누르면 미결 안건 목록이 보드의 leftover 칸에 담기고(방금 나온 결정은 flush로 반영), 이어서 논의하기로 거두고,
+    회의가 끝나면 마지막 값이 된다 (AI-07)"""
+    reg, path, send, boards, pub = leftover_meeting(71)
+    mid = 71
+    assert boards()[0]["leftover"] is None and "leftover" in boards()[0]
+    send([lo_line(1, "배포 일정 이야기 1번"), lo_line(2, "배포 일정 이야기 2번"), lo_line(3, "배포 일정 이야기 3번")])
+    send([lo_line(4, "예산 배분 이야기 4번"), lo_line(5, "예산 배분 이야기 5번")])
+    send([lo_line(6, "배포 일정은 목요일로 하기로 확정")])           # 새 줄 1개: 평소에는 60초 기다린다
+    b = boards()[-1]
+    assert [by_agenda(b, a)["status"] for a in (101, 102, 103)] == ["DISCUSSING", "UNDECIDED", "NOT_STARTED"], b
+    assert b["leftover"] is None, "종료 버튼을 누르기 전에는 칸이 비어 있다"
+    assert not any(6 in x["evidenceSeqs"] for x in by_agenda(b, 101)["summary"]), "새 줄 1개라 아직 요약에 반영되지 않았다"
+    n0 = len(boards())
+
+    # 종료 버튼: 기다리지 않고 한 번 더 판정해 방금 나온 결정이 목록에 남지 않는다
+    assert reg.receive_end_request(path, {"meetingId": mid, "action": "request", "rev": 1}) == {"accepted": True, "result": "accepted", "applied": True}
+    assert reg.wait_idle(path) and pub.wait_idle()
+    b = boards()[-1]
+    lf = b["leftover"]
+    assert len(boards()) == n0 + 1 and set(lf) == {"requestRev", "final", "agendas"} and lf["requestRev"] == 1 and lf["final"] is False, lf
+    assert by_agenda(b, 101)["status"] == "DECIDED", "flush 로 방금 나온 결정이 반영된다"
+    assert any(6 in x["evidenceSeqs"] for x in by_agenda(b, 101)["summary"]), "flush 로 방금 나온 줄이 요약에도 반영된다"
+    assert [x["agendaId"] for x in lf["agendas"]] == [102, 103] and [x["status"] for x in lf["agendas"]] == ["UNDECIDED", "NOT_STARTED"], lf
+    assert all(set(x) == {"agendaId", "status", "statusReason", "summary"} for x in lf["agendas"])
+    assert lf["agendas"][0]["summary"] == by_agenda(b, 102)["summary"] and lf["agendas"][0]["summary"], "논의 요약은 보드의 AI-03 요약 문장 그대로"
+    assert lf["agendas"][1]["summary"] == [] and lf["agendas"][1]["statusReason"] is None
+    assert lf["agendas"][0]["statusReason"]["evidenceSeqs"], "근거 줄 번호가 있다"
+    assert [by_agenda(b, a)["status"] for a in (102, 103)] == ["UNDECIDED", "NOT_STARTED"]
+    json.dumps(b)
+    # 같은 요청을 다시 받으면 무시하고 보드도 다시 보내지 않는다
+    assert reg.receive_end_request(path, {"meetingId": mid, "action": "request", "rev": 1})["result"] == "stale"
+    assert reg.wait_idle(path) and pub.wait_idle() and len(boards()) == n0 + 1
+    assert reg.status(path)["agendaLeftover"] == {"requestRev": 1, "active": True, "final": False, "requests": 1}
+
+    # 이어서 논의하기: 칸이 null 로 돌아간다. 이미 내린 결정(DECIDED)은 그대로다
+    assert reg.receive_end_request(path, {"meetingId": mid, "action": "cancel", "rev": 2}) == {"accepted": True, "result": "accepted", "applied": True}
+    assert reg.wait_idle(path) and pub.wait_idle()
+    b = boards()[-1]
+    assert b["leftover"] is None and len(boards()) == n0 + 2 and by_agenda(b, 101)["status"] == "DECIDED"
+    assert reg.receive_end_request(path, {"meetingId": mid, "action": "cancel", "rev": 3}) == {"accepted": True, "result": "not_active", "applied": False}
+    assert reg.receive_end_request(path, {"meetingId": mid, "action": "request", "rev": 3})["result"] == "stale", "취소(3)가 번호를 기록했다"
+
+    # 논의를 이어 가다 다시 종료 버튼: 보드의 상태는 논의 중 그대로이고 목록에는 종료를 가정한 상태가 담긴다
+    send([lo_line(7, "예산 배분 이야기 7번"), lo_line(8, "예산 배분 이야기 8번")])
+    b = boards()[-1]
+    assert by_agenda(b, 102)["status"] == "DISCUSSING" and b["leftover"] is None
+    assert reg.receive_end_request(path, {"meetingId": mid, "action": "request", "rev": 4})["applied"] is True
+    assert reg.wait_idle(path) and pub.wait_idle()
+    b = boards()[-1]
+    assert by_agenda(b, 102)["status"] == "DISCUSSING", "미리보기는 보드의 상태를 확정하지 않는다"
+    assert b["leftover"]["requestRev"] == 4 and [(x["agendaId"], x["status"]) for x in b["leftover"]["agendas"]] == [(102, "UNDECIDED"), (103, "NOT_STARTED")], b["leftover"]
+    assert "종료를 요청한" in b["leftover"]["agendas"][0]["statusReason"]["text"]
+
+    # 회의가 끝나면 마지막 값. 이때 상태가 확정되어 보드의 상태와 목록의 상태가 같다
+    reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": 40000})
+    assert reg.wait_idle(path) and pub.wait_idle()
+    b = boards()[-1]
+    assert b["leftover"]["final"] is True and b["leftover"]["requestRev"] == 4, b["leftover"]
+    assert [(x["agendaId"], x["status"]) for x in b["leftover"]["agendas"]] == [(102, "UNDECIDED"), (103, "NOT_STARTED")]
+    assert by_agenda(b, 102)["status"] == "UNDECIDED"
+    assert "끝날 때까지" in b["leftover"]["agendas"][0]["statusReason"]["text"]
+    assert reg.receive_end_request(path, {"meetingId": mid, "action": "request", "rev": 9}) == {"accepted": False, "result": "ignored", "reason": "ended"}
+    st = reg.status(path)
+    assert st["errors"] == 0 and st["agendaLeftover"] == {"requestRev": 4, "active": True, "final": True, "requests": 2}, st
+    assert st["agendaStatus"]["halted"] is None and st["agendaSummary"]["halted"] is None
+    dump = json.dumps(st, ensure_ascii=False) + "\n".join(cap.rows)
+    for secret in ("배포 일정", "예산 배분", "QA 담당", "목요일로 하기로"):
+        assert secret not in dump, f"로그나 상태에 내용이 있음: {secret}"
+
+    # 잘못된 요청은 거절
+    reg2 = Registry(cfg_from_env({}))
+    for bad in ({"meetingId": "m"}, {"meetingId": "other", "action": "request", "rev": 1}, {"meetingId": "m", "action": "end", "rev": 1},
+                {"meetingId": "m", "action": "request"}, {"meetingId": "m", "action": "request", "rev": "1"}, {"action": "request", "rev": 1}):
+        try:
+            reg2.receive_end_request("m", bad)
+            raise SystemExit(f"잘못된 요청을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    assert reg2.receive_end_request("m", {"meetingId": "m", "action": "cancel", "rev": 1})["result"] == "not_active"
+    reg2.shutting_down = True                                           # 종료 중이면 받지 않는다 (HTTP 503)
+    try:
+        reg2.receive_end_request("m", {"meetingId": "m", "action": "request", "rev": 2})
+        raise SystemExit("종료 중인데 종료 버튼 요청을 받음")
+    except NotReady:
+        pass
+
+
+def test_agenda_leftover_flush_classification():
+    """분류 간격(기본 30초) 안에 있어 아직 분류하지 못한 줄도, 종료 버튼을 누르면 분류와 판정까지 돌려 목록에 반영한다 (AI-07)"""
+    from agenda_classifier import ClassifyCfg
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+    reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=ClassifyCfg())          # 분류 간격은 기본값
+    mid, path = 77, "77"
+    boards = lambda: [p for u, p in sent if u.endswith("/agenda-board")]
+    reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(path, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
+    assert reg.wait_idle(path) and pub.wait_idle()
+    for n, lines in enumerate([[lo_line(1, "배포 일정 이야기 1번"), lo_line(2, "배포 일정 이야기 2번"), lo_line(3, "배포 일정 이야기 3번")],
+                               [lo_line(4, "예산 배분 이야기 4번"), lo_line(5, "예산 배분은 한도 정하기로 확정")]], 1):
+        reg.receive_batch(path, {"meetingId": mid, "batch": n, "lines": lines, "edits": []})
+        assert reg.wait_idle(path) and pub.wait_idle()
+    assert reg.status(path)["agendaClassification"]["pending"] == 5, "분류 간격 안이라 아직 분류하지 않았다"
+    assert all(a["status"] == "NOT_STARTED" for a in boards()[-1]["agendas"]) and boards()[-1]["leftover"] is None
+    assert reg.receive_end_request(path, {"meetingId": mid, "action": "request", "rev": 1})["applied"] is True
+    assert reg.wait_idle(path) and pub.wait_idle()
+    b = boards()[-1]
+    assert reg.status(path)["agendaClassification"]["pending"] == 0
+    assert [(a["agendaId"], a["status"]) for a in b["agendas"]] == [(101, "UNDECIDED"), (102, "DECIDED"), (103, "NOT_STARTED")], b["agendas"]
+    assert [x["agendaId"] for x in b["leftover"]["agendas"]] == [101, 103], "방금 결정된 안건은 목록에 없다"
+    assert reg.status(path)["errors"] == 0
+
+
+def test_agenda_leftover_end_and_empty():
+    """요청 없이 end 만 와도 마지막 보드에 목록이 들어가고, 남은 안건이 없으면 빈 목록이다. 요청이 오기 전에 순서가 바뀌어도 번호로 정리한다 (AI-07)"""
+    # 1) 요청 없이 끝: requestRev null, 목록은 끝난 뒤 확정한 상태
+    reg, path, send, boards, pub = leftover_meeting(72)
+    send([lo_line(1, "배포 일정 이야기 1번"), lo_line(2, "배포 일정 이야기 2번")])
+    assert boards()[-1]["leftover"] is None
+    reg.receive_event(path, {"meetingId": 72, "event": "end", "atMs": 9000})
+    assert reg.wait_idle(path) and pub.wait_idle()
+    lf = boards()[-1]["leftover"]
+    assert lf["requestRev"] is None and lf["final"] is True
+    assert [(x["agendaId"], x["status"]) for x in lf["agendas"]] == [(101, "UNDECIDED"), (102, "NOT_STARTED"), (103, "NOT_STARTED")], lf
+
+    # 2) 남은 안건이 없으면 빈 목록 (null 이 아니다). 안건이 하나뿐이고 결정이 나온 회의
+    from agenda_classifier import ClassifyCfg
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+    reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=ClassifyCfg(refresh_sec=0))
+    mid, path = 73, "73"
+    ag = dict(load("agendas-with-attendees-put.json"), meetingId=mid)
+    ag["agendas"] = ag["agendas"][:1]
+    reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(path, ag)
+    reg.receive_batch(path, {"meetingId": mid, "batch": 1, "lines": [lo_line(1, "배포 일정 이야기 1번"), lo_line(2, "배포 일정은 목요일로 하기로 확정")], "edits": []})
+    assert reg.wait_idle(path) and pub.wait_idle()
+    boards = [p for u, p in sent if u.endswith("/agenda-board")]
+    assert boards[-1]["agendas"][0]["status"] == "DECIDED" and boards[-1]["leftover"] is None
+    assert reg.receive_end_request(path, {"meetingId": mid, "action": "request", "rev": 1})["applied"] is True
+    assert reg.wait_idle(path) and pub.wait_idle()
+    lf = [p for u, p in sent if u.endswith("/agenda-board")][-1]["leftover"]
+    assert lf == {"requestRev": 1, "final": False, "agendas": []}, lf
+
+    # 3) 안건 목록보다 요청이 먼저 와도 받는다 (보드는 안건 목록을 받은 뒤에 나간다). 취소한 뒤 끝나도 칸은 생긴다
+    reg = Registry(cfg_from_env({}))
+    assert reg.receive_end_request("74", {"meetingId": 74, "action": "request", "rev": 5})["applied"] is True
+    assert reg.receive_end_request("74", {"meetingId": 74, "action": "cancel", "rev": 6})["applied"] is True
+    assert reg.wait_idle("74")
+    reg.receive_event("74", {"meetingId": 74, "event": "end", "atMs": 1000})
+    assert reg.wait_idle("74")
+    assert reg.status("74")["agendaLeftover"] == {"requestRev": 5, "active": False, "final": True, "requests": 1}
+    assert reg.status("74")["errors"] == 0
+
+
+def test_agenda_leftover_isolated():
+    """미결 안건 단계나 목록 재료 읽기가 예외를 내도 다른 단계와 보드 전송은 계속된다 (AI-07)"""
+    from agenda_leftover import AgendaLeftover
+
+    real_process = AgendaLeftover.process
+
+    def explode(self, final=False):
+        raise RuntimeError("터짐")
+    AgendaLeftover.process = explode
+    try:
+        reg, path, send, boards, pub = leftover_meeting(75)
+        send([lo_line(1, "배포 일정 이야기 1번"), lo_line(2, "배포 일정 이야기 2번")])
+        reg.receive_event(path, {"meetingId": 75, "event": "end", "atMs": 9000})
+        assert reg.wait_idle(path) and pub.wait_idle()
+    finally:
+        AgendaLeftover.process = real_process
+    st = reg.status(path)
+    assert st["errors"] > 0 and boards() and by_agenda(boards()[-1], 101)["status"] == "UNDECIDED", st
+    assert st["agendaClassification"]["classified"] == 2 and st["publisher"]["enabled"]
+
+    real_meta = Registry._leftover_meta
+
+    def broken(m):
+        raise RuntimeError("읽기 실패")
+    Registry._leftover_meta = staticmethod(broken)
+    try:
+        reg, path, send, boards, pub = leftover_meeting(76)
+        send([lo_line(1, "배포 일정 이야기 1번"), lo_line(2, "배포 일정 이야기 2번")])
+        reg.receive_end_request(path, {"meetingId": 76, "action": "request", "rev": 1})
+        assert reg.wait_idle(path) and pub.wait_idle()
+    finally:
+        Registry._leftover_meta = real_meta
+    b = boards()[-1]
+    assert b["leftover"] is None and by_agenda(b, 101)["agendaId"] == 101, "읽기 실패는 칸만 비우고 보드는 보낸다"
+    assert reg.status(path)["errors"] > 0
+
+
+def test_api_end_request():
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        return
+    from . import main
+    c = TestClient(main.app)
+    mid = "81"
+    url = f"/internal/meetings/{mid}/end-requests"
+    body = dict(load("end-request-post.json"), meetingId=81)
+    cancel = dict(load("end-request-cancel-post.json"), meetingId=81)
+    assert body["action"] == "request" and cancel["action"] == "cancel" and cancel["rev"] > body["rev"]
+    r = c.post(url, json=body)
+    assert r.status_code == 200 and r.json() == {"accepted": True, "result": "accepted", "applied": True}, r.text
+    assert c.post(url, json=body).json() == {"accepted": True, "result": "stale", "applied": False}
+    r = c.post(url, json=cancel)
+    assert r.status_code == 200 and r.json() == {"accepted": True, "result": "accepted", "applied": True}, r.text
+    assert c.post(url, json=dict(cancel, rev=cancel["rev"] + 1)).json() == {"accepted": True, "result": "not_active", "applied": False}
+    assert c.put(url, json=body).status_code == 405
+    r = c.post(url, json={"meetingId": 81, "action": "end", "rev": 9})
+    assert r.status_code == 400 and r.json()["error"] == "INVALID_INPUT" and "request" in r.json()["detail"], r.text
+    assert c.post(url.replace(mid, "82"), json=body).status_code == 400
+    s = c.get(f"/internal/meetings/{mid}/status").json()
+    assert s["agendaLeftover"] == {"requestRev": body["rev"], "active": False, "final": False, "requests": 1}, s
+    r = c.post("/internal/meetings/83/events", json={"meetingId": 83, "event": "end", "atMs": 1200000, "wall": "2026-10-15T14:25:00.000+09:00"})
+    assert r.status_code == 200, r.text
+    assert main.registry.wait_idle("83")
+    r = c.post("/internal/meetings/83/end-requests", json=dict(body, meetingId=83))
+    assert r.status_code == 200 and r.json() == {"accepted": False, "result": "ignored", "reason": "ended"}, r.text
+    main.registry.shutting_down = True
+    try:
+        assert c.post(url, json=body).status_code == 503
+        assert c.post(url, json=body).json()["error"] == "NOT_READY"
+    finally:
+        main.registry.shutting_down = False
+
+
 def main():
     cap = Capture()
     logging.getLogger("ai-service").addHandler(cap)
@@ -1290,12 +1549,18 @@ def main():
     test_agenda_offtopic_flow(cap)
     test_agenda_offtopic_isolated()
     test_api_offtopic_action()
+    test_agenda_leftover_flow(cap)
+    test_agenda_leftover_flush_classification()
+    test_agenda_leftover_end_and_empty()
+    test_agenda_leftover_isolated()
+    test_api_end_request()
     test_numeric_meeting_id()
     print("수신 서버 자체 시험 통과 (설정, 묶음 번호 409, 요약 전송·재시도, 503, 잘못된 요청, 처리 실패, 토큰 지표, 로그에 전사 내용 없음, HTTP, "
           "안건 분류: 안건 목록·고친 분류 받기, 바뀐 줄만 전송, 고정, 종료 final, 실패 격리, 합쳐 보내기, 숫자 meetingId, "
           "안건 요약: 안건 보드 전송, 고친 요약 받기, 실패 격리, 1초 간격, "
           "의견·할 일: 참석자 명단 받기, 고친 항목 받기, 이름 다시 맞추기, 실패 격리, "
-          "주제 변경: 새 안건 제안 보드 전송, 무시와 재알림, 종료 시 거둠, 제목 실패 격리, 무시 요청 HTTP)")
+          "주제 변경: 새 안건 제안 보드 전송, 무시와 재알림, 종료 시 거둠, 제목 실패 격리, 무시 요청 HTTP, "
+          "미결 안건: 종료 버튼 목록, flush, 이어서 논의하기, 종료 시 마지막 값, 빈 목록, 실패 격리, 요청 HTTP)")
 
 
 if __name__ == "__main__":

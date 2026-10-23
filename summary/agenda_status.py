@@ -59,7 +59,7 @@ DECISION_CHECK = "DECISION_CHECK"
 STATUSES = (NOT_STARTED, DISCUSSING, DECIDED, UNDECIDED, DECISION_CHECK)
 VERDICTS = ("decided", "check", "none")
 
-SYSTEM_PROMPT = """너는 회의에서 한 안건의 결정 여부를 판정하는 도구야. 입력은 STT가 만든 전사 줄이고, 줄마다 [번호 mm:ss]가 붙어 있어. [맞장구]가 붙은 줄은 짧은 호응이야.
+SYSTEM_PROMPT = """너는 회의에서 한 안건의 결정 여부를 판정하는 도구야. 입력은 STT가 만든 전사 줄이고, 줄마다 [번호 mm:ss]가 붙어 있어. [맞장구]가 붙은 줄은 짧은 호응이고, [불확실]이 붙은 줄은 STT가 글자 대부분을 확신하지 못한 줄이야.
 
 규칙
 1. [안건]의 제목과 결정할 사항은 무엇을 결정해야 하는지 이해하는 데만 써. 전사에 없는 내용을 제목에서 가져오지 마.
@@ -72,6 +72,7 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건의 결정 여부를 판정하�
 5. verdict가 decided나 check이면 reason에 한 문장으로 무엇이 결정됐는지(check이면 왜 확신하지 못하는지)를 쓰고, evidence에 근거 줄 번호 구간 [[첫 번호, 끝 번호], ...]을 달아. 구간의 양 끝은 입력에 있는 번호여야 해. 근거에는 답이 나온 줄과 합의 표현이 나온 줄을 모두 넣어.
 6. reason에는 근거 줄에 없는 사실, 이름, 숫자를 쓰지 마. 말을 인용할 때는 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 그 부분을 근거로 쓰면 reason에 "STT 불확실"이라고 밝혀. 숫자는 말한 한글 표기를 「」로 그대로 인용해.
 7. verdict가 none이면 reason은 빈 문자열, evidence는 빈 목록으로 줘.
+8. [불확실] 줄은 뜻이 틀렸을 수 있어. 결정할 사항에 대한 답(무엇으로 정했는지)이 [불확실]이 아닌 줄에 있고, [불확실] 줄이 "좋습니다", "네", "그렇게 해요"처럼 뜻이 분명한 짧은 동의이고 그 뜻을 뒤집는 말이 없으면 그 줄을 합의 표현으로 보고 decided로 해도 돼. 이때 reason에 "STT 불확실"이라고 밝혀. 답 자체가 [불확실] 줄에만 있거나 [불확실] 줄의 뜻이 분명하지 않으면 decided가 아니라 check로 해. [불확실] 줄의 알아볼 수 없는 말은 짐작해서 쓰지 마.
 
 출력은 JSON만. 형식:
 {"verdict": "decided" 또는 "check" 또는 "none", "reason": "...", "evidence": [[첫 번호, 끝 번호]]}"""
@@ -88,6 +89,7 @@ class StatusCfg:
         self.max_calls = 300          # 회의당 모델 호출 상한 (비용을 추정한 뒤 정한다)
         self.max_lines = 200          # 한 번에 모델에 주는 줄 수 (넘으면 가장 최근 줄)
         self.backchannel_gap_sec = 10  # 맞장구를 앞 줄의 안건에 붙이는 최대 간격 (앞 줄의 끝부터, 음성 시간)
+        self.show_uncertain = False   # True 면 낮은 확신도 줄을 [불확실] 표시를 달아 모델에 보여 준다 (기본 False: 예전처럼 뺀다. 2026-10-23 전후 비교에서 효과가 확인되지 않아 기본을 껐다)
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError(f"알 수 없는 설정: {k}")
@@ -100,7 +102,7 @@ class StatusCfg:
 def echo_llm(user):
     """마지막 줄의 말투로 정하는 모의 판정기. 구조(JSON 형식, 근거 번호)만 맞춘다.
     마지막 줄에 '확정'·'결정'·'하기로'가 있으면 decided, '글쎄'·'아마'가 있으면 check, 아니면 none."""
-    body = user.split("[전사]\n", 1)[-1]
+    body = user.split("[전사]\n", 1)[-1].replace("[불확실] ", "")
     rows = re.findall(r"^\[(\d+)\] (\d\d:\d\d) (.*)$", body, re.M)
     if not rows:
         return json.dumps({"verdict": "none", "reason": "", "evidence": []}, ensure_ascii=False)
@@ -119,6 +121,11 @@ def make_llm(cfg):
     if cfg.provider == "echo":
         return echo_llm
     return lambda user: call_llm(cfg.provider, cfg.model, SYSTEM_PROMPT, user, task=TASK)
+
+
+def _tag(ln):
+    """모델에 보여 줄 줄 표시: 맞장구는 [맞장구], 낮은 확신도는 [불확실]."""
+    return ("[맞장구] " if ln.get("kind") == "backchannel" else "") + ("[불확실] " if ln.get("low_confidence") else "")
 
 
 def _h(s):
@@ -176,9 +183,11 @@ class AgendaStatusJudge:
             now_ms = c.now_ms
         rows, last_key, last_end = {}, None, None
         for ln in snap:
-            if ln.get("low_confidence") or ln.get("kind") == "filler":
+            low = bool(ln.get("low_confidence"))
+            if ln.get("kind") == "filler" or (low and not self.cfg.show_uncertain):
                 continue
-            if ln.get("kind") == "backchannel":
+            if ln.get("kind") == "backchannel" or (low and ln["id"] not in classified):
+                # 맞장구와 낮은 확신도 줄은 분류 대상이 아니라 안건 표시가 없다: 바로 앞에 분류된 줄의 안건에 붙인다
                 if last_key is not None and ln["start_ms"] - last_end <= gap:
                     rows.setdefault(last_key, []).append((ln, True))
                 continue
@@ -253,10 +262,10 @@ class AgendaStatusJudge:
 
     def _make_job(self, agenda, rows, cur):
         K = rows[-self.cfg.max_lines:]
-        parts = [f"다음은 하나의 안건에 연결된 회의 발언이야 (줄 {len(K)}개). [맞장구]가 붙은 줄은 짧은 호응이야.",
+        parts = [f"다음은 하나의 안건에 연결된 회의 발언이야 (줄 {len(K)}개). [맞장구]가 붙은 줄은 짧은 호응이고, [불확실]이 붙은 줄은 STT가 확신하지 못한 줄이야.",
                  f"[안건]\n제목: {_clean(agenda['title'])}\n결정할 사항: {_clean(agenda['decision_point'])}",
-                 "[전사]\n" + "\n".join(f"[{k}] {mmss(ln['start_ms'])} {'[맞장구] ' if bc else ''}{ln['text_marked']}"
-                                       for k, (ln, bc) in enumerate(K, 1))]
+                 "[전사]\n" + "\n".join(f"[{k}] {mmss(ln['start_ms'])} {_tag(ln)}{ln['text_marked']}"
+                                       for k, (ln, _bc) in enumerate(K, 1))]
         return {"key": agenda["key"], "lines": [ln for ln, _bc in K], "reflected": cur, "user": "\n\n".join(parts)}
 
     def _run_job(self, job):
@@ -349,7 +358,8 @@ class AgendaStatusJudge:
                 if not rows:
                     out[key] = {"status": NOT_STARTED, "reason": None}
                     continue
-                n, last = len(rows), rows[-1][0]["id"]
+                sure = [r for r in rows if not r[0].get("low_confidence")] or rows    # 규칙 문구의 줄 수와 근거는 불확실 줄을 뺀다
+                n, last = len(sure), sure[-1][0]["id"]
                 if st["verdict"] == "decided":
                     out[key] = {"status": DECIDED, "reason": dict(st["reason"])}
                 elif st["verdict"] == "check":
@@ -476,7 +486,7 @@ def selftest():
 
     # 9) 맞장구는 앞에 분류된 줄의 안건에 붙인다 (간격 이내). 간투사, 낮은 확신도 줄은 뺀다. 해당 없음 줄이 끼면 붙이지 않는다
     seen = []
-    c, j = fresh(llm=lambda u: seen.append(u) or answer("none"))
+    c, j = fresh(llm=lambda u: seen.append(u) or answer("none"), show_uncertain=False)
     feed(c, [ln(1, 0, "배포는 목요일로 하죠"), ln(2, 2500, "네 좋아요", kind="backchannel"),
              ln(3, 4000, "배포 일정 확정해요"), ln(4, 5500, "음", kind="filler"), ln(5, 6000, "배포 흐릿한 말", low=True),
              ln(6, 30000, "네네", kind="backchannel")], 31000)
@@ -563,7 +573,7 @@ def selftest():
 
     # 9-1) 해당 없음 줄이 끼면 그 뒤 맞장구는 붙이지 않는다. 사람이 고정한 낮은 확신도 줄, 간투사 줄도 넣지 않는다
     seen = []
-    c, j = fresh(llm=lambda u: seen.append(u) or answer("none"))
+    c, j = fresh(llm=lambda u: seen.append(u) or answer("none"), show_uncertain=False)
     feed(c, [ln(1, 0, "배포는 목요일로 하죠"), ln(2, 2000, "그건 그렇고 점심은 뭘 먹을까요"),
              ln(3, 3500, "네 좋아요", kind="backchannel"), ln(4, 6000, "배포 일정 확정해요"),
              ln(5, 8000, "배포 흐릿한 말", low=True), ln(6, 9000, "배포 으음 그게", kind="filler")], 10000)
@@ -572,6 +582,43 @@ def selftest():
     j.process()
     u = seen[-1].split("[전사]")[1]
     assert "네 좋아요" not in u and "흐릿한" not in u and "으음" not in u and "배포 일정 확정해요" in u, u
+    # 9-2) 낮은 확신도 줄은 [불확실] 표시를 달아 모델에 보여 준다 (앞 줄의 안건에 붙인다. 간격이 길거나 해당 없음 줄이 끼면 붙이지 않는다. 간투사는 뺀다)
+    seen = []
+    c, j = fresh(llm=lambda u: seen.append(u) or answer("none"), show_uncertain=True)
+    feed(c, [ln(1, 0, "배포는 목요일로 하면 되나요"), ln(2, 2500, "좋습니다", low=True),
+             ln(3, 4000, "배포 일정 확정해요"), ln(4, 5500, "음", kind="filler"), ln(5, 6000, "네 아주 좋습니다", kind="backchannel", low=True),
+             ln(6, 30000, "멀리 떨어진 흐릿한 말", low=True)], 31000)
+    j.process()
+    u = seen[-1].split("[전사]")[1]
+    assert "[불확실] 좋습니다" in u and "[맞장구] [불확실] 네 아주 좋습니다" in u and "배포 일정 확정해요" in u, u
+    assert "멀리" not in u and "음" not in u.replace("좋습니다", "").replace("합니다", ""), "간격이 길면 붙이지 않고 간투사는 뺀다: " + u
+    assert "[1] 00:00 배포는" in u and "[2] 00:02 [불확실] 좋습니다" in u
+    # 규칙 문구의 줄 수와 근거는 불확실 줄을 뺀다 (미결 문구가 잡음 줄을 가리키지 않게)
+    c.set_agendas(2, [A2, A3])
+    j.process()
+    bs2 = j.board_status()
+    assert "a1" not in bs2
+    c, j = fresh(llm=lambda u: answer("none"))
+    feed(c, [ln(1, 0, "배포는 목요일로"), ln(2, 2000, "배포 동의해요"), ln(3, 3500, "흐릿", low=True)], 5000)
+    j.process()
+    c.set_agendas(2, [A2, A3, A1])
+    j.final = True
+    r = j.board_status()["a1"]["reason"]
+    assert r["evidenceSeqs"] == [2] and "연결된 발언 2줄" in r["text"], r
+    # 불확실 줄이 합의 표현이면 모델이 결정으로 낼 수 있고, 불확실 줄을 근거로 달 수 있다
+    c, j = fresh(llm=lambda u: answer("decided", "배포를 목요일로 하기로 함 (동의 표현은 「좋습니다」, STT 불확실)", [(1, 2)]), show_uncertain=True)
+    feed(c, [ln(1, 0, "배포를 목요일로 해도 되나요"), ln(2, 2500, "좋습니다", low=True)], 4000)
+    j.process()
+    assert stat(j)["status"] == DECIDED and stat(j)["reason"]["evidenceSeqs"] == [1, 2], stat(j)
+    # 모의 판정기는 [불확실] 표시를 무시하고 마지막 줄의 말투로 정한다. 프롬프트가 [불확실] 줄의 처리를 말해 준다
+    assert json.loads(echo_llm("[전사]\n[1] 00:00 [불확실] 배포 확정해요"))["verdict"] == "decided"
+    assert "[불확실]" in SYSTEM_PROMPT and "8. [불확실] 줄" in SYSTEM_PROMPT and 'reason에 "STT 불확실"' in SYSTEM_PROMPT
+    # 설정을 끄면 예전처럼 뺀다
+    seen = []
+    c, j = fresh(llm=lambda u: seen.append(u) or answer("none"), show_uncertain=False)
+    feed(c, [ln(1, 0, "배포는 목요일로 하면 되나요"), ln(2, 2500, "좋습니다", low=True), ln(3, 4000, "배포 일정 확정해요")], 5000)
+    j.process()
+    assert "불확실" not in seen[-1].split("[전사]")[1] and "좋습니다" not in seen[-1].split("[전사]")[1]
     # 10-1) 사람이 줄을 다른 안건으로 옮기면 남은 안건은 기다리지 않고 다시 판정한다
     c, j = fresh(llm=lambda u: answer("none"))
     feed(c, [ln(1, 0, "배포 얘기"), ln(2, 4000, "배포 계속")], 5000)

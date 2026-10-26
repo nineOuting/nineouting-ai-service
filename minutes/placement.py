@@ -1,6 +1,6 @@
 """AI 에게 칸 고르기와 글 다듬기를 묻고, 답을 검사한다. 명세 7.2·7.3
 
-  AI 에게 주는 글   <칸> 번호 붙인 칸 이름, <재료> m 번호·안건·종류·(다듬기/고정)·글
+  AI 에게 주는 글   <칸> 번호 붙인 칸 이름, <재료> m 번호·안건·종류·(다듬기/고정)·글. 다시 배치의 새로 쓴 줄은 안건 없이 [직접 작성]
   AI 의 답          {"placements": [{"m", "section", "text"}], "unplaced": [...]}
   검사              형식, 칸 번호, 재료 번호, 한 번만, 빠짐, 다듬은 글(빈 글·줄바꿈·새 숫자)
   다시 시키기       검사에 걸리면 걸린 이유를 붙여 다시 묻는다 (max_retries 번). 넘으면 CHECK_FAILED
@@ -77,7 +77,8 @@ def build_user(items: list[str], materials: list[Material], problems: list[str] 
     parts = ["<칸>", *(f"{i}. {_quote(name)}" for i, name in enumerate(items, 1)), "</칸>", "<재료>"]
     for m in materials:
         how = "다듬기" if m.rewrite else "고정"
-        parts.append(f"{m.ref} [{_quote(m.agenda_title)} / {m.label}] ({how}) {_quote(m.text)}")
+        head = f"{_quote(m.agenda_title)} / {m.label}" if m.agenda_title else m.label    # 작성자가 새로 쓴 줄은 안건이 없다
+        parts.append(f"{m.ref} [{head}] ({how}) {_quote(m.text)}")
     parts.append("</재료>")
     if problems:
         parts += ["<지난 답의 문제>", *(f"- {p}" for p in problems), "</지난 답의 문제>"]

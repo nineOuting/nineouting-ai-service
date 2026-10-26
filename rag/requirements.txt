@@ -5,3 +5,5 @@ psycopg[binary]==3.3.6
 pgvector==0.5.1
 psycopg-pool==3.3.3
 fastapi==0.143.2
+# 업로드 문서 읽기. PDF 는 PDFium (pypdf 는 일부 PDF 에서 글자마다 띄어 꺼내서 쓰지 않음)
+pypdfium2==5.14.0

@@ -7,7 +7,8 @@
   꺼내기 → (처리 전 확인) → 로더 → 나누기 → 임베딩 → store() → 콜백 → 끝내기(payload 비움)
 
 실패 처리
-  영구 실패   IngestError (no_text, 형식 오류, 업로드 로더 미구현 등) → 재시도 없이 failed 콜백
+  영구 실패   IngestError (no_text, 형식 오류, 업로드 받기 실패·만료, 업로드 로더 미구현 등) → 재시도 없이 failed 콜백.
+             download_failed·url_expired 는 RAG 명세대로 백엔드가 다시 호출한다
   일시 실패   그 밖의 예외 → 최대 MAX_ATTEMPTS 번까지 RETRY_DELAYS_S 만큼 미뤄 다시 시도, 다 쓰면 internal_error
   결과 버림   문서가 지워졌거나 더 새 버전이 접수됨 → 콜백 없이 끝냄 (새 버전은 새 버전의 콜백이 간다)
 
@@ -21,9 +22,12 @@ import time
 
 from .callback import CallbackSender, allowed_hosts_from_env
 from .chunking import split_pieces
+from .download import UPLOAD_OFF, UploadSettings, fetch, settings_from_env
 from .errors import INTERNAL_ERROR, UNSUPPORTED_FORMAT, IngestError
+from .filetype import PDF, detect
 from .jobs import KEEP_DAYS, claim, cleanup_finished, finish, retry_later
 from .loaders.minutes import load_minutes
+from .loaders.pdf import load_pdf
 from .store import StaleJob, is_current, mark_failed, mark_processing, store
 
 log = logging.getLogger("rag.worker")
@@ -32,12 +36,12 @@ MAX_ATTEMPTS = 3
 RETRY_DELAYS_S = (30, 120)       # 1번째 실패 뒤 30초, 2번째 실패 뒤 2분
 POLL_S = 1.0                     # 할 일이 없을 때 다시 묻는 간격
 CLEANUP_EVERY_S = 3600           # 끝난 작업 줄 정리 주기
-UPLOAD_NOT_READY = "업로드 로더 미구현"
+UPLOAD_NOT_READY = "업로드 로더 미구현"           # 워드·엑셀 로더는 SCRUM-108·109
 
 
 class Worker:
     def __init__(self, conn, embedder, callback, max_attempts=MAX_ATTEMPTS, retry_delays_s=RETRY_DELAYS_S,
-                 connect=None):
+                 connect=None, upload: UploadSettings | None = None):
         """connect 를 주면 conn 이 없거나 끊겼을 때 run() 이 그것으로 다시 접속한다 (conn=None 으로 시작해도 됨)."""
         self.conn = conn
         self.embedder = embedder
@@ -45,6 +49,7 @@ class Worker:
         self.max_attempts = max_attempts
         self.retry_delays_s = tuple(retry_delays_s)
         self._connect = connect
+        self.upload = upload or UPLOAD_OFF
 
     def process_one(self) -> bool:
         """작업 하나를 처리했으면 True, 꺼낼 것이 없으면 False."""
@@ -89,7 +94,11 @@ class Worker:
         if source == "minutes":
             pieces = load_minutes(job.payload.get("minutes")).pieces
         elif source == "upload":
-            raise IngestError(UNSUPPORTED_FORMAT, UPLOAD_NOT_READY)
+            data = fetch(job.payload.get("fileUrl"), self.upload)
+            kind = detect(data)
+            if kind != PDF:
+                raise IngestError(UNSUPPORTED_FORMAT, f"{UPLOAD_NOT_READY} ({kind})")
+            pieces = load_pdf(data).pieces
         else:
             raise IngestError(INTERNAL_ERROR, "알 수 없는 sourceType")
         chunks = split_pieces(pieces, self.embedder.passage_tokens, self.embedder.max_tokens)
@@ -172,7 +181,7 @@ def from_env(env=None, embedder=None):
     allowed = allowed_hosts_from_env(env)
     if allowed is None:
         log.warning("RAG_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")
-    return Worker(None, embedder, CallbackSender(allowed=allowed), connect=connect_db)
+    return Worker(None, embedder, CallbackSender(allowed=allowed), connect=connect_db, upload=settings_from_env(env))
 
 
 def start_in_thread(worker, stop=None):

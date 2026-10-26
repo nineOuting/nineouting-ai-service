@@ -12,7 +12,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
 | 배포 이미지 (`ghcr.io/nineouting/nineouting-ai-service`) | 구현. 아래 "이미지·배포" |
 | 답변 API (검색 → LLM → 근거 번호 검사) | 구현. LLM 은 설정으로 고름: 가짜(기본, 답 앞에 `[시험용 답변]`) / Gemini(시험) / OpenAI(운영, SDK 는 모델을 정할 때 추가) |
-| 업로드 문서(PDF·워드·엑셀) | 예정 |
+| 업로드 문서(PDF·워드·엑셀) | 받기·형식 확인(SCRUM-106), PDF 읽기(SCRUM-107, PDFium) 구현. 워드·엑셀 읽기는 예정 (SCRUM-108·109) |
 
 원본 명세는 노션 "RAG 인터페이스 명세".
 
@@ -112,7 +112,14 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 
 - 상태 값은 `accepted` / `processing` / `ready` / `failed` (DB 의 `queued` 를 `accepted` 로 보여 줌)
 - 명세에 없어서 AI 쪽이 정한 것 (확인 필요): 입력 오류 400 `{"error": "INVALID_INPUT"}`, 같은 `docId` 가 다른 워크스페이스로 오면 409 `CONFLICT`, DB 를 쓸 수 없으면 503 `NOT_READY`, 넣기 응답 코드 202
-- 지금은 `sourceType=minutes` 만 받는다. `upload` 는 400 (준비 중)
+- `sourceType=upload` 는 허용 저장소(`RAG_UPLOAD_ALLOWED_HOSTS`)가 설정됐을 때만 받는다. 없으면 400. `fileUrl` 의 호스트가 허용 저장소가 아니어도 400
+  - 작업자가 파일을 메모리로 받아(디스크에 쓰지 않음) 안쪽 모양으로 형식을 알아낸다. 확장자는 믿지 않는다
+  - 실패: 서명 만료 `url_expired`, 그 밖에 받지 못함 `download_failed` (둘 다 다시 시도하지 않음. 백엔드가 다시 호출), 크기·푼 크기 초과 `too_large`, 암호 `encrypted`, pdf·docx·xlsx 가 아님(사용자가 묶은 zip, 옛 doc·xls, hwp 포함) `unsupported_format`
+  - PDF: 쪽 하나가 조각 재료 하나, 근거 위치 `{type: "page", page, label: "3쪽"}`. 글 없는 쪽은 건너뛰고, 모든 쪽에 글이 없으면(스캔 PDF 등) `no_text`, 1,000쪽 넘으면 `too_large`. PDFium(`pypdfium2`)으로 읽는다. pypdf 는 글자 폭 정보가 어긋난 PDF 에서 글자마다 띄어 꺼내서 쓰지 않는다
+  - 워드·엑셀은 읽기가 생기기 전까지 형식을 알아낸 뒤 `unsupported_format` 으로 끝난다 (`last_error` 에 "업로드 로더 미구현 (docx)" 처럼 형식)
+  - 머리글·바닥글·쪽 번호 빼기 같은 정제는 아직 없다 (SCRUM-110)
+  - 시험 샘플(합성): `rag/tests/fixtures/upload_*.pdf` (짧은 보고서, 상세 운영계획서 `upload_plan.pdf`, 글 없는 PDF, 암호 PDF), 만드는 스크립트 `make_upload_samples.py` (fpdf2, Noto Sans CJK KR, 운영계획서 내용은 `plan_content.py`)
+  - `fileUrl` 에는 접근 서명이 들어 있어 로그·오류 글에 남기지 않는다
 - `minutes` 형식 (회의록 초안 명세 `docs/api/minutes-draft-contract.md` 4장)
   - 확정 회의록 `formatVersion: "1.0"`: `meetingId`, `meetingStartAt`, `confirmedAt`(선택), `sections[{title, content}]`. `content` 의 줄 하나가 조각 하나이고 줄 앞 `- `·`* `·`• ` 는 뗀다. 빈 줄과 "해당 내용 없음" 은 넣지 않는다. 칸 이름을 맥락으로 붙여 검색하고, 근거 위치는 `{type: "section", section, label}` (칸 이름)
   - 임시 형식 `schema_version: "0.1"` (summary.json): 전환 기간에만. 근거 위치는 녹음 시간 `{type: "time", startMs, endMs, label}`
@@ -166,7 +173,7 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 | 규칙 | 내용 |
 |---|---|
 | 꺼내기 | `FOR UPDATE SKIP LOCKED`. 작업자를 여럿 띄워도 같은 작업을 두 번 잡지 않는다. `running` 으로 10분 넘게 멈춘 작업은 다시 잡는다 |
-| 영구 실패 | `no_text`, 형식 오류 등은 재시도 없이 `failed` 콜백. 업로드 문서는 로더가 생길 때까지 `unsupported_format` (`last_error` 에 "업로드 로더 미구현") |
+| 영구 실패 | `no_text`, 형식 오류, 업로드 받기 실패·만료 등은 재시도 없이 `failed` 콜백. 업로드 문서는 로더가 생길 때까지 `unsupported_format` (`last_error` 에 "업로드 로더 미구현 (형식)") |
 | 일시 실패 | 그 밖의 예외는 30초·2분 뒤 다시, 3번째도 실패하면 `internal_error` |
 | 결과 버림 | 처리 중 문서가 지워졌거나 더 새 버전이 접수되면 콜백 없이 끝낸다 |
 | 콜백 | `POST {callbackUrl}`, `X-Request-Id` 를 돌려준다. 408·429·5xx·연결 오류만 3번 재시도(1·2·4초), 리다이렉트는 따라가지 않는다 |
@@ -217,6 +224,9 @@ set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면
 | `RAG_REQUEST_ID_HEADER` | 요청 추적 헤더 이름 (기본 `X-Request-Id`) |
 | `RAG_DB_POOL_MAX`, `RAG_DB_POOL_TIMEOUT_S` | API 의 DB 연결 풀 최대 개수(기본 5), 연결을 기다리는 시간(기본 5초, 넘으면 503) |
 | `RAG_CALLBACK_ALLOWED_HOSTS` | 콜백을 보내도 되는 호스트 (`host` 또는 `host:port`, 쉼표로). 비어 있으면 모두 허용(개발용, 경고 로그). 운영에서는 반드시 설정 |
+| `RAG_UPLOAD_ALLOWED_HOSTS` | 업로드 문서를 받을 저장소 호스트 (S3 버킷 주소 등, 쉼표로). **비어 있으면 업로드 문서를 받지 않음** (콜백과 달리 모두 허용이 없음) |
+| `RAG_UPLOAD_MAX_MB` | 업로드 파일 최대 크기(MB). 정해 둔 값이며 SCRUM-110 에서 재서 조정. 기본 20 |
+| `RAG_UPLOAD_TIMEOUT_S` | 파일 받기 시간 제한(초). 기본 30 |
 | `RAG_TORCH_THREADS` | 임베딩 스레드 수 (작업자·답변이 같이 씀) (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |
 | `RAG_DB_STATEMENT_TIMEOUT_MS`, `RAG_DB_IDLE_TX_TIMEOUT_MS` | 작업자 DB 연결의 시간 제한 (기본 30000, 60000) |
 | `RAG_LLM_PROVIDER` | 답변 LLM 공급자: `fake`(기본, 시험용 가짜) / `gemini`(시험) / `openai`(운영). 설정이 잘못되면 서버는 뜨고 답변만 503 |

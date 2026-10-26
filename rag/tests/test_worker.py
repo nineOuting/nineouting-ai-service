@@ -12,6 +12,7 @@ from rag.callback import CallbackNotAllowed, CallbackSender
 from rag.jobs import IngestRequest, claim, cleanup_finished, submit
 from rag.store import DocumentMeta, delete_document, delete_workspace, get_status, register
 from rag.worker import UPLOAD_NOT_READY, Worker
+from upload_fakes import office_bytes, ole_bytes
 
 CB = "http://backend.test:8080/internal/rag/callback"
 MINUTES = json.loads((Path(__file__).parent / "fixtures" / "minutes_basic.json").read_text(encoding="utf-8"))
@@ -50,16 +51,17 @@ class HookEmbedder:
         return self.inner.embed_passages(texts)
 
 
-def request(doc_id=1, version="v1", ws=WS, source="minutes", minutes=None, request_id="req-1", cb=CB):
+def request(doc_id=1, version="v1", ws=WS, source="minutes", minutes=None, request_id="req-1", cb=CB,
+            file_url="https://s3.test/presigned"):
     doc = DocumentMeta(doc_id=doc_id, doc_version=version, workspace_id=ws, source_type=source, title="주간 회의")
     if source == "minutes":
         return IngestRequest(doc, cb, minutes=copy.deepcopy(minutes or MINUTES), request_id=request_id)
-    return IngestRequest(doc, cb, file_url="https://s3.test/presigned", request_id=request_id)
+    return IngestRequest(doc, cb, file_url=file_url, request_id=request_id)
 
 
-def make_worker(conn, embedder, backend, sleeps=None):
+def make_worker(conn, embedder, backend, sleeps=None, upload=None):
     sender = CallbackSender(sender=backend, sleep=(sleeps.append if sleeps is not None else lambda s: None))
-    return Worker(conn, embedder, sender)
+    return Worker(conn, embedder, sender, upload=upload)
 
 
 def job_rows(conn):
@@ -136,12 +138,40 @@ def test_넣을_항목이_없으면_재시도_없이_failed_콜백(conn, fake_em
     assert (job_status, attempts, payload) == ("failed", 1, {}) and last_error.startswith("no_text")
 
 
-def test_업로드_문서는_로더가_생길_때까지_unsupported_format(conn, fake_embedder):
+def test_업로드_문서는_받아서_형식까지_알아내고_로더가_생길_때까지_unsupported_format(conn, fake_embedder, storage):
     backend = FakeBackend()
-    submit(conn, request(source="upload"))
-    make_worker(conn, fake_embedder, backend).process_one()
+    storage.files["/ws/1/budget.xlsx"] = office_bytes("xlsx")
+    submit(conn, request(source="upload", file_url=storage.url("/ws/1/budget.xlsx")))
+    make_worker(conn, fake_embedder, backend, upload=storage.settings()).process_one()
+    assert storage.hits == ["/ws/1/budget.xlsx"]
     assert backend.bodies[0]["errorCode"] == "unsupported_format"
-    assert UPLOAD_NOT_READY in job_rows(conn)[0][5]  # last_error 로 "아직 안 만듦"을 구분
+    _, _, _, status, attempts, last_error, payload, _ = job_rows(conn)[0]
+    assert f"{UPLOAD_NOT_READY} (xlsx)" in last_error  # last_error 로 "아직 안 만듦"과 형식을 구분
+    assert (status, attempts, payload) == ("failed", 1, {})   # 서명 주소가 든 요청은 지운다
+
+
+def test_PDF는_받아서_쪽마다_저장하고_ready(conn, fake_embedder, storage):
+    backend = FakeBackend()
+    storage.files["/ws/1/report.pdf"] = (Path(__file__).parent / "fixtures" / "upload_report.pdf").read_bytes()
+    submit(conn, request(source="upload", version="sha256:abc", file_url=storage.url("/ws/1/report.pdf")))
+    make_worker(conn, fake_embedder, backend, upload=storage.settings()).process_one()
+    assert backend.bodies[0]["status"] == "ready" and backend.bodies[0]["chunkCount"] >= 3
+    pages = {r[0] for r in conn.execute("SELECT location->>'label' FROM rag_chunks WHERE doc_id = 1")}
+    assert pages == {"1쪽", "2쪽", "4쪽"}                       # 3쪽은 빈 쪽
+    assert job_rows(conn)[0][6] == {}                           # 서명 주소가 든 요청은 지운다
+
+
+@pytest.mark.parametrize("path, code", [("/expired", "url_expired"), ("/error", "download_failed"),
+                                        ("/ws/1/old.doc", "unsupported_format"), ("/ws/1/locked.docx", "encrypted")])
+def test_업로드_실패는_다시_시도하지_않고_바로_알린다(conn, fake_embedder, storage, path, code):
+    """받기 실패·만료는 RAG 명세대로 백엔드가 다시 호출한다"""
+    backend = FakeBackend()
+    storage.files["/ws/1/old.doc"] = ole_bytes(encrypted=False)
+    storage.files["/ws/1/locked.docx"] = ole_bytes(encrypted=True)
+    submit(conn, request(source="upload", file_url=storage.url(path)))
+    make_worker(conn, fake_embedder, backend, upload=storage.settings()).process_one()
+    assert backend.bodies[0]["status"] == "failed" and backend.bodies[0]["errorCode"] == code
+    assert job_rows(conn)[0][3:5] == ("failed", 1)
 
 
 def test_일시_실패는_뒤로_미뤄_다시_처리(conn, fake_embedder):

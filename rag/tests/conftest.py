@@ -77,3 +77,12 @@ def other_conn(conn):
     c = connect(env="RAG_TEST_DATABASE_URL")
     yield c
     c.close()
+
+
+@pytest.fixture
+def storage():
+    """S3 대신 쓰는 가짜 저장소 서버 (업로드 문서 시험)."""
+    from upload_fakes import FakeStorage
+    s = FakeStorage()
+    yield s
+    s.close()

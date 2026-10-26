@@ -13,6 +13,7 @@ from .answer import Answerer
 from .api import PREFIX, REQUEST_ID_HEADER, make_router
 from .callback import allowed_hosts_from_env
 from .db import timeout_options
+from .download import settings_from_env as upload_settings_from_env
 from .llm import LLMConfigError, make_llm
 
 log = logging.getLogger("rag.runtime")
@@ -75,7 +76,11 @@ def setup(app, env) -> RagRuntime:
     allowed = allowed_hosts_from_env(env)
     if allowed is None:
         log.warning("RAG_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")
+    upload = upload_settings_from_env(env)
+    log.info("업로드 문서 %s", "받음 (허용 저장소 %d곳)" % len(upload.allowed_hosts) if upload.enabled
+             else "받지 않음 (RAG_UPLOAD_ALLOWED_HOSTS 없음)")
     runtime = RagRuntime(pool, env)
     app.include_router(make_router(pool, allowed, env.get("RAG_REQUEST_ID_HEADER", REQUEST_ID_HEADER),
-                                   env.get("RAG_API_PREFIX", PREFIX), answerer=make_answerer(runtime, env)))
+                                   env.get("RAG_API_PREFIX", PREFIX), answerer=make_answerer(runtime, env),
+                                   upload=upload))
     return runtime

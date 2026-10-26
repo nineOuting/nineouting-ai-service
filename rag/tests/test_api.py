@@ -79,6 +79,40 @@ def test_낮은_회의록_버전은_202_ignored이고_작업을_넣지_않음(cl
     assert client.get(f"{BASE}/documents/1").json()["docVersion"] == "5"
 
 
+@pytest.fixture
+def upload_client(conn, storage):
+    """업로드 문서를 받도록 설정한 앱 (허용 저장소 = 가짜 저장소)."""
+    pool = make_pool(os.environ["RAG_TEST_DATABASE_URL"])
+    app = FastAPI()
+    app.include_router(make_router(pool, allowed_callback_hosts={"backend.test:8080"}, upload=storage.settings()))
+    with TestClient(app) as c:
+        yield c
+    pool.close()
+
+
+def upload_body(storage, **over):
+    return body(**{"sourceType": "upload", "minutes": _DROP, "docVersion": "sha256:9f2c", "title": "예산안.xlsx",
+                   "fileUrl": storage.url("/ws/1/budget.xlsx"), **over})
+
+
+def test_업로드_문서는_허용_저장소가_설정되면_202_accepted(upload_client, conn, storage):
+    r = upload_client.post(f"{BASE}/documents", json=upload_body(storage))
+    assert r.status_code == 202 and r.json()["status"] == "accepted"
+    assert jobs(conn) == [(1, "sha256:9f2c", "queued", None)]
+    assert storage.hits == []                         # 접수 때는 받지 않는다 (작업자가 받음)
+
+
+@pytest.mark.parametrize("over, word", [
+    ({"fileUrl": _DROP}, "fileUrl 이 없음"),
+    ({"fileUrl": "https://evil.test/a.pdf"}, "허용한 저장소가 아님"),
+    ({"fileUrl": "ftp://x/a.pdf"}, "http 또는 https"),
+])
+def test_업로드_문서의_주소가_틀리면_400(upload_client, conn, storage, over, word):
+    r = upload_client.post(f"{BASE}/documents", json=upload_body(storage, **over))
+    assert r.status_code == 400 and word in r.json()["detail"] and jobs(conn) == []
+    assert "evil" not in r.text
+
+
 def test_추적_ID는_200자까지만_저장(client, conn):
     client.post(f"{BASE}/documents", json=body(), headers={"X-Request-Id": "r" * 300})
     assert jobs(conn)[0][3] == "r" * 200
@@ -93,7 +127,7 @@ def test_추적_ID는_200자까지만_저장(client, conn):
     ({"docVersion": ""}, "docVersion"),
     ({"docVersion": "v" * 201}, "docVersion"),
     ({"title": _DROP}, "title"),
-    ({"sourceType": "upload", "fileUrl": "https://s3.test/x"}, "준비 중"),
+    ({"sourceType": "upload", "fileUrl": "https://s3.test/x"}, "업로드 문서를 받도록 설정되지 않음"),
     ({"sourceType": "pdf"}, "sourceType"),
     ({"minutes": _DROP}, "minutes"),
     ({"minutes": "회의록"}, "minutes"),

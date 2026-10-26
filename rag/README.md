@@ -12,7 +12,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
 | 배포 이미지 (`ghcr.io/nineouting/nineouting-ai-service`) | 구현. 아래 "이미지·배포" |
 | 답변 API (검색 → LLM → 근거 번호 검사) | 구현. LLM 은 설정으로 고름: 가짜(기본, 답 앞에 `[시험용 답변]`) / Gemini(시험) / OpenAI(운영, SDK 는 모델을 정할 때 추가) |
-| 업로드 문서(PDF·워드·엑셀) | 받기·형식 확인 구현 (SCRUM-106). 형식별 읽기는 예정 (SCRUM-107~109) |
+| 업로드 문서(PDF·워드·엑셀) | 받기·형식 확인(SCRUM-106), PDF 읽기(SCRUM-107, PDFium) 구현. 워드·엑셀 읽기는 예정 (SCRUM-108·109) |
 
 원본 명세는 노션 "RAG 인터페이스 명세".
 
@@ -115,7 +115,10 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 - `sourceType=upload` 는 허용 저장소(`RAG_UPLOAD_ALLOWED_HOSTS`)가 설정됐을 때만 받는다. 없으면 400. `fileUrl` 의 호스트가 허용 저장소가 아니어도 400
   - 작업자가 파일을 메모리로 받아(디스크에 쓰지 않음) 안쪽 모양으로 형식을 알아낸다. 확장자는 믿지 않는다
   - 실패: 서명 만료 `url_expired`, 그 밖에 받지 못함 `download_failed` (둘 다 다시 시도하지 않음. 백엔드가 다시 호출), 크기·푼 크기 초과 `too_large`, 암호 `encrypted`, pdf·docx·xlsx 가 아님(사용자가 묶은 zip, 옛 doc·xls, hwp 포함) `unsupported_format`
-  - 형식별 읽기가 생기기 전까지는 형식을 알아낸 뒤 `unsupported_format` 으로 끝난다 (`last_error` 에 "업로드 로더 미구현 (pdf)" 처럼 형식)
+  - PDF: 쪽 하나가 조각 재료 하나, 근거 위치 `{type: "page", page, label: "3쪽"}`. 글 없는 쪽은 건너뛰고, 모든 쪽에 글이 없으면(스캔 PDF 등) `no_text`, 1,000쪽 넘으면 `too_large`. PDFium(`pypdfium2`)으로 읽는다. pypdf 는 글자 폭 정보가 어긋난 PDF 에서 글자마다 띄어 꺼내서 쓰지 않는다
+  - 워드·엑셀은 읽기가 생기기 전까지 형식을 알아낸 뒤 `unsupported_format` 으로 끝난다 (`last_error` 에 "업로드 로더 미구현 (docx)" 처럼 형식)
+  - 머리글·바닥글·쪽 번호 빼기 같은 정제는 아직 없다 (SCRUM-110)
+  - 시험 샘플(합성): `rag/tests/fixtures/upload_*.pdf`, 만드는 스크립트 `make_upload_samples.py` (fpdf2, Noto Sans CJK KR)
   - `fileUrl` 에는 접근 서명이 들어 있어 로그·오류 글에 남기지 않는다
 - `minutes` 형식 (회의록 초안 명세 `docs/api/minutes-draft-contract.md` 4장)
   - 확정 회의록 `formatVersion: "1.0"`: `meetingId`, `meetingStartAt`, `confirmedAt`(선택), `sections[{title, content}]`. `content` 의 줄 하나가 조각 하나이고 줄 앞 `- `·`* `·`• ` 는 뗀다. 빈 줄과 "해당 내용 없음" 은 넣지 않는다. 칸 이름을 맥락으로 붙여 검색하고, 근거 위치는 `{type: "section", section, label}` (칸 이름)

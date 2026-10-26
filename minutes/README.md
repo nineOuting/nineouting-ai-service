@@ -8,7 +8,7 @@
 |---|---|
 | 재료 만들기 (요약 → 줄 재료), 칸 배치(AI), 코드 검사, 줄 글 | 구현. AI 는 칸 고르기와 결정 문장 다듬기만 한다 |
 | 접수 주소 `POST /internal/minutes/drafts`, 대기열·작업자, 결과 콜백 | 구현 |
-| 양식 변경 시 다시 배치 (`previousLines`) | 예정 (SCRUM-98). 지금은 400 "준비 중" |
+| 양식 변경 시 다시 배치 (`previousLines`) | 구현 (SCRUM-98, `relayout.py`). 고친 줄·새로 쓴 줄은 글 그대로 칸만 다시 고름. 처음 초안과 지시문을 따로 씀 (`prompts/relayout/`) |
 | 근거·맥락 연결 (AI-11) | ai-service API 없음. 결과의 `sources`·`transcriptSeqs` 를 백엔드가 따라간다 |
 
 ## 흐름

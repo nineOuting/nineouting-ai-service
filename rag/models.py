@@ -8,7 +8,7 @@ class Piece:
     content: str                 # 원문 그대로. 답변 근거(citations[].text)로 나간다
     location: dict               # API 의 location 객체 (type, label, ...)
     context: str | None = None   # 임베딩 글 앞에 붙일 맥락 (회의록 주제, 문서 제목 경로 등)
-    kind: str | None = None      # 출처 칸 (임시 형식 회의록: summary / decisions / action_items, 확정 회의록: section)
+    kind: str | None = None      # 출처 칸 (임시 형식 회의록: summary / decisions / action_items, 확정 회의록: section, PDF: page)
 
 
 @dataclass(frozen=True)

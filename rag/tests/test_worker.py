@@ -150,6 +150,17 @@ def test_업로드_문서는_받아서_형식까지_알아내고_로더가_생�
     assert (status, attempts, payload) == ("failed", 1, {})   # 서명 주소가 든 요청은 지운다
 
 
+def test_PDF는_받아서_쪽마다_저장하고_ready(conn, fake_embedder, storage):
+    backend = FakeBackend()
+    storage.files["/ws/1/report.pdf"] = (Path(__file__).parent / "fixtures" / "upload_report.pdf").read_bytes()
+    submit(conn, request(source="upload", version="sha256:abc", file_url=storage.url("/ws/1/report.pdf")))
+    make_worker(conn, fake_embedder, backend, upload=storage.settings()).process_one()
+    assert backend.bodies[0]["status"] == "ready" and backend.bodies[0]["chunkCount"] >= 3
+    pages = {r[0] for r in conn.execute("SELECT location->>'label' FROM rag_chunks WHERE doc_id = 1")}
+    assert pages == {"1쪽", "2쪽", "4쪽"}                       # 3쪽은 빈 쪽
+    assert job_rows(conn)[0][6] == {}                           # 서명 주소가 든 요청은 지운다
+
+
 @pytest.mark.parametrize("path, code", [("/expired", "url_expired"), ("/error", "download_failed"),
                                         ("/ws/1/old.doc", "unsupported_format"), ("/ws/1/locked.docx", "encrypted")])
 def test_업로드_실패는_다시_시도하지_않고_바로_알린다(conn, fake_embedder, storage, path, code):

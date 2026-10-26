@@ -1,3 +1,6 @@
 -r requirements.txt
 pytest==9.1.1
 httpx==0.28.1
+# 업로드 문서 시험 샘플 만들기 (rag/tests/fixtures/make_upload_samples.py). 이미지에는 넣지 않는다
+fpdf2==2.8.9
+pypdf==6.21.2

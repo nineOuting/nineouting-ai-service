@@ -8,7 +8,7 @@
 |---|---|
 | 재료 만들기 (요약 → 줄 재료), 칸 배치(AI), 코드 검사, 줄 글 | 구현. AI 는 칸 고르기와 결정 문장 다듬기만 한다 |
 | 접수 주소 `POST /internal/minutes/drafts`, 대기열·작업자, 결과 콜백 | 구현 |
-| 양식 변경 시 다시 배치 (`previousLines`) | 예정 (SCRUM-98). 지금은 400 "준비 중" |
+| 양식 변경 시 다시 배치 (`previousLines`) | 구현 (SCRUM-98, `relayout.py`). 고친 줄·새로 쓴 줄은 글 그대로 칸만 다시 고름. 처음 초안과 지시문을 따로 씀 (`prompts/relayout/`) |
 | 근거·맥락 연결 (AI-11) | ai-service API 없음. 결과의 `sources`·`transcriptSeqs` 를 백엔드가 따라간다 |
 
 ## 흐름
@@ -31,7 +31,8 @@
 | `jobs.py`, `worker.py` | 대기열 표와 작업자 |
 | `api.py`, `runtime.py` | 접수 주소와 `server/main.py` 에 붙이는 곳 |
 | `llm_config.py` | 초안 AI 설정 고르기. AI 연결(`rag/llm.py`)과 콜백 보내기(`rag/callback.py`)는 RAG 코드를 같이 쓴다 |
-| `prompts/placement/v*.md` | 칸 배치 지시문. `MINUTES_PROMPT_VERSION` 이 없으면 번호가 가장 큰 파일 |
+| `prompts/placement/v*.md` | 칸 배치 지시문 (처음 초안). `MINUTES_PROMPT_VERSION` 이 없으면 번호가 가장 큰 파일 |
+| `relayout.py`, `prompts/relayout/v*.md` | 양식 변경 시 다시 배치: 이전 줄 → 재료, 다시 배치 지시문. 처음 초안 지시문과 거의 같은 글이라 규칙을 고치면 두 파일을 같이 고친다 |
 
 ## 서버에 붙이기
 
@@ -51,7 +52,7 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 | `MINUTES_LLM_PROVIDER`, `MINUTES_LLM_MODEL` | 초안 AI 공급자·모델. 공급자가 있으면 둘을 한 묶음으로 쓰고, 없으면 RAG 답변 설정(`RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`)을 그대로 쓴다. 모델만 넣으면 설정 오류. 틀리면 서버는 뜨고 초안 주소만 503 (`llm_config.py`) | 없음 (RAG 설정, 그 기본값은 `fake`) |
 | `GEMINI_API_KEY` | API 키. RAG 답변과 같이 쓴다 | 없음 |
 | `MINUTES_LLM_TIMEOUT_S` | AI 응답 시간 제한(초) | 60 |
-| `MINUTES_PROMPT_VERSION` | 지시문 버전 (예: `v6`) | 가장 큰 번호 |
+| `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION` | 처음 초안·다시 배치 지시문 버전 (예: `v7`, `v1`) | 가장 큰 번호 |
 | `MINUTES_WORKER_IN_PROCESS` | `0` 이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker` 로 따로) | `1` |
 | `MINUTES_DB_POOL_MAX`, `MINUTES_DB_POOL_TIMEOUT_S` | 접수 주소의 DB 연결 수, 연결을 기다리는 초 | 3, 5 |
 | `MINUTES_DB_STATEMENT_TIMEOUT_MS`, `MINUTES_DB_IDLE_TX_TIMEOUT_MS`, `MINUTES_DB_CONNECT_TIMEOUT_S` | DB 시간 제한 | 30000, 60000, 10 |

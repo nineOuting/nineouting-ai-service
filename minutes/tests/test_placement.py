@@ -2,10 +2,12 @@
 import pytest
 
 from minutes import placement as placement_mod
+from minutes.draft import make_draft
 from minutes.materials import build_materials
 from minutes.placement import (CHECK_FAILED, LLM_FAILED, LLM_TIMEOUT, PromptError, build_user, check, load_prompt,
                                parse_reply, place)
-from minutes_fakes import GOOD, ITEMS, ScriptLLM, load_request
+from minutes.relayout import build_relayout
+from minutes_fakes import GOOD, ITEMS, ScriptLLM, load_request, previous_lines_of
 from rag.llm import LLMError, LLMTimeout
 
 
@@ -48,7 +50,7 @@ def test_지난_답의_문제를_붙인다(materials):
 
 
 def test_지시문을_읽는다():
-    assert load_prompt().version == "placement-v6"                  # 번호가 가장 큰 파일
+    assert load_prompt().version == "placement-v7"                  # 번호가 가장 큰 파일
     for version in ("v1", "v2", "v3", "v4", "v5", "v6"):
         prompt = load_prompt(version)
         assert prompt.version == f"placement-{version}"
@@ -170,3 +172,27 @@ def test_지시문을_바꿔_넣을_수_있다(materials):
     llm = ScriptLLM(GOOD)
     place(ITEMS, materials, llm, timeout_s=60, prompt=placement_mod.Prompt("placement-test", "시험 지시문"))
     assert llm.calls[0][0] == "시험 지시문"
+
+
+def test_다시_배치_재료_입력은_새로_쓴_줄을_안건_없이_보여준다():
+    body = load_request()
+    lines = [{"title": "할 일", "sentence": "고객사 로고는 행사 전날까지 받기", "transcriptSeqs": [], "sources": [],
+              "draftEdited": True},
+             {"title": "결정 사항", "sentence": "배포 일정: 오후로 정했다.", "transcriptSeqs": [40], "draftEdited": True,
+              "sources": [{"agendaId": 101, "kind": "decision", "id": None}]}]
+    materials, _ = build_relayout(body["agendas"], body["summary"], lines)
+    user = build_user(ITEMS, materials)
+    assert "m1 [직접 작성] (고정) 고객사 로고는 행사 전날까지 받기" in user
+    assert "m2 [배포 일정 / 결정] (고정) 배포 일정: 오후로 정했다." in user
+
+
+def test_다시_배치에서도_이전_줄은_모두_한_곳에_한_번씩이어야_한다():
+    """이전 줄 하나 = 재료 하나라서, 재료 검사가 곧 명세 8.3의 이전 줄 검사다"""
+    body = load_request()
+    lines = previous_lines_of(make_draft(body, ScriptLLM(GOOD)))
+    lines.append(dict(lines[0], draftEdited=True))                  # 복사한 줄: 출처는 같고 재료 번호는 m10
+    materials, _ = build_relayout(body["agendas"], body["summary"], lines)
+    placed = [{"m": m.ref, "section": 1, "text": "정했다."} for m in materials[:9]]
+    assert check({"placements": placed, "unplaced": []}, materials, 4)[1] == ["m10가 placements에도 unplaced에도 없음"]
+    ok, problems = check({"placements": placed, "unplaced": ["m10"]}, materials, 4)
+    assert problems == [] and ok.unplaced == ("m10",)

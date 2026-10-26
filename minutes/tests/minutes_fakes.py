@@ -3,6 +3,7 @@ rag/tests/_helpers.py 와 이름이 겹치지 않게 따로 이름을 붙였다 
 import json
 from pathlib import Path
 
+from minutes.relayout import previous_lines_from
 from rag.llm import Reply
 
 FIXTURE = Path(__file__).parent / "fixtures" / "draft_request.json"
@@ -38,3 +39,6 @@ class ScriptLLM:
         if isinstance(r, Exception):
             raise r
         return Reply(r if isinstance(r, str) else json.dumps(r, ensure_ascii=False), 100, 20)
+
+# 처음 초안 결과 → previousLines. 시험에서 줄을 고치거나 더해 쓴다
+previous_lines_of = previous_lines_from

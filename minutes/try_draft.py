@@ -4,6 +4,10 @@
   .venv/bin/python -m minutes.try_draft --real                   합성 요청, 실제 AI (MINUTES_LLM_* 없으면 RAG_LLM_*, 그리고 API 키)
   .venv/bin/python -m minutes.try_draft --file 요청.json --real   다른 요청 파일
   .venv/bin/python -m minutes.try_draft --real --json            결과 JSON 전체도 출력
+  .venv/bin/python -m minutes.try_draft --file minutes/tests/fixtures/relayout_request.json --real
+                                                                 양식 변경 시 다시 배치 (합성 예시, 고친 줄·새 줄 포함)
+  .venv/bin/python -m minutes.try_draft --real --relayout-to "결정 사항,할 일,고객 요청"
+                                                                 처음 초안 → 그 줄을 새 양식으로 다시 배치 (AI 2번)
 
 가짜 AI 는 모든 재료를 첫 칸에 넣고 글을 원래 글 그대로 돌려준다. 흐름이 도는지만 본다.
 실제 AI 는 RAG 답변과 같은 설정으로 연결한다 (환경변수가 있으면 그것, 없으면 rag/.env). 키 값은 출력하지 않는다.
@@ -22,6 +26,7 @@ from rag.try_answer import load_env_file
 
 from .draft import make_draft
 from .llm_config import make_minutes_llm
+from .relayout import previous_lines_from
 from .request import InvalidInput, validate_request
 
 SAMPLE = Path(__file__).parent / "tests" / "fixtures" / "draft_request.json"
@@ -78,14 +83,77 @@ def real_llm():
     return llm
 
 
-def show(result):
+def show(result, previous=None, before_items=None):
+    """결과 출력. previous(다시 배치의 previousLines)가 있으면 바꾸기 전 초안을 먼저 보여 주고,
+    바꾼 뒤의 줄마다 이전 초안에서 있던 칸을 붙인다. before_items(처음 양식)를 모르면 줄이 있는 칸만 보인다."""
+    if previous:
+        titles = before_items or list(dict.fromkeys(line["title"] for line in previous))
+        note = "" if before_items else ", 줄이 있는 칸만"
+        print(f"\n========== 바꾸기 전 초안 ({' / '.join(titles)}{note})")
+        for title in titles:
+            print(f"■ {title}")
+            print("\n".join(f"- {_mark(l)}{l['sentence']}" for l in previous if l["title"] == title)
+                  or "해당 내용 없음")
     if result["status"] != "SUCCEEDED":
         print(f"\n실패: {result['error']['code']} — {result['error']['message']}")
         return
+    if previous:
+        print(f"\n========== 바꾼 뒤 ({' / '.join(s['title'] for s in result['sections'])})")
+    where = _previous_titles(result, previous or [])
     for s in result["sections"]:
-        print(f"\n■ {s['title']}\n{s['content']}")
+        if not previous:
+            print(f"\n■ {s['title']}\n{s['content']}")
+            continue
+        print(f"■ {s['title']}")
+        print("\n".join(f"- {_mark(line)}{line['sentence']}{where[id(line)]}" for line in s["evidence"])
+              or "해당 내용 없음")
     print("\n■ 넣지 못한 재료")
     print("\n".join(f"- 안건 {u['agendaId']} / {u['kind']} / {u['id']}" for u in result["unplaced"]) or "없음")
+    if previous:
+        print("\n■ 넣지 못한 이전 줄 (이전 칸 → 글)")
+        print("\n".join(f"- {_mark(line)}{line['title']} → {line['sentence']}" for line in result["unplacedLines"])
+              or "없음")
+
+
+def _mark(line) -> str:
+    if not line.get("draftEdited"):
+        return ""
+    return "[고침] " if line.get("sources") else "[새 줄] "
+
+
+def _previous_titles(result, previous) -> dict:
+    """바꾼 뒤의 줄 → "   ← 이전: {칸}". 글이 같은 이전 줄을 먼저 찾고, 없으면 출처가 같은 줄
+    (고치지 않은 결정 줄은 AI 가 다시 다듬어 글이 바뀔 수 있다)."""
+    unused, out = list(previous), {}
+    lines = [line for s in result["sections"] for line in s["evidence"]]
+    for line in lines:                                    # 글이 같은 줄
+        hit = next((p for p in unused if p["sentence"] == line["sentence"]), None)
+        if hit:
+            unused.remove(hit)
+            out[id(line)] = f"   ← 이전: {hit['title']}"
+    for line in lines:                                    # 글이 바뀐 줄은 출처로
+        if id(line) in out:
+            continue
+        hit = next((p for p in unused if line["sources"] and p["sources"][:1] == line["sources"]), None)
+        if hit:
+            unused.remove(hit)
+        out[id(line)] = f"   ← 이전: {hit['title']} (다시 다듬음)" if hit else ""
+    return out
+
+
+def run(body, llm, args, previous=None, before_items=None):
+    try:
+        validate_request(body)
+    except InvalidInput as e:
+        sys.exit(f"요청 형식 오류 (API 였다면 400): {e}")
+    start = len(llm.calls)
+    result = make_draft(body, llm, timeout_s=args.timeout, max_retries=args.retries)
+    if args.show_io:
+        show_io(llm.calls[start:])
+    show(result, previous, before_items)
+    if args.json:
+        print("\n" + json.dumps(result, ensure_ascii=False, indent=2))
+    return result
 
 
 def main():
@@ -96,22 +164,27 @@ def main():
     p.add_argument("--retries", type=int, default=2, help="검사에 걸렸을 때 다시 시키는 횟수")
     p.add_argument("--json", action="store_true", help="결과 JSON 전체도 출력")
     p.add_argument("--show-io", action="store_true", help="AI 호출마다 지시문·입력·원래 답·토큰을 출력")
+    p.add_argument("--relayout-to", metavar="칸1,칸2", help="처음 초안을 만든 뒤 그 줄을 이 양식으로 다시 배치한다")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="[로그] %(message)s")
     body = json.loads(args.file.read_text(encoding="utf-8"))
-    try:
-        validate_request(body)
-    except InvalidInput as e:
-        sys.exit(f"요청 형식 오류 (API 였다면 400): {e}")
     llm = Recorder(real_llm() if args.real else PlaceAllFakeLLM())
     print(f"요청: {args.file.name} / AI: {llm.name} ({llm.model})", flush=True)
-    result = make_draft(body, llm, timeout_s=args.timeout, max_retries=args.retries)
-    if args.show_io:
-        show_io(llm.calls)
-    show(result)
-    if args.json:
-        print("\n" + json.dumps(result, ensure_ascii=False, indent=2))
+    if not args.relayout_to:
+        run(body, llm, args, body.get("previousLines"))
+        return
+    if body.get("previousLines"):
+        sys.exit("--relayout-to 는 처음 만들기 요청(previousLines 없음)에만 쓴다")
+    items = [name.strip() for name in args.relayout_to.split(",") if name.strip()]
+    print(f"\n########## 1. 처음 초안 ({' / '.join(body['template']['items'])})")
+    first = run(body, llm, args)
+    if first["status"] != "SUCCEEDED":
+        return
+    print(f"\n########## 2. 양식을 바꿔 다시 배치")
+    second = dict(body, requestId=f"{body['requestId']}-relayout", template={"items": items},
+                  previousLines=previous_lines_from(first))
+    run(second, llm, args, second["previousLines"], body["template"]["items"])
 
 
 if __name__ == "__main__":

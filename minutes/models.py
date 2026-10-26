@@ -13,7 +13,7 @@ class Material:
     없으면(사람이 고치지 않은 요약 문장·의견) AI 가 칸에 맞게 다듬은 글을 쓴다.
     """
     ref: str                        # AI 입력에서 가리키는 번호 "m1", "m2" …
-    agenda_id: int
+    agenda_id: int | None           # 작성자가 새로 쓴 줄은 None
     agenda_title: str
     kind: str                       # KIND_RANK 의 키
     item_id: str | None             # 요약 항목 id. 상태 줄(undecided, decisionCheck)은 None
@@ -24,6 +24,11 @@ class Material:
     edited: bool
     needs_check: bool
     order: tuple[int, int, int]     # (안건 순서, 종류 순서, 같은 종류 안 순서). 칸 안 줄 순서에 쓴다
+    # 다시 배치 (명세 8장, relayout.py). 처음 초안에서는 기본값 그대로다
+    previous: int | None = None     # 이 재료가 된 previousLines 의 위치
+    draft_edited: bool = False      # 그 줄의 draftEdited 그대로
+    whole_line: bool = False        # fixed_text 가 "{안건 제목}: " 까지 붙은 줄 글 전체다 (이전 줄 글을 그대로 쓸 때)
+    sourced: bool = True            # False 면 출처가 없는 줄 (작성자가 새로 쓴 줄). 결과의 sources 가 빈 목록
 
     @property
     def rewrite(self) -> bool:
@@ -33,6 +38,9 @@ class Material:
     def source(self) -> dict:
         """결과의 sources·unplaced 항목."""
         return {"agendaId": self.agenda_id, "kind": self.kind, "id": self.item_id}
+
+    def sources(self) -> list[dict]:
+        return [self.source()] if self.sourced else []
 
 
 @dataclass(frozen=True)

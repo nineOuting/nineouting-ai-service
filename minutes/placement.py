@@ -1,6 +1,6 @@
 """AI 에게 칸 고르기와 글 다듬기를 묻고, 답을 검사한다. 명세 7.2·7.3
 
-  AI 에게 주는 글   <칸> 번호 붙인 칸 이름, <재료> m 번호·안건·종류·(다듬기/고정)·글
+  AI 에게 주는 글   <칸> 번호 붙인 칸 이름, <재료> m 번호·안건·종류·(다듬기/고정)·글. 다시 배치의 새로 쓴 줄은 안건 없이 [직접 작성]
   AI 의 답          {"placements": [{"m", "section", "text"}], "unplaced": [...]}
   검사              형식, 칸 번호, 재료 번호, 한 번만, 빠짐, 다듬은 글(빈 글·줄바꿈·새 숫자)
   다시 시키기       검사에 걸리면 걸린 이유를 붙여 다시 묻는다 (max_retries 번). 넘으면 CHECK_FAILED
@@ -22,6 +22,7 @@ from .models import Material, Placement
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 PROMPT_KIND = "placement"
+RELAYOUT_KIND = "relayout"      # 양식 변경 시 다시 배치 (명세 8장). 처음 초안과 지시문을 나눈 이유는 prompts/relayout/v1.md 머리
 CHECK_FAILED = "CHECK_FAILED"
 LLM_TIMEOUT = "LLM_TIMEOUT"
 LLM_FAILED = "LLM_FAILED"
@@ -49,26 +50,26 @@ class Outcome:
 
 
 @lru_cache(maxsize=None)
-def load_prompt(version: str | None = None) -> Prompt:
-    """minutes/prompts/placement/{version}.md. version 이 없으면 번호가 가장 큰 파일.
-    맨 위 --- 사이의 version 이 "placement-{version}" 과 같아야 한다 (RAG 지시문과 같은 규칙)."""
-    folder = PROMPTS_DIR / PROMPT_KIND
+def load_prompt(version: str | None = None, kind: str = PROMPT_KIND) -> Prompt:
+    """minutes/prompts/{kind}/{version}.md. version 이 없으면 번호가 가장 큰 파일.
+    맨 위 --- 사이의 version 이 "{kind}-{version}" 과 같아야 한다 (RAG 지시문과 같은 규칙)."""
+    folder = PROMPTS_DIR / kind
     if version is None:
         names = sorted((p.stem for p in folder.glob("v*.md") if _VERSION.fullmatch(p.stem)), key=lambda v: int(v[1:]))
         if not names:
-            raise PromptError(f"지시문 파일 없음: prompts/{PROMPT_KIND}/v*.md")
+            raise PromptError(f"지시문 파일 없음: prompts/{kind}/v*.md")
         version = names[-1]
     if not _VERSION.fullmatch(version):
         raise PromptError(f"지시문 버전은 v1, v2 처럼 써야 함 (받은 값: {version})")
     try:
         raw = (folder / f"{version}.md").read_text(encoding="utf-8")
     except OSError:
-        raise PromptError(f"지시문 파일 없음: prompts/{PROMPT_KIND}/{version}.md") from None
+        raise PromptError(f"지시문 파일 없음: prompts/{kind}/{version}.md") from None
     m = re.match(r"---\n(.*?)\n---\n(.*)", raw, re.S)
-    expected = f"{PROMPT_KIND}-{version}"
+    expected = f"{kind}-{version}"
     meta = dict(line.split(":", 1) for line in m.group(1).splitlines() if ":" in line) if m else {}
     if meta.get("version", "").strip() != expected or not m.group(2).strip():
-        raise PromptError(f"prompts/{PROMPT_KIND}/{version}.md 맨 위의 version 이 {expected} 가 아니거나 본문이 없음")
+        raise PromptError(f"prompts/{kind}/{version}.md 맨 위의 version 이 {expected} 가 아니거나 본문이 없음")
     return Prompt(expected, m.group(2).strip())
 
 
@@ -77,7 +78,8 @@ def build_user(items: list[str], materials: list[Material], problems: list[str] 
     parts = ["<칸>", *(f"{i}. {_quote(name)}" for i, name in enumerate(items, 1)), "</칸>", "<재료>"]
     for m in materials:
         how = "다듬기" if m.rewrite else "고정"
-        parts.append(f"{m.ref} [{_quote(m.agenda_title)} / {m.label}] ({how}) {_quote(m.text)}")
+        head = f"{_quote(m.agenda_title)} / {m.label}" if m.agenda_title else m.label    # 작성자가 새로 쓴 줄은 안건이 없다
+        parts.append(f"{m.ref} [{head}] ({how}) {_quote(m.text)}")
     parts.append("</재료>")
     if problems:
         parts += ["<지난 답의 문제>", *(f"- {p}" for p in problems), "</지난 답의 문제>"]

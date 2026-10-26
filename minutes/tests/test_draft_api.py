@@ -65,7 +65,7 @@ def test_추적_번호는_200자까지만_남긴다(client, conn):
     (lambda b: b.pop("requestId"), "requestId"),
     (lambda b: b.update(callbackUrl="http://evil.example/x"), "허용 목록"),
     (lambda b: b.update(callbackUrl="ftp://minutes-service:8084/x"), "http 또는 https"),
-    (lambda b: b.update(previousLines=[{"title": "할 일"}]), "준비 중"),
+    (lambda b: b.update(previousLines=[{"title": "할 일"}]), "previousLines[0].sentence"),
 ])
 def test_틀린_요청은_400_INVALID_INPUT이고_아무것도_남기지_않는다(client, conn, change, word):
     body = load_request()

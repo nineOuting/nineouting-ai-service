@@ -1,7 +1,10 @@
 """다시 배치의 재료 만들기 시험 (명세 8장). 합성 요청으로 처음 초안을 만들고, 그 줄을 고쳐 previousLines 로 쓴다."""
+import json
+
 from minutes.draft import make_draft
 from minutes.relayout import WRITTEN, build_relayout, flatten
-from minutes_fakes import GOOD, ScriptLLM, load_request, previous_lines_of
+from minutes.request import validate_request
+from minutes_fakes import FIXTURE, GOOD, ScriptLLM, load_request, previous_lines_of
 
 
 def first_draft():
@@ -107,3 +110,12 @@ def test_출처가_둘이면_첫_출처만_쓴다():
     materials, unreferenced = relayout(body, lines)
     assert materials[i].sources() == [{"agendaId": 101, "kind": "summary", "id": "k3f9a1-1"}]
     assert materials[i].rewrite is False and not materials[i].whole_line   # 출처대로 다시 만든 고정 재료
+
+
+def test_손_시험용_다시_배치_예시는_형식이_맞고_고친_줄_새_줄_지운_줄을_담는다():
+    body = json.loads((FIXTURE.parent / "relayout_request.json").read_text(encoding="utf-8"))
+    validate_request(body)
+    materials, unreferenced = relayout(body, body["previousLines"])
+    assert sum(m.draft_edited and m.sourced for m in materials) == 1             # 고친 결정 줄
+    assert sum(not m.sourced for m in materials) == 1                             # 새로 쓴 줄
+    assert {(m.kind, m.item_id) for m in unreferenced} == {("opinion", "k3f9a1-20"), ("todo", "u-1")}  # 지운 줄 포함

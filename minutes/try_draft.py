@@ -4,6 +4,8 @@
   .venv/bin/python -m minutes.try_draft --real                   합성 요청, 실제 AI (MINUTES_LLM_* 없으면 RAG_LLM_*, 그리고 API 키)
   .venv/bin/python -m minutes.try_draft --file 요청.json --real   다른 요청 파일
   .venv/bin/python -m minutes.try_draft --real --json            결과 JSON 전체도 출력
+  .venv/bin/python -m minutes.try_draft --file minutes/tests/fixtures/relayout_request.json --real
+                                                                 양식 변경 시 다시 배치 (합성 예시)
 
 가짜 AI 는 모든 재료를 첫 칸에 넣고 글을 원래 글 그대로 돌려준다. 흐름이 도는지만 본다.
 실제 AI 는 RAG 답변과 같은 설정으로 연결한다 (환경변수가 있으면 그것, 없으면 rag/.env). 키 값은 출력하지 않는다.
@@ -82,10 +84,25 @@ def show(result):
     if result["status"] != "SUCCEEDED":
         print(f"\n실패: {result['error']['code']} — {result['error']['message']}")
         return
+    relayout = any("draftEdited" in line for s in result["sections"] for line in s["evidence"]) or result["unplacedLines"]
     for s in result["sections"]:
-        print(f"\n■ {s['title']}\n{s['content']}")
+        if not relayout:
+            print(f"\n■ {s['title']}\n{s['content']}")
+            continue
+        print(f"\n■ {s['title']}")       # 다시 배치: 작성자가 고친 줄·새로 쓴 줄을 표시한다
+        print("\n".join(f"- {_mark(line)}{line['sentence']}" for line in s["evidence"]) or "해당 내용 없음")
     print("\n■ 넣지 못한 재료")
     print("\n".join(f"- 안건 {u['agendaId']} / {u['kind']} / {u['id']}" for u in result["unplaced"]) or "없음")
+    if relayout:
+        print("\n■ 넣지 못한 이전 줄 (이전 칸 → 글)")
+        print("\n".join(f"- {_mark(line)}{line['title']} → {line['sentence']}" for line in result["unplacedLines"])
+              or "없음")
+
+
+def _mark(line) -> str:
+    if not line.get("draftEdited"):
+        return ""
+    return "[고침] " if line.get("sources") else "[새 줄] "
 
 
 def main():

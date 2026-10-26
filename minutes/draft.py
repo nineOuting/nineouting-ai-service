@@ -1,9 +1,11 @@
 """회의록 초안 만들기 전체 흐름. 명세 2·3·6·7장
 
   요청 dict → 재료 → (재료가 있으면) AI 배치·검사 → 줄과 칸 → 결과 콜백 본문 dict
+  previousLines 가 있으면 다시 배치 (명세 8장): 재료는 이전 줄에서 만들고(relayout.py),
+  이전 초안에 없던 요약 항목은 AI 에 보내지 않고 unplaced 로, AI 가 넣지 못한 이전 줄은 unplacedLines 로 돌려준다
 
   재료가 0개        AI 를 부르지 않고 모든 칸 "해당 내용 없음"
-  재료가 상한 초과  AI 를 부르지 않고 FAILED / INPUT_TOO_LONG
+  재료가 상한 초과  AI 를 부르지 않고 FAILED / INPUT_TOO_LONG (AI 에 넘길 재료 수. 다시 배치는 이전 줄 수)
   AI 실패           FAILED / LLM_TIMEOUT · LLM_FAILED · CHECK_FAILED
 
 요청 검사(형식 오류 → 400)는 이 함수를 부르기 전에 한다 (request.validate_request). 여기서는 다시 하지 않는다.
@@ -12,10 +14,11 @@
 import logging
 import time
 
-from .lines import build_sections
+from .lines import build_sections, unplaced_lines
 from .materials import build_materials
 from .models import Placement
 from .placement import Prompt, load_prompt, place
+from .relayout import build_relayout
 
 log = logging.getLogger("minutes.draft")
 
@@ -24,7 +27,7 @@ INPUT_TOO_LONG = "INPUT_TOO_LONG"
 INTERNAL_ERROR = "INTERNAL_ERROR"               # 작업자가 쓴다: 예상하지 못한 오류로 다시 시도해도 끝내 못 만듦
 SUCCEEDED, FAILED = "SUCCEEDED", "FAILED"
 MESSAGES = {                                    # 실패 설명. 요약·초안 내용은 넣지 않는다
-    INPUT_TOO_LONG: "요약 항목이 너무 많음",
+    INPUT_TOO_LONG: "요약 항목이나 이전 줄이 너무 많음",
     INTERNAL_ERROR: "초안을 만드는 중 알 수 없는 오류",
     "LLM_TIMEOUT": "AI 응답 시간 초과",
     "LLM_FAILED": "AI 호출 실패",
@@ -37,8 +40,14 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
     """결과 콜백 본문(명세 3.1·3.2)을 돌려준다."""
     t0 = time.monotonic()
     request_id, items = body["requestId"], body["template"]["items"]
-    materials = build_materials(body["agendas"], body["summary"])
-    tag = f"request_id={request_id} minutes={body.get('minutesId')} items={len(items)} materials={len(materials)}"
+    previous = body.get("previousLines") or []
+    if previous:
+        materials, unreferenced = build_relayout(body["agendas"], body["summary"], previous)
+    else:
+        materials, unreferenced = build_materials(body["agendas"], body["summary"]), []
+    tag = (f"request_id={request_id} minutes={body.get('minutesId')} items={len(items)} materials={len(materials)}"
+           f" previous={len(previous)}")
+    not_sent = [m.source() for m in unreferenced]      # 이전 초안에 없던 요약 항목 (다시 배치)
 
     if len(materials) > MAX_MATERIALS:
         log.warning("초안 실패 %s error=%s", tag, INPUT_TOO_LONG)
@@ -47,7 +56,7 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
     if not materials:
         sections, unplaced = build_sections(items, [], Placement(sections={}, texts={}, unplaced=()))
         log.info("초안 완료 %s attempts=0 ms=%d", tag, _ms(t0))
-        return succeeded(request_id, sections, unplaced)
+        return succeeded(request_id, sections, not_sent + unplaced)
 
     prompt = prompt or load_prompt()
     outcome = place(items, materials, llm, timeout_s, max_retries, prompt, call_retries)
@@ -58,14 +67,17 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
         return failed(request_id, outcome.error_code, MESSAGES[outcome.error_code])
 
     sections, unplaced = build_sections(items, materials, outcome.placement)
+    unplaced = not_sent + unplaced
+    lost_lines = unplaced_lines(materials, outcome.placement, previous)
     lines = sum(len(s["evidence"]) for s in sections)
-    log.info("초안 완료 %s lines=%d unplaced=%d ms=%d", tag, lines, len(unplaced), _ms(t0))
-    return succeeded(request_id, sections, unplaced)
+    log.info("초안 완료 %s lines=%d unplaced=%d unplaced_lines=%d ms=%d",
+             tag, lines, len(unplaced), len(lost_lines), _ms(t0))
+    return succeeded(request_id, sections, unplaced, lost_lines)
 
 
-def succeeded(request_id, sections, unplaced) -> dict:
+def succeeded(request_id, sections, unplaced, unplaced_lines_=()) -> dict:
     return {"requestId": request_id, "status": SUCCEEDED, "sections": sections, "unplaced": unplaced,
-            "unplacedLines": []}
+            "unplacedLines": list(unplaced_lines_)}
 
 
 def failed(request_id, code, message) -> dict:

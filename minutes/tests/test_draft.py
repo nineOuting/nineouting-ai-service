@@ -7,7 +7,7 @@ import pytest
 from minutes.draft import FAILED, INPUT_TOO_LONG, MAX_MATERIALS, SUCCEEDED, make_draft
 from minutes.lines import EMPTY_SECTION
 from minutes.placement import load_prompt
-from minutes_fakes import GOOD, ScriptLLM, load_request
+from minutes_fakes import GOOD, ScriptLLM, load_request, previous_lines_of
 from rag.llm import LLMError, LLMTimeout
 
 
@@ -85,3 +85,60 @@ def test_로그에_회의_내용이_남지_않는다(body, caplog):
     assert "초안 완료" in text and "CHECK_FAILED" in text and load_prompt().version in text
     for word in ["배포", "QA", "예산", "회식", "김철수", "안건별 논의", "결정 사항"]:
         assert word not in text
+
+
+# 다시 배치 (명세 8장). 처음 초안의 줄 순서: 논의 3줄(m2 m3 m6) → 결정 1줄(m1) → 미결 2줄(m5 m8) → 할 일 3줄(m4 m7 m10)
+NEW_ITEMS = ["논의", "결정과 할 일"]
+
+
+def relayout_body(body, lines):
+    return dict(body, requestId="relayout-1", template={"items": NEW_ITEMS}, previousLines=lines)
+
+
+def answer(extra=(), unplaced=("m6",)):
+    """이전 줄 9개(+더한 줄)의 새 양식 배치. 4번째 줄(m4)이 다시 다듬는 결정, m6(결정 확인 필요)은 넣지 못함"""
+    placements = [{"m": f"m{i}", "section": 1} for i in (1, 2, 3, 5)]
+    placements += [{"m": "m4", "section": 2, "text": "1차 배포를 10월 30일(목)로 정했다."}]
+    placements += [{"m": f"m{i}", "section": 2} for i in (7, 8, 9)] + list(extra)
+    return {"placements": placements, "unplaced": list(unplaced)}
+
+
+def test_다시_배치는_이전_줄을_새_칸에_옮기고_draftEdited를_붙인다(body):
+    first = make_draft(body, ScriptLLM(GOOD))
+    lines = previous_lines_of(first)
+    result = make_draft(relayout_body(body, lines), ScriptLLM(answer()))
+    assert result["status"] == SUCCEEDED and [s["title"] for s in result["sections"]] == NEW_ITEMS
+    talk, decided = result["sections"]
+    assert [l["sentence"] for l in talk["evidence"]] == [lines[i]["sentence"] for i in (0, 1, 2, 4)]
+    assert decided["evidence"][0]["sentence"] == "배포 일정: 1차 배포를 10월 30일(목)로 정했다."
+    assert all(l["draftEdited"] is False for s in result["sections"] for l in s["evidence"])
+    assert result["unplacedLines"] == [lines[5]]                                  # 받은 줄 그대로
+    assert result["unplaced"] == [{"agendaId": 103, "kind": "opinion", "id": "k3f9a1-20"}]   # 처음에도 못 넣은 의견
+
+
+def test_고친_줄과_새로_쓴_줄은_글이_그대로_남는다(body):
+    lines = previous_lines_of(make_draft(body, ScriptLLM(GOOD)))
+    lines[3].update(sentence="배포 일정: 1차 배포를 10월 30일(목) 오후로 정했다.", draftEdited=True)
+    lines.append({"title": "할 일", "sentence": "고객사 로고는 행사 전날까지 받기", "transcriptSeqs": [],
+                  "edited": False, "needsCheck": False, "sources": [], "draftEdited": True})
+    llm = ScriptLLM(answer(extra=[{"m": "m10", "section": 2}]))
+    result = make_draft(relayout_body(body, lines), llm)
+    decided = result["sections"][1]["evidence"]
+    assert decided[0]["sentence"] == "배포 일정: 1차 배포를 10월 30일(목) 오후로 정했다."   # 제목이 두 번 붙지 않음
+    assert decided[0]["draftEdited"] is True and decided[0]["sources"] == lines[3]["sources"]
+    assert decided[-1] == {"sentence": "고객사 로고는 행사 전날까지 받기", "transcriptSeqs": [], "edited": False,
+                           "needsCheck": False, "sources": [], "draftEdited": True}
+    assert "m4 [배포 일정 / 결정] (고정)" in llm.calls[0][1] and "m10 [직접 작성] (고정)" in llm.calls[0][1]
+
+
+def test_다시_배치의_상한은_이전_줄_수로_센다(body):
+    lines = previous_lines_of(make_draft(body, ScriptLLM(GOOD)))
+    many = (lines * 40)[:MAX_MATERIALS + 1]
+    llm = ScriptLLM()
+    result = make_draft(relayout_body(body, many), llm)
+    assert result["status"] == FAILED and result["error"]["code"] == INPUT_TOO_LONG and llm.calls == []
+
+
+def test_previousLines가_빈_목록이면_처음_만들기(body):
+    result = make_draft(dict(body, previousLines=[]), ScriptLLM(GOOD))
+    assert "draftEdited" not in result["sections"][1]["evidence"][0] and result["unplacedLines"] == []

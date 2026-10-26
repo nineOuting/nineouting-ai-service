@@ -3,6 +3,7 @@ rag/tests/_helpers.py 와 이름이 겹치지 않게 따로 이름을 붙였다 
 import json
 from pathlib import Path
 
+from minutes.relayout import previous_lines_from
 from rag.llm import Reply
 
 FIXTURE = Path(__file__).parent / "fixtures" / "draft_request.json"
@@ -39,8 +40,5 @@ class ScriptLLM:
             raise r
         return Reply(r if isinstance(r, str) else json.dumps(r, ensure_ascii=False), 100, 20)
 
-
-def previous_lines_of(result: dict) -> list[dict]:
-    """처음 초안 결과(SUCCEEDED) → 다시 배치 요청의 previousLines (백엔드가 줄을 저장했다가 돌려보내는 모양, 명세 5.7).
-    작성자가 아무것도 고치지 않은 상태다. 시험에서 줄을 고치거나 더해 쓴다."""
-    return [{"title": s["title"], **line, "draftEdited": False} for s in result["sections"] for line in s["evidence"]]
+# 처음 초안 결과 → previousLines. 시험에서 줄을 고치거나 더해 쓴다
+previous_lines_of = previous_lines_from

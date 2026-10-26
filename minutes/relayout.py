@@ -50,6 +50,12 @@ def build_relayout(agendas: list[dict], summary: dict, previous_lines: list[dict
     return materials, unreferenced
 
 
+def previous_lines_from(result: dict) -> list[dict]:
+    """처음 초안 결과(SUCCEEDED) → 다시 배치 요청의 previousLines. 백엔드가 줄을 저장했다가 돌려보내는 모양 (명세 5.7).
+    작성자가 아무것도 고치지 않은 상태다 (draftEdited false). 손 시험 도구와 시험에서 쓴다."""
+    return [{"title": s["title"], **line, "draftEdited": False} for s in result["sections"] for line in s["evidence"]]
+
+
 def flatten(text: str) -> str:
     """고정한 글의 줄바꿈을 공백으로 (명세 8.3, 7.3 빈 줄 검사)."""
     return re.sub(r"\s*\n\s*", " ", text).strip()

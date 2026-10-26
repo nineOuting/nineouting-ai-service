@@ -38,6 +38,7 @@ class DocumentMeta:
 class RegisterResult:
     status: str                  # 접수 후 문서 상태
     enqueue: bool                # True 면 호출한 쪽이 처리 작업을 넣는다. 같은 버전이 이미 있으면 False
+    ignored: bool = False        # 저장된 것보다 낮은 회의록 버전이라 무시함 (older_version)
 
 
 def register(conn, doc: DocumentMeta) -> RegisterResult:
@@ -68,10 +69,18 @@ def register(conn, doc: DocumentMeta) -> RegisterResult:
             raise WorkspaceMismatch(f"docId {doc.doc_id} 의 workspaceId 가 기존과 다름")
         if version == doc.doc_version and status != "failed":
             return RegisterResult(status, False)
+        if doc.source_type == "minutes" and older_version(doc.doc_version, version):
+            return RegisterResult(status, False, ignored=True)
         conn.execute("UPDATE rag_documents SET doc_version = %s, source_type = %s, title = %s, "
                      "status = 'queued', error_code = NULL, updated_at = now() WHERE doc_id = %s",
                      (doc.doc_version, doc.source_type, doc.title, doc.doc_id))
         return RegisterResult("queued", True)
+
+
+def older_version(new: str, stored: str) -> bool:
+    """회의록 버전 비교 (회의록 초안 명세 4.3). 둘 다 정수 모양("5")일 때만 비교하고, 새 것이 낮으면 True.
+    재시도로 옛 확정본이 늦게 와서 새 확정본을 덮어쓰지 않게 한다. 정수 모양이 아니면 지금처럼 마지막에 받은 것을 쓴다."""
+    return new.isdigit() and stored.isdigit() and new.isascii() and stored.isascii() and int(new) < int(stored)
 
 
 def store(conn, doc_id: int, doc_version: str, chunks: Sequence[Chunk], vectors, embed_model: str) -> int:

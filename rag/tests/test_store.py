@@ -1,4 +1,6 @@
 """접수·저장·삭제 시험 (시험 DB 필요)."""
+from dataclasses import replace
+
 import pytest
 
 import threading
@@ -7,7 +9,7 @@ from _helpers import OTHER_WS, WS, chunk_rows, chunks_of, doc, put
 from rag.migrate import migrate
 from rag.search import search
 from rag.store import (RegisterResult, StaleJob, WorkspaceMismatch, delete_document, delete_workspace,
-                       get_status, mark_failed, register, store)
+                       get_status, mark_failed, older_version, register, store)
 
 QUEUED_NEW = RegisterResult("queued", True)
 
@@ -200,3 +202,25 @@ def test_조각과_벡터_수가_다르면_거부(conn, fake_embedder):
     register(conn, doc())
     with pytest.raises(ValueError):
         store(conn, 1, "v1", chunks_of("가", "나"), fake_embedder.embed_passages(["가"]), fake_embedder.model_id)
+
+
+
+@pytest.mark.parametrize("new, stored, older", [
+    ("4", "5", True), ("9", "10", True),                  # 글자 순이 아니라 정수로 비교
+    ("6", "5", False), ("5", "5", False),
+    ("4", "v5", False), ("v4", "5", False), ("abc", "def", False),   # 하나라도 정수 모양이 아니면 비교하지 않음
+    ("４", "5", False),                                   # 전각 숫자는 정수 모양으로 보지 않음
+])
+def test_회의록_버전은_둘_다_정수_모양일_때만_비교(new, stored, older):
+    assert older_version(new, stored) is older
+
+
+def test_낮은_회의록_버전은_무시하고_상태를_바꾸지_않음(conn):
+    register(conn, doc(version="5"))
+    assert register(conn, doc(version="4")) == RegisterResult("queued", False, ignored=True)
+    assert get_status(conn, 1)["docVersion"] == "5"
+
+
+def test_업로드_문서는_버전을_비교하지_않음(conn):
+    register(conn, replace(doc(version="5"), source_type="upload"))
+    assert register(conn, replace(doc(version="4"), source_type="upload")) == QUEUED_NEW

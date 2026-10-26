@@ -1,4 +1,5 @@
 """PDF 읽기 시험 (SCRUM-107). 합성 샘플은 fixtures/make_upload_samples.py 로 만든다."""
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,8 @@ from rag.chunking import split_pieces
 from rag.errors import ENCRYPTED, NO_TEXT, TOO_LARGE, UNSUPPORTED_FORMAT, IngestError
 from rag.filetype import detect
 from rag.loaders import pdf as pdf_loader
-from rag.loaders.pdf import clean, load_pdf
+from rag.loaders.pdf import load_pdf
+from rag.loaders.text import normalize
 
 FIX = Path(__file__).parent / "fixtures"
 REPORT = (FIX / "upload_report.pdf").read_bytes()
@@ -60,5 +62,19 @@ def test_쪽_수_상한을_넘으면_too_large(monkeypatch):
     assert code_of(REPORT) == TOO_LARGE
 
 
-def test_정리는_줄바꿈과_공백만():
-    assert clean("첫 줄\r\n  둘째　　줄  \r\r\n\n셋째\t줄") == "첫 줄\n둘째 줄\n셋째 줄"
+def test_공통_정리는_줄바꿈과_공백을_맞춘다():
+    assert normalize("첫 줄\r\n  둘째\u3000\u3000줄  \r\r\n\n셋째\t줄") == "첫 줄\n둘째 줄\n셋째 줄"
+
+
+def test_공통_정리는_자모로_쪼갠_한글을_합친다():
+    nfd = unicodedata.normalize("NFD", "마케팅 예산")
+    assert len(nfd) > len("마케팅 예산") and normalize(nfd) == "마케팅 예산"
+
+
+def test_공통_정리는_보이지_않는_문자와_제어_문자를_뺀다():
+    assert normalize("\ufeff마\u200b케\u00ad팅\x00 예\u200d산\x07") == "마케팅 예산"
+
+
+def test_공통_정리는_원문_기호를_바꾸지_않는다():
+    """NFKC 였다면 ①→1, ㈜→(주), 전각 숫자→반각 으로 바뀐다"""
+    assert normalize("① ㈜나인아웃팅 １２３") == "① ㈜나인아웃팅 １２３"

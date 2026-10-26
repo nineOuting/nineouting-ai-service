@@ -6,7 +6,8 @@
   DELETE {prefix}/workspaces/{workspaceId}  워크스페이스 지우기 → 204
   POST   {prefix}/answer                    답변 → 200 {status, answer, citations, errorCode}
 
-지금은 회의록(sourceType=minutes)만 받는다. 업로드 문서는 로더를 만들 때 연다.
+업로드 문서(sourceType=upload)는 허용 저장소(RAG_UPLOAD_ALLOWED_HOSTS)가 설정됐을 때만 받는다. 없으면 400.
+파일 받기·형식 확인까지 하고, 형식별 읽기(SCRUM-107~109)가 생기기 전까지는 unsupported_format 으로 끝난다.
 회의록은 확정 회의록 형식(formatVersion "1.0")과 임시 형식(schema_version "0.1")을 받는다. 둘 다 아니면 400.
 저장된 것보다 낮은 회의록 버전은 처리하지 않고 status "ignored" 로 답한다 (콜백 없음). 회의록 초안 명세 4.3.
 명세에 없어서 AI 쪽이 정한 것: 입력 오류 400 INVALID_INPUT, 다른 워크스페이스로 온 같은 docId 409 CONFLICT,
@@ -23,6 +24,7 @@ from fastapi import APIRouter, Body, Depends, Path, Request
 from fastapi.responses import JSONResponse, Response
 
 from .callback import CallbackNotAllowed
+from .download import UPLOAD_OFF, FileUrlNotAllowed, UploadSettings, check_file_url
 from .errors import IngestError
 from .jobs import IngestRequest, submit
 from .loaders.minutes import check_format
@@ -39,7 +41,7 @@ MAX_QUERY = 2000
 MAX_DOC_IDS = 1000
 DEFAULT_TOP_K = 5
 MAX_TOP_K = 20                       # search.MAX_TOP_K 와 같다
-SOURCE_TYPES = ("minutes",)          # 업로드 문서 로더를 만들 때 "upload" 를 더한다
+SOURCE_TYPES = ("minutes", "upload")  # upload 는 허용 저장소(RAG_UPLOAD_ALLOWED_HOSTS)가 있을 때만 받는다
 API_STATUS = {"queued": "accepted"}  # DB 상태 → 명세의 상태 값
 
 
@@ -66,12 +68,12 @@ INGEST_SCHEMA = {
                        "description": "회의록: 확정 버전 번호 / 업로드 문서: 파일 해시"},
         "workspaceId": {"type": "integer", "minimum": 1, "description": "소속 워크스페이스"},
         "sourceType": {"type": "string", "enum": list(SOURCE_TYPES),
-                       "description": "지금은 minutes 만 받는다. upload 는 준비 중 (보내면 400)"},
+                       "description": "minutes 또는 upload. upload 는 허용 저장소 설정이 있을 때만 받는다 (없으면 400)"},
         "title": {"type": "string", "maxLength": MAX_TITLE, "description": "회의 제목 (업로드 문서는 파일 이름)"},
         "minutes": {"type": "object", "description": "확정 회의록 (formatVersion \"1.0\": meetingId, meetingStartAt, "
                     "confirmedAt, sections[{title, content}]). 칸의 줄 하나가 검색 조각 하나. "
                     "임시 형식 summary.json (schema_version \"0.1\")도 전환 기간에는 받는다"},
-        "fileUrl": {"type": "string", "description": "업로드 문서의 S3 서명 주소 (준비 중)"},
+        "fileUrl": {"type": "string", "description": "업로드 문서의 S3 서명 주소. 허용한 저장소의 주소만. pdf·docx·xlsx (형식별 읽기는 준비 중)"},
         "callbackUrl": {"type": "string", "description": "처리가 끝나면 AI 서버가 POST 할 백엔드 주소. 허용한 호스트만"},
     },
 }
@@ -127,7 +129,7 @@ def verify_internal_request(request: Request):
     return None
 
 
-def parse_ingest(body, request_id=None) -> IngestRequest:
+def parse_ingest(body, request_id=None, upload: UploadSettings | None = None) -> IngestRequest:
     if not isinstance(body, dict):
         raise InvalidInput("본문이 JSON 객체가 아님")
     doc_id = _positive_int(body, "docId")
@@ -135,10 +137,19 @@ def parse_ingest(body, request_id=None) -> IngestRequest:
     version = _text(body, "docVersion", MAX_DOC_VERSION)
     title = _text(body, "title", MAX_TITLE)
     source = body.get("sourceType")
-    if source == "upload":
-        raise InvalidInput("sourceType=upload 는 아직 받지 않음 (업로드 문서는 준비 중)")
     if source not in SOURCE_TYPES:
-        raise InvalidInput("sourceType 은 minutes 여야 함")
+        raise InvalidInput("sourceType 은 minutes 나 upload 여야 함")
+    callback_url = body.get("callbackUrl")
+    if not isinstance(callback_url, str) or not callback_url:
+        raise InvalidInput("callbackUrl 이 없음")
+    doc = DocumentMeta(doc_id=doc_id, doc_version=version, workspace_id=workspace_id, source_type=source, title=title)
+    if source == "upload":
+        file_url = body.get("fileUrl")
+        try:
+            check_file_url(file_url, upload or UPLOAD_OFF)
+        except FileUrlNotAllowed as e:
+            raise InvalidInput(str(e)) from None
+        return IngestRequest(doc, callback_url, file_url=file_url, request_id=request_id)
     minutes = body.get("minutes")
     if not isinstance(minutes, dict):
         raise InvalidInput("minutes 는 JSON 객체여야 함")
@@ -146,10 +157,6 @@ def parse_ingest(body, request_id=None) -> IngestRequest:
         check_format(minutes)
     except IngestError as e:
         raise InvalidInput(f"minutes 의 {e.detail}") from None
-    callback_url = body.get("callbackUrl")
-    if not isinstance(callback_url, str) or not callback_url:
-        raise InvalidInput("callbackUrl 이 없음")
-    doc = DocumentMeta(doc_id=doc_id, doc_version=version, workspace_id=workspace_id, source_type=source, title=title)
     return IngestRequest(doc, callback_url, minutes=minutes, request_id=request_id)
 
 
@@ -198,9 +205,11 @@ def _path_id(raw, name):
     return int(raw)
 
 
-def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_HEADER, prefix=PREFIX, answerer=None):
+def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_HEADER, prefix=PREFIX, answerer=None,
+                upload: UploadSettings | None = None):
     """pool: psycopg_pool.ConnectionPool (autocommit 연결, vector 형 등록).
-    answerer: answer.Answerer. 없으면 답변 주소는 503 으로 답한다."""
+    answerer: answer.Answerer. 없으면 답변 주소는 503 으로 답한다.
+    upload: 업로드 문서 설정. 없거나 허용 저장소가 없으면 sourceType=upload 는 400."""
     from psycopg import OperationalError
     from psycopg_pool import PoolTimeout
 
@@ -227,7 +236,7 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
     def post_document(request: Request, body: Any = Body(...)):
         rid = request_id_of(request)
         try:
-            req = parse_ingest(body, rid)
+            req = parse_ingest(body, rid, upload)
             with pool.connection() as conn:
                 result = submit(conn, req, allowed_callback_hosts)
         except (InvalidInput, CallbackNotAllowed) as e:

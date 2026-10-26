@@ -161,6 +161,16 @@ def test_PDF는_받아서_쪽마다_저장하고_ready(conn, fake_embedder, stor
     assert job_rows(conn)[0][6] == {}                           # 서명 주소가 든 요청은 지운다
 
 
+def test_워드는_받아서_제목마다_저장하고_ready(conn, fake_embedder, storage):
+    backend = FakeBackend()
+    storage.files["/ws/1/edge.docx"] = (Path(__file__).parent / "fixtures" / "upload_edge.docx").read_bytes()
+    submit(conn, request(source="upload", version="sha256:docx", file_url=storage.url("/ws/1/edge.docx")))
+    make_worker(conn, fake_embedder, backend, upload=storage.settings()).process_one()
+    assert backend.bodies[0]["status"] == "ready" and backend.bodies[0]["chunkCount"] == 4
+    labels = [r[0] for r in conn.execute("SELECT location->>'label' FROM rag_chunks WHERE doc_id = 1 ORDER BY chunk_index")]
+    assert labels == ["문서 처음", "1. 회의실 예약 규칙", "1.1 예약 시간", "2. 정리 규칙"]
+
+
 @pytest.mark.parametrize("path, code", [("/expired", "url_expired"), ("/error", "download_failed"),
                                         ("/ws/1/old.doc", "unsupported_format"), ("/ws/1/locked.docx", "encrypted")])
 def test_업로드_실패는_다시_시도하지_않고_바로_알린다(conn, fake_embedder, storage, path, code):

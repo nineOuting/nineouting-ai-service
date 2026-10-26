@@ -3,19 +3,24 @@
 
   .venv/bin/python rag/tests/fixtures/make_upload_samples.py [글꼴.otf]
 
-필요: fpdf2·pypdf (rag/requirements-dev.txt), 한글 글꼴. 기본은 Noto Sans CJK KR (OFL 라이선스, PDF 에는 쓴 글자만 들어간다).
+필요: fpdf2·pypdf (rag/requirements-dev.txt), python-docx (rag/requirements.txt), 한글 글꼴 (PDF 만). 기본은 Noto Sans CJK KR (OFL 라이선스, PDF 에는 쓴 글자만 들어간다).
 참고: fpdf2 가 이 글꼴로 만든 PDF 는 글자 폭 정보가 어긋나 pypdf 로 읽으면 글자마다 띄어진다 (pdftotext·PDFium 은 정상).
 그래서 RAG 는 PDFium(pypdfium2)으로 읽고, 이 샘플은 "표준에서 조금 벗어난 PDF" 시험도 겸한다.
   upload_report.pdf   4쪽 보고서. 1쪽 제목·문단, 2쪽 예산 표, 3쪽 빈 쪽(머리글도 없음), 4쪽 긴 문단.
                       1·2·4쪽에 같은 머리글·바닥글(쪽 번호) → 정제 시험(SCRUM-110)에도 쓴다
   upload_plan.pdf     상세 운영계획서 (내용은 plan_content.py). 일정·진행 순서·준비물·인원·예산·관련 법규·운영 수칙·
                       비상 대응·고려할 점. 표가 많고 글이 길다 → 검색 품질·처리 시간 측정(SCRUM-110)에 쓴다
+  upload_plan.docx    upload_plan.pdf 와 같은 내용의 워드 (PDF·워드 검색 결과 비교용). 머리글·바닥글 있음
+  upload_edge.docx    워드 경계 경우: 제목 전 글, 빈 문단, 제목 2단계, 병합된 표 칸, 빈 행, 자모로 쪼갠 한글·보이지 않는 문자
+  upload_empty.docx   본문에 글이 없는 워드 (머리글만 있음)
   upload_scan.pdf     도형만 있고 글자는 없는 1쪽 (스캔한 PDF 대신)
   upload_locked.pdf   upload_report.pdf 에 암호를 건 것
 """
 import sys
+import unicodedata
 from pathlib import Path
 
+from docx import Document
 from fpdf import FPDF
 from pypdf import PdfReader, PdfWriter
 
@@ -122,6 +127,66 @@ def make_plan(font, path):
     pdf.output(str(path))
 
 
+def make_plan_docx(path):
+    doc = Document()
+    _header_footer(doc)
+    for kind, *args in PLAN:
+        if kind == "title":
+            doc.add_heading(args[0], level=0)
+        elif kind in ("h1", "h2"):
+            doc.add_heading(args[0], level=1 if kind == "h1" else 2)
+        elif kind == "p":
+            doc.add_paragraph(args[0])
+        elif kind == "list":
+            for item in args[0]:
+                doc.add_paragraph(item, style="List Bullet")
+        elif kind == "table":
+            _table(doc, args[1])
+    doc.save(str(path))
+
+
+def make_edge_docx(path):
+    doc = Document()
+    _header_footer(doc)
+    doc.add_paragraph("표지: 워드 읽기 경계 시험 문서 (합성 자료)")       # 첫 제목 전 글
+    doc.add_paragraph("")                                                  # 빈 문단
+    doc.add_heading("1. 회의실 예약 규칙", level=1)
+    doc.add_paragraph("회의실은 사내 예약 시스템으로 하루 전까지 예약한다.")
+    doc.add_heading("1.1 예약 시간", level=2)
+    doc.add_paragraph("예약은 30분 단위로 하며 한 번에 최대 2시간까지 잡을 수 있다.")
+    t = _table(doc, [("구분", "시간", "비고"), ("평일", "09:00~12:00", "오전"), ("", "13:00~18:00", "오후"),
+                     ("", "", ""), ("주말", "예약 불가", "")])
+    t.cell(1, 0).merge(t.cell(2, 0))                                       # "평일" 칸을 두 행에 걸쳐 병합
+    doc.add_heading("2. 정리 규칙", level=1)
+    nfd = unicodedata.normalize("NFD", "회의가 끝나면 화이트보드를 지운다.")
+    doc.add_paragraph(nfd[:3] + "\u200b" + nfd[3:])                       # 자모로 쪼갠 한글 + 폭 없는 공백
+    doc.save(str(path))
+
+
+def make_empty_docx(path):
+    doc = Document()
+    _header_footer(doc)
+    doc.add_paragraph("")
+    doc.add_paragraph("   ")
+    doc.save(str(path))
+
+
+def _header_footer(doc):
+    """쪽마다 반복되는 머리글·바닥글. 워드는 본문과 따로 저장하므로 읽기에서 빠져야 한다."""
+    section = doc.sections[0]
+    section.header.paragraphs[0].text = HEADER
+    section.footer.paragraphs[0].text = "나인아웃팅 고객성공팀"
+
+
+def _table(doc, rows):
+    table = doc.add_table(rows=len(rows), cols=len(rows[0]))
+    table.style = "Table Grid"
+    for r, row in enumerate(rows):
+        for c, value in enumerate(row):
+            table.cell(r, c).text = value
+    return table
+
+
 def make_scan(path):
     pdf = FPDF()
     pdf.add_page()
@@ -144,9 +209,13 @@ def main():
         sys.exit("한글 글꼴이 없음. Noto Sans CJK KR 등의 경로를 인자로 준다")
     make_report(font, HERE / "upload_report.pdf")
     make_plan(font, HERE / "upload_plan.pdf")
+    make_plan_docx(HERE / "upload_plan.docx")
+    make_edge_docx(HERE / "upload_edge.docx")
+    make_empty_docx(HERE / "upload_empty.docx")
     make_scan(HERE / "upload_scan.pdf")
     make_locked(HERE / "upload_report.pdf", HERE / "upload_locked.pdf")
-    for name in ("upload_report.pdf", "upload_plan.pdf", "upload_scan.pdf", "upload_locked.pdf"):
+    for name in ("upload_report.pdf", "upload_plan.pdf", "upload_scan.pdf", "upload_locked.pdf",
+                 "upload_plan.docx", "upload_edge.docx", "upload_empty.docx"):
         print(f"{name}: {(HERE / name).stat().st_size:,} 바이트")
 
 

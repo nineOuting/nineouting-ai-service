@@ -4,7 +4,9 @@
   set -a && . rag/.env && set +a && .venv/bin/uvicorn server.main:app --port 8000
 이 도구(터미널 2):
   .venv/bin/python -m rag.try_answer                       합성 예시 회의록으로
-  .venv/bin/python -m rag.try_answer --file 회의록.json     임시 형식(summary.json v0.1) 회의록으로
+  .venv/bin/python -m rag.try_answer --file 회의록.json     확정 회의록(formatVersion 1.0) 또는 임시 형식(summary.json v0.1)
+  .venv/bin/python -m rag.try_answer --file rag/tests/fixtures/minutes_confirmed.json
+                                                            확정 회의록 합성 예시 (근거 위치가 칸 이름)
   .venv/bin/python -m rag.try_answer --file a.json --title "첫 회의" --file b.json --title "후속 회의"
                                                             여러 문서를 넣고 문서 전체에서 근거를 찾는다
   .venv/bin/python -m rag.try_answer --show-search         검색 결과(상위 topK 전부, 점수)도 보여 준다

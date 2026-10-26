@@ -8,7 +8,7 @@
 
 실행: 서버 안에서 스레드로 (runtime), 또는 따로 .venv/bin/python -m minutes.worker
 설정: MINUTES_DATABASE_URL, MINUTES_CALLBACK_ALLOWED_HOSTS, MINUTES_LLM_TIMEOUT_S(기본 60),
-      MINUTES_PROMPT_VERSION(없으면 가장 큰 번호), AI 공급자·모델은 MINUTES_LLM_* (없으면 RAG_LLM_*, llm_config.py)
+      MINUTES_PROMPT_VERSION·MINUTES_RELAYOUT_PROMPT_VERSION(없으면 가장 큰 번호), AI 공급자·모델은 MINUTES_LLM_* (없으면 RAG_LLM_*, llm_config.py)
 """
 import logging
 import os
@@ -33,7 +33,7 @@ DEFAULT_LLM_TIMEOUT_S = 60.0
 
 
 class Worker:
-    def __init__(self, conn, llm, callback, timeout_s=DEFAULT_LLM_TIMEOUT_S, prompt=None,
+    def __init__(self, conn, llm, callback, timeout_s=DEFAULT_LLM_TIMEOUT_S, prompt=None, relayout_prompt=None,
                  max_attempts=MAX_ATTEMPTS, retry_delays_s=RETRY_DELAYS_S, connect=None):
         """connect 를 주면 conn 이 없거나 끊겼을 때 run() 이 그것으로 다시 접속한다 (conn=None 으로 시작해도 됨)."""
         self.conn = conn
@@ -41,6 +41,7 @@ class Worker:
         self.callback = callback
         self.timeout_s = timeout_s
         self.prompt = prompt
+        self.relayout_prompt = relayout_prompt
         self.max_attempts = max_attempts
         self.retry_delays_s = tuple(retry_delays_s)
         self._connect = connect
@@ -58,7 +59,8 @@ class Worker:
             result, last_error = failed(job.request_id, INTERNAL_ERROR, MESSAGES[INTERNAL_ERROR]), "시도 횟수 초과"
         else:
             try:
-                result = make_draft(job.payload, self.llm, timeout_s=self.timeout_s, prompt=self.prompt)
+                result = make_draft(job.payload, self.llm, timeout_s=self.timeout_s, prompt=self.prompt,
+                                    relayout_prompt=self.relayout_prompt)
             except Exception as e:                    # 일시 실패로 본다
                 if job.attempts < self.max_attempts:
                     delay = self.retry_delays_s[min(job.attempts, len(self.retry_delays_s)) - 1]
@@ -114,13 +116,13 @@ class Worker:
             self.conn = None
 
 
-def from_env(env=None, llm=None, prompt=None):
+def from_env(env=None, llm=None, prompt=None, relayout_prompt=None):
     """환경변수로 작업자를 만든다. llm 을 주지 않으면 llm_config 의 설정으로 만든다 (설정이 틀리면 LLMConfigError).
     DB 에는 여기서 접속하지 않는다. run() 이 처음 돌 때 접속하고, 끊기면 다시 접속한다 (DB 가 늦게 떠도 서버는 뜬다)."""
     from functools import partial
 
     from .db import connect
-    from .placement import load_prompt
+    from .placement import RELAYOUT_KIND, load_prompt
 
     env = os.environ if env is None else env
     connect_db = partial(connect, url=env.get("MINUTES_DATABASE_URL"),
@@ -134,8 +136,10 @@ def from_env(env=None, llm=None, prompt=None):
     if allowed is None:
         log.warning("MINUTES_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")
     prompt = prompt or load_prompt(env.get("MINUTES_PROMPT_VERSION") or None)
+    relayout_prompt = relayout_prompt or load_prompt(env.get("MINUTES_RELAYOUT_PROMPT_VERSION") or None, RELAYOUT_KIND)
     timeout_s = float(env.get("MINUTES_LLM_TIMEOUT_S", DEFAULT_LLM_TIMEOUT_S))
-    return Worker(None, llm, CallbackSender(allowed=allowed), timeout_s=timeout_s, prompt=prompt, connect=connect_db)
+    return Worker(None, llm, CallbackSender(allowed=allowed), timeout_s=timeout_s, prompt=prompt,
+                  relayout_prompt=relayout_prompt, connect=connect_db)
 
 
 def start_in_thread(worker, stop=None):
@@ -153,7 +157,8 @@ def main():
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
-    log.info("작업자 시작 (지시문 %s, 시간 제한 %.0f초)", worker.prompt.version, worker.timeout_s)
+    log.info("작업자 시작 (지시문 %s, %s, 시간 제한 %.0f초)", worker.prompt.version, worker.relayout_prompt.version,
+             worker.timeout_s)
     worker.run(stop)
     log.info("작업자 멈춤")
 

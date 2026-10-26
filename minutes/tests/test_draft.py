@@ -6,7 +6,7 @@ import pytest
 
 from minutes.draft import FAILED, INPUT_TOO_LONG, MAX_MATERIALS, SUCCEEDED, make_draft
 from minutes.lines import EMPTY_SECTION
-from minutes.placement import load_prompt
+from minutes.placement import RELAYOUT_KIND, load_prompt
 from minutes_fakes import GOOD, ScriptLLM, load_request, previous_lines_of
 from rag.llm import LLMError, LLMTimeout
 
@@ -142,3 +142,12 @@ def test_다시_배치의_상한은_이전_줄_수로_센다(body):
 def test_previousLines가_빈_목록이면_처음_만들기(body):
     result = make_draft(dict(body, previousLines=[]), ScriptLLM(GOOD))
     assert "draftEdited" not in result["sections"][1]["evidence"][0] and result["unplacedLines"] == []
+
+
+def test_다시_배치는_다시_배치_지시문을_쓰고_처음_초안은_칸_배치_지시문을_쓴다(body):
+    lines = previous_lines_of(make_draft(body, ScriptLLM(GOOD)))
+    llm = ScriptLLM(answer(), GOOD)
+    make_draft(relayout_body(body, lines), llm)
+    make_draft(body, llm)
+    assert llm.calls[0][0] == load_prompt(kind=RELAYOUT_KIND).text and llm.calls[1][0] == load_prompt().text
+    assert load_prompt(kind=RELAYOUT_KIND).version == "relayout-v1"

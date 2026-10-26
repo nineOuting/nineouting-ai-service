@@ -17,7 +17,7 @@ import time
 from .lines import build_sections, unplaced_lines
 from .materials import build_materials
 from .models import Placement
-from .placement import Prompt, load_prompt, place
+from .placement import RELAYOUT_KIND, Prompt, load_prompt, place
 from .relayout import build_relayout
 
 log = logging.getLogger("minutes.draft")
@@ -36,8 +36,8 @@ MESSAGES = {                                    # 실패 설명. 요약·초안 
 
 
 def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, prompt: Prompt | None = None,
-               call_retries: int = 1) -> dict:
-    """결과 콜백 본문(명세 3.1·3.2)을 돌려준다."""
+               call_retries: int = 1, relayout_prompt: Prompt | None = None) -> dict:
+    """결과 콜백 본문(명세 3.1·3.2)을 돌려준다. 다시 배치에는 relayout_prompt(없으면 relayout 의 가장 큰 번호)를 쓴다."""
     t0 = time.monotonic()
     request_id, items = body["requestId"], body["template"]["items"]
     previous = body.get("previousLines") or []
@@ -58,7 +58,10 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
         log.info("초안 완료 %s attempts=0 ms=%d", tag, _ms(t0))
         return succeeded(request_id, sections, not_sent + unplaced)
 
-    prompt = prompt or load_prompt()
+    if previous:
+        prompt = relayout_prompt or load_prompt(kind=RELAYOUT_KIND)
+    else:
+        prompt = prompt or load_prompt()
     outcome = place(items, materials, llm, timeout_s, max_retries, prompt, call_retries)
     tag += (f" prompt={prompt.version} attempts={outcome.attempts}"
             f" in_tokens={outcome.input_tokens} out_tokens={outcome.output_tokens}")

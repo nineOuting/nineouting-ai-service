@@ -22,6 +22,7 @@ from .models import Material, Placement
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 PROMPT_KIND = "placement"
+RELAYOUT_KIND = "relayout"      # 양식 변경 시 다시 배치 (명세 8장). 처음 초안과 지시문을 나눈 이유는 prompts/relayout/v1.md 머리
 CHECK_FAILED = "CHECK_FAILED"
 LLM_TIMEOUT = "LLM_TIMEOUT"
 LLM_FAILED = "LLM_FAILED"
@@ -49,26 +50,26 @@ class Outcome:
 
 
 @lru_cache(maxsize=None)
-def load_prompt(version: str | None = None) -> Prompt:
-    """minutes/prompts/placement/{version}.md. version 이 없으면 번호가 가장 큰 파일.
-    맨 위 --- 사이의 version 이 "placement-{version}" 과 같아야 한다 (RAG 지시문과 같은 규칙)."""
-    folder = PROMPTS_DIR / PROMPT_KIND
+def load_prompt(version: str | None = None, kind: str = PROMPT_KIND) -> Prompt:
+    """minutes/prompts/{kind}/{version}.md. version 이 없으면 번호가 가장 큰 파일.
+    맨 위 --- 사이의 version 이 "{kind}-{version}" 과 같아야 한다 (RAG 지시문과 같은 규칙)."""
+    folder = PROMPTS_DIR / kind
     if version is None:
         names = sorted((p.stem for p in folder.glob("v*.md") if _VERSION.fullmatch(p.stem)), key=lambda v: int(v[1:]))
         if not names:
-            raise PromptError(f"지시문 파일 없음: prompts/{PROMPT_KIND}/v*.md")
+            raise PromptError(f"지시문 파일 없음: prompts/{kind}/v*.md")
         version = names[-1]
     if not _VERSION.fullmatch(version):
         raise PromptError(f"지시문 버전은 v1, v2 처럼 써야 함 (받은 값: {version})")
     try:
         raw = (folder / f"{version}.md").read_text(encoding="utf-8")
     except OSError:
-        raise PromptError(f"지시문 파일 없음: prompts/{PROMPT_KIND}/{version}.md") from None
+        raise PromptError(f"지시문 파일 없음: prompts/{kind}/{version}.md") from None
     m = re.match(r"---\n(.*?)\n---\n(.*)", raw, re.S)
-    expected = f"{PROMPT_KIND}-{version}"
+    expected = f"{kind}-{version}"
     meta = dict(line.split(":", 1) for line in m.group(1).splitlines() if ":" in line) if m else {}
     if meta.get("version", "").strip() != expected or not m.group(2).strip():
-        raise PromptError(f"prompts/{PROMPT_KIND}/{version}.md 맨 위의 version 이 {expected} 가 아니거나 본문이 없음")
+        raise PromptError(f"prompts/{kind}/{version}.md 맨 위의 version 이 {expected} 가 아니거나 본문이 없음")
     return Prompt(expected, m.group(2).strip())
 
 

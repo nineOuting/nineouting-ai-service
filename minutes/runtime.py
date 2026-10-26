@@ -18,11 +18,12 @@ log = logging.getLogger("minutes.runtime")
 
 
 class MinutesRuntime:
-    def __init__(self, pool, env, llm=None, prompt=None):
+    def __init__(self, pool, env, llm=None, prompt=None, relayout_prompt=None):
         self.pool = pool
         self.env = env
         self.llm = llm                          # None 이면 AI 설정 오류. 작업자를 띄우지 않는다
         self.prompt = prompt
+        self.relayout_prompt = relayout_prompt
         self.worker = None
         self.thread = None
         self.stop_event = None
@@ -36,9 +37,10 @@ class MinutesRuntime:
             log.info("회의록 초안 작업자는 이 프로세스에서 띄우지 않음 (python -m minutes.worker 로 따로)")
             return
         from .worker import from_env, start_in_thread
-        self.worker = from_env(self.env, llm=self.llm, prompt=self.prompt)
+        self.worker = from_env(self.env, llm=self.llm, prompt=self.prompt, relayout_prompt=self.relayout_prompt)
         self.thread, self.stop_event = start_in_thread(self.worker)
-        log.info("회의록 초안 작업자 시작 (지시문 %s, 시간 제한 %.0f초)", self.prompt.version, self.worker.timeout_s)
+        log.info("회의록 초안 작업자 시작 (지시문 %s, %s, 시간 제한 %.0f초)", self.prompt.version,
+                 self.relayout_prompt.version, self.worker.timeout_s)
 
     def stop(self, timeout_s=90):
         """처리 중인 작업을 마칠 때까지 기다린다. AI 응답 시간 제한(기본 60초)보다 길게 둔다."""
@@ -57,7 +59,7 @@ def setup(app, env) -> MinutesRuntime:
     from rag.llm import LLMConfigError
 
     from .llm_config import make_minutes_llm
-    from .placement import load_prompt
+    from .placement import RELAYOUT_KIND, load_prompt
 
     options = timeout_options(env.get("MINUTES_DB_STATEMENT_TIMEOUT_MS", 30000),
                               env.get("MINUTES_DB_IDLE_TX_TIMEOUT_MS", 60000))
@@ -68,16 +70,18 @@ def setup(app, env) -> MinutesRuntime:
     if allowed is None:
         log.warning("MINUTES_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")
 
-    llm, config_error, prompt = None, None, None
+    llm, config_error, prompt, relayout_prompt = None, None, None, None
     try:
         llm, _, source = make_minutes_llm(env)
         prompt = load_prompt(env.get("MINUTES_PROMPT_VERSION") or None)
+        relayout_prompt = load_prompt(env.get("MINUTES_RELAYOUT_PROMPT_VERSION") or None, RELAYOUT_KIND)
     except (LLMConfigError, ValueError) as e:                 # 지시문 오류(PromptError)도 ValueError
         llm, config_error = None, str(e)
         log.error("회의록 초안 설정 오류: %s", e)
     else:
-        log.info("회의록 초안 AI %s/%s (%s_* 설정), 지시문 %s", llm.name, llm.model, source, prompt.version)
+        log.info("회의록 초안 AI %s/%s (%s_* 설정), 지시문 %s, %s", llm.name, llm.model, source, prompt.version,
+                 relayout_prompt.version)
 
     app.include_router(make_router(pool, allowed, env.get("MINUTES_REQUEST_ID_HEADER", REQUEST_ID_HEADER),
                                    env.get("MINUTES_API_PREFIX", PREFIX), config_error=config_error))
-    return MinutesRuntime(pool, env, llm, prompt)
+    return MinutesRuntime(pool, env, llm, prompt, relayout_prompt)

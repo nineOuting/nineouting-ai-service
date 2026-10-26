@@ -1,12 +1,14 @@
 """RAG 내부 API (백엔드 → AI 서버). 원본 명세: 노션 "RAG 인터페이스 명세".
 
-  POST   {prefix}/documents                 문서 넣기 → 202 {docId, docVersion, status: "accepted"}
+  POST   {prefix}/documents                 문서 넣기 → 202 {docId, docVersion, status: "accepted" | "ignored"}
   GET    {prefix}/documents/{docId}         상태 조회 → 200 / 404
   DELETE {prefix}/documents/{docId}         문서 지우기 → 204 (없어도)
   DELETE {prefix}/workspaces/{workspaceId}  워크스페이스 지우기 → 204
   POST   {prefix}/answer                    답변 → 200 {status, answer, citations, errorCode}
 
 지금은 회의록(sourceType=minutes)만 받는다. 업로드 문서는 로더를 만들 때 연다.
+회의록은 확정 회의록 형식(formatVersion "1.0")과 임시 형식(schema_version "0.1")을 받는다. 둘 다 아니면 400.
+저장된 것보다 낮은 회의록 버전은 처리하지 않고 status "ignored" 로 답한다 (콜백 없음). 회의록 초안 명세 4.3.
 명세에 없어서 AI 쪽이 정한 것: 입력 오류 400 INVALID_INPUT, 다른 워크스페이스로 온 같은 docId 409 CONFLICT,
 DB 를 쓸 수 없음 503 NOT_READY. 오류 형식은 server/main.py 와 같다.
 답변은 answered·no_result·failed 모두 200 이고 본문의 status 로 구분한다. ID 는 명세 문구와 달리 모두 정수다.
@@ -21,7 +23,9 @@ from fastapi import APIRouter, Body, Depends, Path, Request
 from fastapi.responses import JSONResponse, Response
 
 from .callback import CallbackNotAllowed
+from .errors import IngestError
 from .jobs import IngestRequest, submit
+from .loaders.minutes import check_format
 from .store import DocumentMeta, WorkspaceMismatch, delete_document, delete_workspace, get_status
 
 log = logging.getLogger("rag.api")
@@ -47,9 +51,10 @@ class InvalidInput(ValueError):
 
 INGEST_EXAMPLE = {
     "docId": 200, "docVersion": "2", "workspaceId": 1, "sourceType": "minutes", "title": "10월 예산 회의",
-    "minutes": {"schema_version": "0.1", "summary": [
-        {"text": "1분기 예산은 3천만 원으로 하자는 제안이 나옴", "topic": "예산",
-         "evidence": [{"start": 754.0, "end": 791.0}]}]},
+    "minutes": {"formatVersion": "1.0", "meetingId": 31, "meetingStartAt": "2026-10-20T14:00:00",
+                "confirmedAt": "2026-10-21T09:30:00", "sections": [
+                    {"title": "결정 사항", "content": "- 예산: 1분기 예산은 3천만 원으로 정했다."},
+                    {"title": "할 일", "content": "- 예산: 광고 집행 계획 공유 (이영희, 금요일까지)"}]},
     "callbackUrl": "https://backend.internal/ai/ingest-result",
 }
 INGEST_SCHEMA = {
@@ -63,7 +68,9 @@ INGEST_SCHEMA = {
         "sourceType": {"type": "string", "enum": list(SOURCE_TYPES),
                        "description": "지금은 minutes 만 받는다. upload 는 준비 중 (보내면 400)"},
         "title": {"type": "string", "maxLength": MAX_TITLE, "description": "회의 제목 (업로드 문서는 파일 이름)"},
-        "minutes": {"type": "object", "description": "확정 회의록 JSON 그대로. 지금은 summary.json v0.1 을 임시 형식으로 쓴다"},
+        "minutes": {"type": "object", "description": "확정 회의록 (formatVersion \"1.0\": meetingId, meetingStartAt, "
+                    "confirmedAt, sections[{title, content}]). 칸의 줄 하나가 검색 조각 하나. "
+                    "임시 형식 summary.json (schema_version \"0.1\")도 전환 기간에는 받는다"},
         "fileUrl": {"type": "string", "description": "업로드 문서의 S3 서명 주소 (준비 중)"},
         "callbackUrl": {"type": "string", "description": "처리가 끝나면 AI 서버가 POST 할 백엔드 주소. 허용한 호스트만"},
     },
@@ -135,6 +142,10 @@ def parse_ingest(body, request_id=None) -> IngestRequest:
     minutes = body.get("minutes")
     if not isinstance(minutes, dict):
         raise InvalidInput("minutes 는 JSON 객체여야 함")
+    try:
+        check_format(minutes)
+    except IngestError as e:
+        raise InvalidInput(f"minutes 의 {e.detail}") from None
     callback_url = body.get("callbackUrl")
     if not isinstance(callback_url, str) or not callback_url:
         raise InvalidInput("callbackUrl 이 없음")
@@ -206,8 +217,9 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
                     "같은 docId·docVersion 을 다시 보내도 결과는 하나다.",
         openapi_extra={"requestBody": {"required": True, "content": {"application/json": {
             "schema": INGEST_SCHEMA, "example": INGEST_EXAMPLE}}}},
-        responses={202: {"description": "접수됨", "content": {"application/json": {
-                       "example": {"docId": 200, "docVersion": "2", "status": "accepted"}}}},
+        responses={202: {"description": "접수됨 (accepted). 저장된 것보다 낮은 회의록 버전이면 처리하지 않음 (ignored, 콜백 없음)",
+                         "content": {"application/json": {
+                             "example": {"docId": 200, "docVersion": "2", "status": "accepted"}}}},
                    400: ERR_400,
                    409: _error_doc("같은 docId 가 다른 워크스페이스로 옴", "CONFLICT", "docId 200 의 workspaceId 가 기존과 다름"),
                    503: ERR_503},
@@ -227,10 +239,10 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
         except db_down as e:
             log.error("문서 넣기 DB 오류 request_id=%s error=%s", rid, type(e).__name__)
             return not_ready("DB 를 쓸 수 없음")
-        log.info("문서 넣기 doc=%s version=%s status=%s enqueue=%s request_id=%s",
-                 req.doc.doc_id, req.doc.doc_version, result.status, result.enqueue, rid)
+        log.info("문서 넣기 doc=%s version=%s status=%s enqueue=%s ignored=%s request_id=%s",
+                 req.doc.doc_id, req.doc.doc_version, result.status, result.enqueue, result.ignored, rid)
         return JSONResponse(status_code=202, content={"docId": req.doc.doc_id, "docVersion": req.doc.doc_version,
-                                                      "status": "accepted"})
+                                                      "status": "ignored" if result.ignored else "accepted"})
 
     @router.get(
         "/documents/{doc_id}", summary="상태 조회",

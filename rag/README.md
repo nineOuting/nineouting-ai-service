@@ -6,7 +6,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 
 | 단계 | 상태 |
 |---|---|
-| 회의록 로더, 512토큰 나누기, 임베딩 | 구현 |
+| 회의록 로더, 512토큰 나누기, 임베딩 | 구현. 확정 회의록(`formatVersion` 1.0, 칸의 줄 하나가 조각 하나)과 임시 형식(`schema_version` 0.1)을 받음 |
 | 저장(pgvector, 버전 교체), 검색(workspaceId + docIds) | 구현 |
 | 대기열·작업자, 완료 콜백 | 구현 |
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
@@ -105,7 +105,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 
 | 주소 | 응답 |
 |---|---|
-| `POST /internal/rag/documents` | 202 `{docId, docVersion, status: "accepted"}` |
+| `POST /internal/rag/documents` | 202 `{docId, docVersion, status: "accepted"}`. 저장된 것보다 낮은 회의록 버전이면 `"ignored"` (처리·콜백 없음) |
 | `GET /internal/rag/documents/{docId}` | 200 `{docId, docVersion, status, errorCode, chunkCount}`, 없으면 404 |
 | `DELETE /internal/rag/documents/{docId}` | 204 (없어도) |
 | `DELETE /internal/rag/workspaces/{workspaceId}` | 204 |
@@ -113,6 +113,11 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 - 상태 값은 `accepted` / `processing` / `ready` / `failed` (DB 의 `queued` 를 `accepted` 로 보여 줌)
 - 명세에 없어서 AI 쪽이 정한 것 (확인 필요): 입력 오류 400 `{"error": "INVALID_INPUT"}`, 같은 `docId` 가 다른 워크스페이스로 오면 409 `CONFLICT`, DB 를 쓸 수 없으면 503 `NOT_READY`, 넣기 응답 코드 202
 - 지금은 `sourceType=minutes` 만 받는다. `upload` 는 400 (준비 중)
+- `minutes` 형식 (회의록 초안 명세 `docs/api/minutes-draft-contract.md` 4장)
+  - 확정 회의록 `formatVersion: "1.0"`: `meetingId`, `meetingStartAt`, `confirmedAt`(선택), `sections[{title, content}]`. `content` 의 줄 하나가 조각 하나이고 줄 앞 `- `·`* `·`• ` 는 뗀다. 빈 줄과 "해당 내용 없음" 은 넣지 않는다. 칸 이름을 맥락으로 붙여 검색하고, 근거 위치는 `{type: "section", section, label}` (칸 이름)
+  - 임시 형식 `schema_version: "0.1"` (summary.json): 전환 기간에만. 근거 위치는 녹음 시간 `{type: "time", startMs, endMs, label}`
+  - 둘 다 아니거나 확정 회의록 모양이 틀리면 400 (어느 칸이 틀렸는지 알려 줌)
+- 회의록 버전이 저장된 것과 새 것 모두 정수 모양(`"5"`)이면 숫자로 비교해 낮은 버전은 무시한다. 재시도로 옛 확정본이 늦게 와서 새 확정본을 덮어쓰지 않게 하려는 것. 정수 모양이 아니면 마지막에 받은 것을 쓴다
 - 서버 간 인증은 `api.verify_internal_request` 자리만 있다 (CN팀 방식 대기)
 
 ### 답변 `POST /internal/rag/answer`

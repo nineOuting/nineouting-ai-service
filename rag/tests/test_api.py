@@ -16,6 +16,7 @@ from rag.api import make_router                # noqa: E402
 
 CB = "http://backend.test:8080/internal/rag/callback"
 MINUTES = json.loads((Path(__file__).parent / "fixtures" / "minutes_basic.json").read_text(encoding="utf-8"))
+CONFIRMED = json.loads((Path(__file__).parent / "fixtures" / "minutes_confirmed.json").read_text(encoding="utf-8"))
 BASE = "/internal/rag"
 
 
@@ -64,6 +65,20 @@ def test_같은_버전을_두_번_넣어도_202_이고_작업은_하나(client, 
     assert len(jobs(conn)) == 1
 
 
+def test_확정_회의록_형식도_202_accepted(client, conn):
+    r = client.post(f"{BASE}/documents", json=body(docVersion="5", minutes=copy.deepcopy(CONFIRMED)))
+    assert r.status_code == 202 and r.json()["status"] == "accepted"
+    assert jobs(conn) == [(1, "5", "queued", None)]
+
+
+def test_낮은_회의록_버전은_202_ignored이고_작업을_넣지_않음(client, conn):
+    client.post(f"{BASE}/documents", json=body(docVersion="5", minutes=copy.deepcopy(CONFIRMED)))
+    r = client.post(f"{BASE}/documents", json=body(docVersion="4", minutes=copy.deepcopy(CONFIRMED)))
+    assert r.status_code == 202 and r.json() == {"docId": 1, "docVersion": "4", "status": "ignored"}
+    assert jobs(conn) == [(1, "5", "queued", None)]
+    assert client.get(f"{BASE}/documents/1").json()["docVersion"] == "5"
+
+
 def test_추적_ID는_200자까지만_저장(client, conn):
     client.post(f"{BASE}/documents", json=body(), headers={"X-Request-Id": "r" * 300})
     assert jobs(conn)[0][3] == "r" * 200
@@ -84,6 +99,9 @@ def test_추적_ID는_200자까지만_저장(client, conn):
     ({"minutes": "회의록"}, "minutes"),
     ({"callbackUrl": _DROP}, "callbackUrl"),
     ({"callbackUrl": "http://169.254.169.254/latest/meta-data"}, "허용 목록"),
+    ({"minutes": {"summary": []}}, "formatVersion 이 1.0 도, schema_version 이 0.1 도 아님"),
+    ({"minutes": dict(CONFIRMED, sections=[{"title": "", "content": "x"}])}, "minutes 의 회의록 형식 오류: sections[0].title"),
+    ({"minutes": dict(CONFIRMED, meetingId="31")}, "meetingId"),
 ])
 def test_입력이_틀리면_400_INVALID_INPUT_이고_아무것도_안_남김(client, conn, over, word):
     r = client.post(f"{BASE}/documents", json=body(**over))

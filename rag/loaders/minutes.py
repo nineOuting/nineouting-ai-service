@@ -1,4 +1,13 @@
-"""확정 회의록 JSON -> Piece 목록.
+"""회의록 JSON -> Piece 목록. 두 형식을 받는다 (회의록 초안 명세 docs/api/minutes-draft-contract.md 4.3).
+
+  formatVersion "1.0"   확정 회의록 (명세 4.1). 칸(title, content)의 줄 하나가 Piece 하나, 근거 위치는 칸 이름
+  schema_version "0.1"  임시 형식 (아래). 백엔드가 확정 회의록 형식으로 부르기 시작하면 CN팀과 맞춰 없앤다
+
+확정 회의록 규칙
+  - content 를 줄로 나누고 줄 앞 표시("- ", "* ", "• ")를 뗀다. 빈 줄과 "해당 내용 없음" 줄은 넣지 않는다
+  - 칸 이름을 맥락으로 붙여 검색에 쓴다 ("[결정 사항] …"). 사용자가 추가한 칸도 같다
+  - location = {"type": "section", "section": 칸 이름, "label": 칸 이름}
+  - 넣을 줄이 없으면 no_text, 형식이 틀리면 internal_error (접수 단계에서 check_format 으로 먼저 400)
 
 임시 입력 형식은 summary/meeting_summary.py 가 쓰는 summary.json v0.1 이다.
   {"schema_version": "0.1", "meeting_id": ..., "date": ...,
@@ -15,13 +24,17 @@ decisions·action_items 항목은 아직 형식이 정해지지 않아 summary �
   - 넣을 항목이 없으면 no_text, 형식이 틀리면 internal_error
 """
 import math
+import re
 from dataclasses import dataclass
 
 from ..errors import INTERNAL_ERROR, NO_TEXT, IngestError
 from ..models import Piece
 
 SCHEMA_VERSION = "0.1"
+FORMAT_VERSION = "1.0"
 SECTIONS = ("summary", "decisions", "action_items")
+EMPTY_SECTION = "해당 내용 없음"           # 회의록 초안이 빈 칸에 쓰는 글 (minutes/lines.py)
+_BULLET = re.compile(r"^(?:[-*•]\s+)")
 
 
 @dataclass(frozen=True)
@@ -31,10 +44,62 @@ class LoadResult:
 
 
 def load_minutes(minutes) -> LoadResult:
+    if check_format(minutes) == FORMAT_VERSION:
+        return _load_confirmed(minutes)
+    return _load_temporary(minutes)
+
+
+def check_format(minutes) -> str:
+    """형식 이름(FORMAT_VERSION 또는 SCHEMA_VERSION)을 돌려준다. 틀리면 IngestError(INTERNAL_ERROR).
+    확정 회의록은 모양까지 본다. 임시 형식은 버전만 보고 내용은 읽을 때 본다 (지금까지와 같음).
+    오류 글에는 칸 위치만 쓰고 회의록 글은 쓰지 않는다."""
     if not isinstance(minutes, dict):
         raise _invalid("회의록이 JSON 객체가 아님")
-    if minutes.get("schema_version") != SCHEMA_VERSION:
-        raise _invalid(f"schema_version 이 {SCHEMA_VERSION} 이 아님")
+    if minutes.get("formatVersion") == FORMAT_VERSION:
+        _check_confirmed(minutes)
+        return FORMAT_VERSION
+    if minutes.get("schema_version") == SCHEMA_VERSION:
+        return SCHEMA_VERSION
+    raise _invalid(f"formatVersion 이 {FORMAT_VERSION} 도, schema_version 이 {SCHEMA_VERSION} 도 아님")
+
+
+def _check_confirmed(minutes):
+    meeting_id = minutes.get("meetingId")
+    if isinstance(meeting_id, bool) or not isinstance(meeting_id, int) or meeting_id <= 0:
+        raise _invalid("meetingId 가 양의 정수가 아님")
+    if not isinstance(minutes.get("meetingStartAt"), str) or not minutes["meetingStartAt"].strip():
+        raise _invalid("meetingStartAt 이 비었거나 문자열이 아님")
+    if minutes.get("confirmedAt") is not None and not isinstance(minutes["confirmedAt"], str):
+        raise _invalid("confirmedAt 이 문자열이 아님")
+    sections = minutes.get("sections")
+    if not isinstance(sections, list):
+        raise _invalid("sections 가 배열이 아님")
+    for i, sec in enumerate(sections):
+        if not isinstance(sec, dict):
+            raise _invalid(f"sections[{i}] 가 객체가 아님")
+        if not isinstance(sec.get("title"), str) or not sec["title"].strip():
+            raise _invalid(f"sections[{i}].title 이 비었거나 문자열이 아님")
+        if not isinstance(sec.get("content"), str):
+            raise _invalid(f"sections[{i}].content 가 문자열이 아님")
+
+
+def _load_confirmed(minutes) -> LoadResult:
+    pieces, skipped = [], 0
+    for sec in minutes["sections"]:
+        title = sec["title"].strip()
+        location = {"type": "section", "section": title, "label": title}
+        for raw in sec["content"].splitlines():
+            line = _BULLET.sub("", raw.strip()).strip()
+            if not line or line == EMPTY_SECTION:
+                skipped += bool(line)
+                continue
+            pieces.append(Piece(content=line, location=dict(location), context=title, kind="section"))
+    if not pieces:
+        raise IngestError(NO_TEXT, f"넣을 줄 없음 (해당 내용 없음 {skipped}개)")
+    return LoadResult(pieces, skipped)
+
+
+def _load_temporary(minutes) -> LoadResult:
     if not isinstance(minutes.get("summary"), list):
         raise _invalid("summary 가 배열이 아님")
 

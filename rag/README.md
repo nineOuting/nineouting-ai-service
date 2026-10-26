@@ -118,7 +118,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
   - PDF: 쪽 하나가 조각 재료 하나, 근거 위치 `{type: "page", page, label: "3쪽"}`. 글 없는 쪽은 건너뛰고, 모든 쪽에 글이 없으면(스캔 PDF 등) `no_text`, 1,000쪽 넘으면 `too_large`. PDFium(`pypdfium2`)으로 읽는다. pypdf 는 글자 폭 정보가 어긋난 PDF 에서 글자마다 띄어 꺼내서 쓰지 않는다
   - 워드·엑셀은 읽기가 생기기 전까지 형식을 알아낸 뒤 `unsupported_format` 으로 끝난다 (`last_error` 에 "업로드 로더 미구현 (docx)" 처럼 형식)
   - 머리글·바닥글·쪽 번호 빼기 같은 정제는 아직 없다 (SCRUM-110)
-  - 시험 샘플(합성): `rag/tests/fixtures/upload_*.pdf`, 만드는 스크립트 `make_upload_samples.py` (fpdf2, Noto Sans CJK KR)
+  - 시험 샘플(합성): `rag/tests/fixtures/upload_*.pdf` (짧은 보고서, 상세 운영계획서 `upload_plan.pdf`, 글 없는 PDF, 암호 PDF), 만드는 스크립트 `make_upload_samples.py` (fpdf2, Noto Sans CJK KR, 운영계획서 내용은 `plan_content.py`)
   - `fileUrl` 에는 접근 서명이 들어 있어 로그·오류 글에 남기지 않는다
 - `minutes` 형식 (회의록 초안 명세 `docs/api/minutes-draft-contract.md` 4장)
   - 확정 회의록 `formatVersion: "1.0"`: `meetingId`, `meetingStartAt`, `confirmedAt`(선택), `sections[{title, content}]`. `content` 의 줄 하나가 조각 하나이고 줄 앞 `- `·`* `·`• ` 는 뗀다. 빈 줄과 "해당 내용 없음" 은 넣지 않는다. 칸 이름을 맥락으로 붙여 검색하고, 근거 위치는 `{type: "section", section, label}` (칸 이름)

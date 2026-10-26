@@ -8,6 +8,8 @@
 그래서 RAG 는 PDFium(pypdfium2)으로 읽고, 이 샘플은 "표준에서 조금 벗어난 PDF" 시험도 겸한다.
   upload_report.pdf   4쪽 보고서. 1쪽 제목·문단, 2쪽 예산 표, 3쪽 빈 쪽(머리글도 없음), 4쪽 긴 문단.
                       1·2·4쪽에 같은 머리글·바닥글(쪽 번호) → 정제 시험(SCRUM-110)에도 쓴다
+  upload_plan.pdf     상세 운영계획서 (내용은 plan_content.py). 일정·진행 순서·준비물·인원·예산·관련 법규·운영 수칙·
+                      비상 대응·고려할 점. 표가 많고 글이 길다 → 검색 품질·처리 시간 측정(SCRUM-110)에 쓴다
   upload_scan.pdf     도형만 있고 글자는 없는 1쪽 (스캔한 PDF 대신)
   upload_locked.pdf   upload_report.pdf 에 암호를 건 것
 """
@@ -16,6 +18,8 @@ from pathlib import Path
 
 from fpdf import FPDF
 from pypdf import PdfReader, PdfWriter
+
+from plan_content import PLAN
 
 HERE = Path(__file__).parent
 FONT_CANDIDATES = [Path.home() / "Library/Fonts/NotoSansCJKkr-Regular.otf", Path("/Library/Fonts/NotoSansCJKkr-Regular.otf"),
@@ -57,6 +61,27 @@ class Report(FPDF):
         self.multi_cell(0, 7, text, new_x="LMARGIN", new_y="NEXT")
         self.ln(2)
 
+    def subheading(self, text):
+        self.ln(1)
+        self.set_font("noto", size=12)
+        self.multi_cell(0, 8, text, new_x="LMARGIN", new_y="NEXT")
+        self.set_font("noto", size=11)
+
+    def bullets(self, items):
+        for item in items:
+            self.multi_cell(0, 7, f"- {item}", new_x="LMARGIN", new_y="NEXT")
+        self.ln(2)
+
+    def grid(self, widths, rows):
+        self.set_font("noto", size=9)
+        with self.table(col_widths=widths, line_height=6) as table:
+            for row in rows:
+                r = table.row()
+                for cell in row:
+                    r.cell(cell)
+        self.set_font("noto", size=11)
+        self.ln(3)
+
 
 def make_report(font, path):
     pdf = Report(font)
@@ -82,6 +107,21 @@ def make_report(font, path):
     pdf.output(str(path))
 
 
+def make_plan(font, path):
+    pdf = Report(font)
+    pdf.add_page()
+    draw = {"title": lambda t: (pdf.set_font("noto", size=16), pdf.multi_cell(0, 10, t, new_x="LMARGIN", new_y="NEXT"),
+                                pdf.set_font("noto", size=11)),
+            "h1": lambda t: (pdf.ln(3), pdf.heading(t)), "h2": pdf.subheading, "p": pdf.para, "list": pdf.bullets,
+            "page": lambda _: pdf.add_page()}
+    for kind, *args in PLAN:
+        if kind == "table":
+            pdf.grid(*args)
+        else:
+            draw[kind](*args)
+    pdf.output(str(path))
+
+
 def make_scan(path):
     pdf = FPDF()
     pdf.add_page()
@@ -103,9 +143,10 @@ def main():
     if font is None or not font.exists():
         sys.exit("한글 글꼴이 없음. Noto Sans CJK KR 등의 경로를 인자로 준다")
     make_report(font, HERE / "upload_report.pdf")
+    make_plan(font, HERE / "upload_plan.pdf")
     make_scan(HERE / "upload_scan.pdf")
     make_locked(HERE / "upload_report.pdf", HERE / "upload_locked.pdf")
-    for name in ("upload_report.pdf", "upload_scan.pdf", "upload_locked.pdf"):
+    for name in ("upload_report.pdf", "upload_plan.pdf", "upload_scan.pdf", "upload_locked.pdf"):
         print(f"{name}: {(HERE / name).stat().st_size:,} 바이트")
 
 

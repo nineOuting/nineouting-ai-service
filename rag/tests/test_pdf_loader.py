@@ -78,3 +78,15 @@ def test_공통_정리는_보이지_않는_문자와_제어_문자를_뺀다():
 def test_공통_정리는_원문_기호를_바꾸지_않는다():
     """NFKC 였다면 ①→1, ㈜→(주), 전각 숫자→반각 으로 바뀐다"""
     assert normalize("① ㈜나인아웃팅 １２３") == "① ㈜나인아웃팅 １２３"
+
+
+def test_상세_운영계획서는_표와_긴_글을_순서대로_꺼낸다():
+    """upload_plan.pdf (내용은 fixtures/plan_content.py). 검색 품질·처리 시간 측정(SCRUM-110)에 쓰는 샘플"""
+    r = load_pdf((FIX / "upload_plan.pdf").read_bytes())
+    text = "\n".join(p.content for p in r.pieces)
+    assert len(r.pieces) >= 5 and r.skipped == 0
+    for line in ("13:20~14:10 기조 발표: 회의 기록 자동화의 다음 단계 그랜드홀 발표자 1 질의응답 10분 포함",
+                 "케이터링 6,750,000원 150명 × 2일, 1인 1식 22,500원",
+                 "안전 책임자 1 안전 점검, 비상 대응 지휘, 인원 집계 양일 집결부터 철수까지"):
+        assert line in text.split("\n")
+    assert "견과류 알레르기 5명" in text and "나 인" not in text

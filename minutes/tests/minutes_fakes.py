@@ -38,3 +38,9 @@ class ScriptLLM:
         if isinstance(r, Exception):
             raise r
         return Reply(r if isinstance(r, str) else json.dumps(r, ensure_ascii=False), 100, 20)
+
+
+def previous_lines_of(result: dict) -> list[dict]:
+    """처음 초안 결과(SUCCEEDED) → 다시 배치 요청의 previousLines (백엔드가 줄을 저장했다가 돌려보내는 모양, 명세 5.7).
+    작성자가 아무것도 고치지 않은 상태다. 시험에서 줄을 고치거나 더해 쓴다."""
+    return [{"title": s["title"], **line, "draftEdited": False} for s in result["sections"] for line in s["evidence"]]

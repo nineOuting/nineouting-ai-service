@@ -12,7 +12,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
 | 배포 이미지 (`ghcr.io/nineouting/nineouting-ai-service`) | 구현. 아래 "이미지·배포" |
 | 답변 API (검색 → LLM → 근거 번호 검사) | 구현. LLM 은 설정으로 고름: 가짜(기본, 답 앞에 `[시험용 답변]`) / Gemini(시험) / OpenAI(운영, SDK 는 모델을 정할 때 추가) |
-| 업로드 문서(PDF·워드·엑셀) | 받기·형식 확인(SCRUM-106), PDF 읽기(SCRUM-107, PDFium), 워드 읽기(SCRUM-108) 구현. 엑셀 읽기는 예정 (SCRUM-109) |
+| 업로드 문서(PDF·워드·엑셀) | 받기·형식 확인(SCRUM-106), PDF 읽기(SCRUM-107, PDFium), 워드 읽기(SCRUM-108), 엑셀 읽기(SCRUM-109) 구현. 정제·크기 상한은 SCRUM-110 |
 
 원본 명세는 노션 "RAG 인터페이스 명세".
 
@@ -117,7 +117,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
   - 실패: 서명 만료 `url_expired`, 그 밖에 받지 못함 `download_failed` (둘 다 다시 시도하지 않음. 백엔드가 다시 호출), 크기·푼 크기 초과 `too_large`, 암호 `encrypted`, pdf·docx·xlsx 가 아님(사용자가 묶은 zip, 옛 doc·xls, hwp 포함) `unsupported_format`
   - PDF: 쪽 하나가 조각 재료 하나, 근거 위치 `{type: "page", page, label: "3쪽"}`. 글 없는 쪽은 건너뛰고, 모든 쪽에 글이 없으면(스캔 PDF 등) `no_text`, 1,000쪽 넘으면 `too_large`. PDFium(`pypdfium2`)으로 읽는다. pypdf 는 글자 폭 정보가 어긋난 PDF 에서 글자마다 띄어 꺼내서 쓰지 않는다
   - 워드: 제목 하나 아래의 글이 조각 재료 하나. 근거 위치 `{type: "section", heading, label}`(가장 가까운 제목, 첫 제목 전 글은 label "문서 처음"), 검색 맥락은 제목 경로("2. 예산 계획 > 2.1 마케팅"). 표는 행마다 "머리 행 이름: 값 | …" 한 줄. 머리글·바닥글은 본문과 따로 저장돼 읽지 않는다. 글상자·각주·자동 번호는 읽지 못한다
-  - 엑셀은 읽기가 생기기 전까지 형식을 알아낸 뒤 `unsupported_format` 으로 끝난다 (`last_error` 에 "업로드 로더 미구현 (xlsx)")
+  - 엑셀: 시트마다 처음으로 글이 있는 행을 머리 행으로 보고, 그 아래 행을 10행 이하로 고르게 묶어 조각 재료 하나. 행마다 "열 이름: 값 | …" 한 줄. 근거 위치 `{type: "sheet", sheet, rows: [시작, 끝], label: "1분기 시트 12~20행"}`(행 번호는 엑셀 화면 그대로), 검색 맥락은 시트 이름. 병합 칸은 범위 전체에 채우고, 숫자는 쉼표·백분율·날짜 서식을 따름. 수식은 저장된 계산 결과만(없으면 빠짐). 숨긴 시트는 읽지 않음. 칸 20만 개 넘으면 `too_large`. 차트·그림·칸 메모는 읽지 못하고, 한 시트에 표가 여럿이면 첫 행만 머리 행으로 봄
   - 머리글·바닥글·쪽 번호 빼기 같은 정제는 아직 없다 (SCRUM-110)
   - 시험 샘플(합성): `rag/tests/fixtures/upload_*.pdf` (짧은 보고서, 상세 운영계획서 `upload_plan.pdf`, 글 없는 PDF, 암호 PDF), 만드는 스크립트 `make_upload_samples.py` (fpdf2, Noto Sans CJK KR, 운영계획서 내용은 `plan_content.py`)
   - `fileUrl` 에는 접근 서명이 들어 있어 로그·오류 글에 남기지 않는다

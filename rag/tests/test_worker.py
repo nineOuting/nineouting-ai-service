@@ -11,8 +11,8 @@ from _helpers import OTHER_WS, WS
 from rag.callback import CallbackNotAllowed, CallbackSender
 from rag.jobs import IngestRequest, claim, cleanup_finished, submit
 from rag.store import DocumentMeta, delete_document, delete_workspace, get_status, register
-from rag.worker import UPLOAD_NOT_READY, Worker
-from upload_fakes import office_bytes, ole_bytes
+from rag.worker import Worker
+from upload_fakes import ole_bytes
 
 CB = "http://backend.test:8080/internal/rag/callback"
 MINUTES = json.loads((Path(__file__).parent / "fixtures" / "minutes_basic.json").read_text(encoding="utf-8"))
@@ -138,16 +138,17 @@ def test_넣을_항목이_없으면_재시도_없이_failed_콜백(conn, fake_em
     assert (job_status, attempts, payload) == ("failed", 1, {}) and last_error.startswith("no_text")
 
 
-def test_업로드_문서는_받아서_형식까지_알아내고_로더가_생길_때까지_unsupported_format(conn, fake_embedder, storage):
+def test_엑셀은_받아서_시트_행_범위마다_저장하고_ready(conn, fake_embedder, storage):
     backend = FakeBackend()
-    storage.files["/ws/1/budget.xlsx"] = office_bytes("xlsx")
-    submit(conn, request(source="upload", file_url=storage.url("/ws/1/budget.xlsx")))
+    storage.files["/ws/1/edge.xlsx"] = (Path(__file__).parent / "fixtures" / "upload_edge.xlsx").read_bytes()
+    submit(conn, request(source="upload", version="sha256:xlsx", file_url=storage.url("/ws/1/edge.xlsx")))
     make_worker(conn, fake_embedder, backend, upload=storage.settings()).process_one()
-    assert storage.hits == ["/ws/1/budget.xlsx"]
-    assert backend.bodies[0]["errorCode"] == "unsupported_format"
-    _, _, _, status, attempts, last_error, payload, _ = job_rows(conn)[0]
-    assert f"{UPLOAD_NOT_READY} (xlsx)" in last_error  # last_error 로 "아직 안 만듦"과 형식을 구분
-    assert (status, attempts, payload) == ("failed", 1, {})   # 서명 주소가 든 요청은 지운다
+    assert storage.hits == ["/ws/1/edge.xlsx"]
+    assert backend.bodies[0]["status"] == "ready" and backend.bodies[0]["chunkCount"] == 4
+    labels = [r[0] for r in conn.execute("SELECT location->>'label' FROM rag_chunks WHERE doc_id = 1 ORDER BY chunk_index")]
+    assert labels[0] == "1분기 예산 시트 2~6행" and labels[-1] == "참가 회사 시트 20~26행"
+    _, _, _, status, attempts, _, payload, _ = job_rows(conn)[0]
+    assert (status, attempts, payload) == ("done", 1, {})     # 서명 주소가 든 요청은 지운다
 
 
 def test_PDF는_받아서_쪽마다_저장하고_ready(conn, fake_embedder, storage):

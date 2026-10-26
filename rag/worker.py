@@ -24,11 +24,12 @@ from .callback import CallbackSender, allowed_hosts_from_env
 from .chunking import split_pieces
 from .download import UPLOAD_OFF, UploadSettings, fetch, settings_from_env
 from .errors import INTERNAL_ERROR, UNSUPPORTED_FORMAT, IngestError
-from .filetype import DOCX, PDF, detect
+from .filetype import DOCX, PDF, XLSX, detect
 from .jobs import KEEP_DAYS, claim, cleanup_finished, finish, retry_later
 from .loaders.docx import load_docx
 from .loaders.minutes import load_minutes
 from .loaders.pdf import load_pdf
+from .loaders.xlsx import load_xlsx
 from .store import StaleJob, is_current, mark_failed, mark_processing, store
 
 log = logging.getLogger("rag.worker")
@@ -37,7 +38,7 @@ MAX_ATTEMPTS = 3
 RETRY_DELAYS_S = (30, 120)       # 1번째 실패 뒤 30초, 2번째 실패 뒤 2분
 POLL_S = 1.0                     # 할 일이 없을 때 다시 묻는 간격
 CLEANUP_EVERY_S = 3600           # 끝난 작업 줄 정리 주기
-UPLOAD_NOT_READY = "업로드 로더 미구현"           # 엑셀 로더는 SCRUM-109
+UPLOAD_NOT_READY = "업로드 로더 미구현"           # 형식 확인은 통과했지만 읽기가 없는 형식 (지금은 없음)
 
 
 class Worker:
@@ -97,7 +98,7 @@ class Worker:
         elif source == "upload":
             data = fetch(job.payload.get("fileUrl"), self.upload)
             kind = detect(data)
-            loaders = {PDF: load_pdf, DOCX: load_docx}
+            loaders = {PDF: load_pdf, DOCX: load_docx, XLSX: load_xlsx}
             if kind not in loaders:
                 raise IngestError(UNSUPPORTED_FORMAT, f"{UPLOAD_NOT_READY} ({kind})")
             pieces = loaders[kind](data).pieces

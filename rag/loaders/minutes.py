@@ -6,7 +6,7 @@
 확정 회의록 규칙
   - content 를 줄로 나누고 줄 앞 표시("- ", "* ", "• ")를 뗀다. 빈 줄과 "해당 내용 없음" 줄은 넣지 않는다
   - 칸 이름을 맥락으로 붙여 검색에 쓴다 ("[결정 사항] …"). 사용자가 추가한 칸도 같다
-  - location = {"type": "section", "section": 칸 이름, "label": 칸 이름}
+  - location = {"type": "section", "heading": 칸 이름, "label": 칸 이름}  (워드 문서의 제목 위치와 같은 모양)
   - 넣을 줄이 없으면 no_text, 형식이 틀리면 internal_error (접수 단계에서 check_format 으로 먼저 400)
 
 임시 입력 형식은 summary/meeting_summary.py 가 쓰는 summary.json v0.1 이다.
@@ -87,7 +87,7 @@ def _load_confirmed(minutes) -> LoadResult:
     pieces, skipped = [], 0
     for sec in minutes["sections"]:
         title = sec["title"].strip()
-        location = {"type": "section", "section": title, "label": title}
+        location = {"type": "section", "heading": title, "label": title}
         for raw in sec["content"].splitlines():
             line = _BULLET.sub("", raw.strip()).strip()
             if not line or line == EMPTY_SECTION:

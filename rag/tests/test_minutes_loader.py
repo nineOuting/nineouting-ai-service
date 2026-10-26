@@ -101,7 +101,7 @@ def test_확정_회의록은_칸의_줄_하나가_조각_하나이고_근거_위
         ("고객 요청", "고객사 로고는 행사 전날까지 받기"),                     # 표시 없는 줄, 사용자가 추가한 칸
     ]
     assert r.skipped == 1                                                     # "해당 내용 없음"
-    assert r.pieces[3].location == {"type": "section", "section": "결정 사항", "label": "결정 사항"}
+    assert r.pieces[3].location == {"type": "section", "heading": "결정 사항", "label": "결정 사항"}
     assert {p.kind for p in r.pieces} == {"section"}
 
 

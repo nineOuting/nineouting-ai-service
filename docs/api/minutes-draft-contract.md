@@ -290,12 +290,14 @@ ai-service는 이 장의 세 가지(확정 회의록 형식 받기, 칸 이름 �
 | 칸 | 타입 | 설명 |
 |---|---|---|
 | `type` | `string` | `"section"` |
-| `section` | `string` | 칸 이름 |
+| `heading` | `string` | 칸 이름 |
 | `label` | `string` | 화면에 보여 줄 글 (칸 이름과 같음) |
 
 ```json
-"location": {"type": "section", "section": "결정 사항", "label": "결정 사항"}
+"location": {"type": "section", "heading": "결정 사항", "label": "결정 사항"}
 ```
+
+RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산 계획", label}`)와 같은 모양이다. 같은 `type` 이면 칸 이름도 같게 하려고, 처음 정한 `section` 칸을 `heading` 으로 바꿨다 (2026-10-26, 백엔드가 쓰기 전).
 
 ### 4.3 호환 규칙
 

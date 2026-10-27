@@ -114,7 +114,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 - 명세에 없어서 AI 쪽이 정한 것 (확인 필요): 입력 오류 400 `{"error": "INVALID_INPUT"}`, 같은 `docId` 가 다른 워크스페이스로 오면 409 `CONFLICT`, DB 를 쓸 수 없으면 503 `NOT_READY`, 넣기 응답 코드 202
 - `sourceType=upload` 는 허용 저장소(`RAG_UPLOAD_ALLOWED_HOSTS`)가 설정됐을 때만 받는다. 없으면 400. `fileUrl` 의 호스트가 허용 저장소가 아니어도 400
   - 작업자가 파일을 메모리로 받아(디스크에 쓰지 않음) 안쪽 모양으로 형식을 알아낸다. 확장자는 믿지 않는다
-  - 실패: 서명 만료 `url_expired`, 그 밖에 받지 못함 `download_failed` (둘 다 다시 시도하지 않음. 백엔드가 다시 호출), 크기·푼 크기 초과 `too_large`, 암호 `encrypted`, pdf·docx·xlsx 가 아님(사용자가 묶은 zip, 옛 doc·xls, hwp 포함) `unsupported_format`
+  - 실패: 서명 만료 `url_expired`, 그 밖에 받지 못함 `download_failed` (둘 다 다시 시도하지 않음. 백엔드가 다시 호출), 크기·푼 크기 초과와 조각 토큰 합계 초과(`RAG_MAX_DOC_TOKENS`) `too_large`, 암호 `encrypted`, pdf·docx·xlsx 가 아님(사용자가 묶은 zip, 옛 doc·xls, hwp 포함) `unsupported_format`
   - PDF: 쪽마다 머리글·바닥글(여러 쪽의 위·아래 두 줄 안에 되풀이되는 줄)을 지우고, 쪽 안에서 번호 제목(`1.`, `3.2`)마다 조각 재료 하나. 검색 맥락은 제목 경로, 쪽 첫 부분은 앞 쪽 제목을 이어받음. 번호 없는 제목은 나누지 못함. 근거 위치 `{type: "page", page, label: "3쪽"}`. 글 없는 쪽은 건너뛰고, 모든 쪽에 글이 없으면(스캔 PDF 등) `no_text`, 1,000쪽 넘으면 `too_large`. PDFium(`pypdfium2`)으로 읽는다. pypdf 는 글자 폭 정보가 어긋난 PDF 에서 글자마다 띄어 꺼내서 쓰지 않는다
   - 워드: 제목 하나 아래의 글이 조각 재료 하나. 근거 위치 `{type: "section", heading, label}`(가장 가까운 제목, 첫 제목 전 글은 label "문서 처음"), 검색 맥락은 제목 경로("2. 예산 계획 > 2.1 마케팅"). 표는 행마다 "머리 행 이름: 값 | …" 한 줄. 머리글·바닥글은 본문과 따로 저장돼 읽지 않는다. 글상자·각주·자동 번호는 읽지 못한다
   - 엑셀: 시트마다 처음으로 글이 있는 행을 머리 행으로 보고, 그 아래 행 하나가 조각 재료 하나. 행은 "열 이름: 값 | …" 한 줄. 근거 위치 `{type: "sheet", sheet, rows: [시작, 끝], label: "1분기 시트 12행"}`(행 번호는 엑셀 화면 그대로), 검색 맥락은 시트 이름. 병합 칸은 범위 전체에 채우고, 숫자는 쉼표·백분율·날짜 서식을 따름. 수식은 저장된 계산 결과만(없으면 빠짐). 숨긴 시트는 읽지 않음. 칸 20만 개 넘으면 `too_large`. 차트·그림·칸 메모는 읽지 못하고, 한 시트에 표가 여럿이면 첫 행만 머리 행으로 봄
@@ -231,6 +231,7 @@ set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면
 | `RAG_UPLOAD_ALLOWED_HOSTS` | 업로드 문서를 받을 저장소 호스트 (S3 버킷 주소 등, 쉼표로). **비어 있으면 업로드 문서를 받지 않음** (콜백과 달리 모두 허용이 없음) |
 | `RAG_UPLOAD_MAX_MB` | 업로드 파일 최대 크기(MB). 정해 둔 값이며 SCRUM-110 에서 재서 조정. 기본 20 |
 | `RAG_UPLOAD_TIMEOUT_S` | 파일 받기 시간 제한(초). 기본 30 |
+| `RAG_MAX_DOC_TOKENS` | 문서 하나의 조각 토큰 합계 상한. 넘으면 임베딩 전에 `too_large`. 임베딩 시간이 토큰 수에 비례해서 둔다 (기본 100000, 합성 문서로 PDF 약 145쪽·엑셀 약 2,000행). 처리 완료 로그의 `tokens`·`걸린시간`으로 서버 속도를 보고 조정 |
 | `RAG_TORCH_THREADS` | 임베딩 스레드 수 (작업자·답변이 같이 씀) (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |
 | `RAG_DB_STATEMENT_TIMEOUT_MS`, `RAG_DB_IDLE_TX_TIMEOUT_MS` | 작업자 DB 연결의 시간 제한 (기본 30000, 60000) |
 | `RAG_LLM_PROVIDER` | 답변 LLM 공급자: `fake`(기본, 시험용 가짜) / `gemini`(시험) / `openai`(운영). 설정이 잘못되면 서버는 뜨고 답변만 503 |

@@ -162,6 +162,27 @@ def test_PDF는_받아서_쪽_번호로_저장하고_ready(conn, fake_embedder, 
     assert job_rows(conn)[0][6] == {}                           # 서명 주소가 든 요청은 지운다
 
 
+def test_조각_토큰_합계가_상한을_넘으면_임베딩_전에_too_large(conn, fake_embedder, storage):
+    backend, embedded = FakeBackend(), []
+    storage.files["/ws/1/report.pdf"] = (Path(__file__).parent / "fixtures" / "upload_report.pdf").read_bytes()
+    submit(conn, request(source="upload", version="sha256:big", file_url=storage.url("/ws/1/report.pdf")))
+    sender = CallbackSender(sender=backend, sleep=lambda s: None)
+    worker = Worker(conn, HookEmbedder(fake_embedder, on_embed=lambda: embedded.append(1)), sender,
+                    upload=storage.settings(), max_doc_tokens=50)
+    worker.process_one()
+    assert embedded == []                                       # 임베딩하지 않고 막음
+    body = backend.bodies[0]
+    assert (body["status"], body["errorCode"]) == ("failed", "too_large")
+    assert get_status(conn, 1)["status"] == "failed"
+
+
+def test_토큰_상한은_환경변수로_바꾼다(fake_embedder):
+    from rag.config import MAX_DOC_TOKENS
+    from rag.worker import from_env
+    assert from_env({}, embedder=fake_embedder).max_doc_tokens == MAX_DOC_TOKENS
+    assert from_env({"RAG_MAX_DOC_TOKENS": "1000"}, embedder=fake_embedder).max_doc_tokens == 1000
+
+
 def test_워드는_받아서_제목마다_저장하고_ready(conn, fake_embedder, storage):
     backend = FakeBackend()
     storage.files["/ws/1/edge.docx"] = (Path(__file__).parent / "fixtures" / "upload_edge.docx").read_bytes()

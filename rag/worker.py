@@ -22,9 +22,9 @@ import time
 
 from .callback import CallbackSender, allowed_hosts_from_env
 from .chunking import split_pieces
-from .config import CHUNK_TOKENS
+from .config import CHUNK_TOKENS, MAX_DOC_TOKENS
 from .download import UPLOAD_OFF, UploadSettings, fetch, settings_from_env
-from .errors import INTERNAL_ERROR, UNSUPPORTED_FORMAT, IngestError
+from .errors import INTERNAL_ERROR, TOO_LARGE, UNSUPPORTED_FORMAT, IngestError
 from .filetype import DOCX, PDF, XLSX, detect
 from .jobs import KEEP_DAYS, claim, cleanup_finished, finish, retry_later
 from .loaders.docx import load_docx
@@ -44,7 +44,7 @@ UPLOAD_NOT_READY = "업로드 로더 미구현"           # 형식 확인은 통
 
 class Worker:
     def __init__(self, conn, embedder, callback, max_attempts=MAX_ATTEMPTS, retry_delays_s=RETRY_DELAYS_S,
-                 connect=None, upload: UploadSettings | None = None):
+                 connect=None, upload: UploadSettings | None = None, max_doc_tokens=MAX_DOC_TOKENS):
         """connect 를 주면 conn 이 없거나 끊겼을 때 run() 이 그것으로 다시 접속한다 (conn=None 으로 시작해도 됨)."""
         self.conn = conn
         self.embedder = embedder
@@ -53,6 +53,7 @@ class Worker:
         self.retry_delays_s = tuple(retry_delays_s)
         self._connect = connect
         self.upload = upload or UPLOAD_OFF
+        self.max_doc_tokens = max_doc_tokens
 
     def process_one(self) -> bool:
         """작업 하나를 처리했으면 True, 꺼낼 것이 없으면 False."""
@@ -73,6 +74,7 @@ class Worker:
         try:
             mark_processing(self.conn, job.doc_id, job.doc_version)
             chunks, vectors = self._prepare(job)
+            tokens = sum(c.token_count for c in chunks)
             count = store(self.conn, job.doc_id, job.doc_version, chunks, vectors, self.embedder.model_id)
         except StaleJob:
             finish(self.conn, job.id, "done", "stale")
@@ -89,7 +91,7 @@ class Worker:
         else:
             sent = self._notify(job, "ready", None, count)
             finish(self.conn, job.id, "done", None if sent else "callback_failed")
-            log.info("처리 완료 %s chunks=%d 걸린시간=%.1fs", tag, count, time.monotonic() - started)
+            log.info("처리 완료 %s chunks=%d tokens=%d 걸린시간=%.1fs", tag, count, tokens, time.monotonic() - started)
         return True
 
     def _prepare(self, job):
@@ -106,6 +108,9 @@ class Worker:
         else:
             raise IngestError(INTERNAL_ERROR, "알 수 없는 sourceType")
         chunks = split_pieces(pieces, self.embedder.passage_tokens, min(CHUNK_TOKENS, self.embedder.max_tokens))
+        tokens = sum(c.token_count for c in chunks)
+        if tokens > self.max_doc_tokens:              # 임베딩 시간은 토큰 수에 비례한다. 오래 돌다 실패하지 않게 먼저 막는다
+            raise IngestError(TOO_LARGE, f"조각 토큰 {tokens}개, 상한 {self.max_doc_tokens}개")
         vectors = self.embedder.embed_passages([c.embed_text for c in chunks])
         return chunks, vectors
 
@@ -185,7 +190,8 @@ def from_env(env=None, embedder=None):
     allowed = allowed_hosts_from_env(env)
     if allowed is None:
         log.warning("RAG_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")
-    return Worker(None, embedder, CallbackSender(allowed=allowed), connect=connect_db, upload=settings_from_env(env))
+    return Worker(None, embedder, CallbackSender(allowed=allowed), connect=connect_db, upload=settings_from_env(env),
+                  max_doc_tokens=int(env.get("RAG_MAX_DOC_TOKENS", MAX_DOC_TOKENS)))
 
 
 def start_in_thread(worker, stop=None):

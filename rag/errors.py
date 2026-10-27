@@ -8,7 +8,7 @@ UNSUPPORTED_FORMAT = "unsupported_format"   # 업로드 문서만
 ENCRYPTED = "encrypted"                     # 업로드 문서만
 DOWNLOAD_FAILED = "download_failed"         # 업로드 문서만
 URL_EXPIRED = "url_expired"                 # 업로드 문서만
-TOO_LARGE = "too_large"                     # 업로드 문서만. 파일이나 푼 크기가 상한을 넘음 [ai-service 제안]
+TOO_LARGE = "too_large"                     # 업로드 파일·푼 크기·쪽·칸, 또는 문서의 조각 토큰 합계가 상한을 넘음 [ai-service 제안]
 INTERNAL_ERROR = "internal_error"
 
 

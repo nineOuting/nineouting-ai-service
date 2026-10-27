@@ -1,17 +1,19 @@
 """초안 생성 요청 검사. 명세 2.1·5장. 틀리면 InvalidInput — API 가 접수 전에 400 INVALID_INPUT 으로 바꾼다.
 
 오류 글에는 칸 위치만 쓰고 값은 쓰지 않는다 (응답·로그에 회의 내용이 새지 않게).
-엄격하게: 번호·타입, 칸 이름(1~20개, 1~100자, 중복 없음), 요약의 안건이 agendas 에 있는지, 항목 id 중복, 근거 줄 번호,
+엄격하게: 번호·타입, 양식 필드(1~20개, 이름 1~100자·중복 없음, 종류, AI 채움 설정, 글 20,000자), 요약의 안건이 agendas 에 있는지, 항목 id 중복, 근거 줄 번호,
           이전 줄(previousLines, 600개·글 2,000자 이하)의 칸 타입과 draftEdited
 너그럽게: 모르는 의견 kind(그대로 "의견"으로 보임), 빠진 edited·needsCheck(false), 빠진 summary·opinions·todos(빈 목록),
           보드 본문의 다른 칸(version, offTopic, leftover 등)과 transcripts 등 쓰지 않는 칸,
           이전 줄의 출처가 요약에 없거나 서로 겹치는 것 (명세 8.3: 거절하지 않고 처리 단계에서 다룬다)
 """
 
-from .models import KIND_RANK
+from .models import KIND_RANK, TABLE, TEXT, Field
 
 MAX_ITEMS = 20
 MAX_ITEM_NAME = 100
+MAX_USER_TEXT = 20_000                  # 사용자가 채우는 필드의 글, 머리글·바닥글 (명세 7.5)
+FIELD_TYPES = (TEXT, TABLE)
 MAX_REQUEST_ID = 200
 MAX_PREVIOUS_LINES = 600
 MAX_LINE_TEXT = 2000
@@ -36,9 +38,24 @@ def validate_request(body) -> None:
     _previous_lines(body.get("previousLines"))
 
 
+def template_fields(template: dict) -> tuple[list[Field], bool]:
+    """(필드 목록, v0.7 모양인가). 검사를 통과한 양식만 받는다.
+    v0.7 은 template.fields, v0.6 은 template.items(이름 목록 → 모두 글·AI 채움). 둘 다 있으면 fields."""
+    if "fields" in template:
+        return [Field(f["title"], f["type"], f["aiFill"], f.get("content") or "") for f in template["fields"]], True
+    return [Field(name) for name in template["items"]], False
+
+
 def _template(template):
     if not isinstance(template, dict):
         raise InvalidInput("template이 객체가 아님")
+    if "fields" in template:
+        _fields(template["fields"])
+        for key in ("header", "footer"):
+            _optional_str(template.get(key), f"template.{key}")
+            if template.get(key) and len(template[key]) > MAX_USER_TEXT:
+                raise InvalidInput(f"template.{key}는 {MAX_USER_TEXT}자 이하여야 함")
+        return
     items = template.get("items")
     if not isinstance(items, list) or not 1 <= len(items) <= MAX_ITEMS:
         raise InvalidInput(f"template.items는 1~{MAX_ITEMS}개의 목록이어야 함")
@@ -48,6 +65,29 @@ def _template(template):
         if name.strip() in seen:
             raise InvalidInput(f"template.items[{i}]의 칸 이름이 앞의 칸과 겹침")
         seen.add(name.strip())
+
+
+def _fields(fields):
+    if not isinstance(fields, list) or not 1 <= len(fields) <= MAX_ITEMS:
+        raise InvalidInput(f"template.fields는 1~{MAX_ITEMS}개의 목록이어야 함")
+    seen = set()
+    for i, f in enumerate(fields):
+        where = f"template.fields[{i}]"
+        if not isinstance(f, dict):
+            raise InvalidInput(f"{where}가 객체가 아님")
+        _text(f.get("title"), f"{where}.title", MAX_ITEM_NAME)
+        if f["title"].strip() in seen:
+            raise InvalidInput(f"{where}.title이 앞의 필드와 겹침")
+        seen.add(f["title"].strip())
+        if f.get("type") not in FIELD_TYPES:
+            raise InvalidInput(f"{where}.type은 {', '.join(FIELD_TYPES)} 중 하나여야 함")
+        if not isinstance(f.get("aiFill"), bool):
+            raise InvalidInput(f"{where}.aiFill이 true/false가 아님")
+        if f["type"] == TABLE and f["aiFill"]:      # SCRUM-114 에서 푼다 (명세 7.6)
+            raise InvalidInput(f"{where}: AI가 채우는 표 필드는 아직 지원하지 않음")
+        _optional_str(f.get("content"), f"{where}.content")
+        if f.get("content") and len(f["content"]) > MAX_USER_TEXT:
+            raise InvalidInput(f"{where}.content는 {MAX_USER_TEXT}자 이하여야 함")
 
 
 def _agendas(agendas) -> set:

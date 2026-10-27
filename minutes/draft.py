@@ -4,7 +4,10 @@
   previousLines 가 있으면 다시 배치 (명세 8장): 재료는 이전 줄에서 만들고(relayout.py),
   이전 초안에 없던 요약 항목은 AI 에 보내지 않고 unplaced 로, AI 가 넣지 못한 이전 줄은 unplacedLines 로 돌려준다
 
-  재료가 0개        AI 를 부르지 않고 모든 칸 "해당 내용 없음"
+  재료가 0개        AI 를 부르지 않고 AI 가 채우는 필드는 모두 "해당 내용 없음"
+  AI 채움 필드 0개  AI 를 부르지 않고 모든 재료를 unplaced(이전 줄은 unplacedLines)로
+양식 필드 (명세 v0.7): AI 에는 AI 가 채우는 필드만 칸 목록으로 넘기고, 돌아온 칸 번호를 양식 필드 위치로 되돌린다.
+사용자가 채우는 필드·머리글·바닥글은 받은 그대로 돌려준다. v0.6 요청(template.items)은 결과도 v0.6 모양이다.
   재료가 상한 초과  AI 를 부르지 않고 FAILED / INPUT_TOO_LONG (AI 에 넘길 재료 수. 다시 배치는 이전 줄 수)
   AI 실패           FAILED / LLM_TIMEOUT · LLM_FAILED · CHECK_FAILED
 
@@ -19,6 +22,7 @@ from .materials import build_materials
 from .models import Placement
 from .placement import RELAYOUT_KIND, Prompt, load_prompt, place
 from .relayout import build_relayout
+from .request import template_fields
 
 log = logging.getLogger("minutes.draft")
 
@@ -39,13 +43,18 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
                call_retries: int = 1, relayout_prompt: Prompt | None = None) -> dict:
     """결과 콜백 본문(명세 3.1·3.2)을 돌려준다. 다시 배치에는 relayout_prompt(없으면 relayout 의 가장 큰 번호)를 쓴다."""
     t0 = time.monotonic()
-    request_id, items = body["requestId"], body["template"]["items"]
+    request_id, template = body["requestId"], body["template"]
+    fields, v07 = template_fields(template)
+    ai_fields = [i for i, f in enumerate(fields) if f.ai_fill]        # AI 가 보는 칸 번호 → 양식 필드 위치
+    items = [fields[i].title for i in ai_fields]
+    extra = {"header": template.get("header"), "footer": template.get("footer")} if v07 else None
     previous = body.get("previousLines") or []
     if previous:
         materials, unreferenced = build_relayout(body["agendas"], body["summary"], previous)
     else:
         materials, unreferenced = build_materials(body["agendas"], body["summary"]), []
-    tag = (f"request_id={request_id} minutes={body.get('minutesId')} items={len(items)} materials={len(materials)}"
+    tag = (f"request_id={request_id} minutes={body.get('minutesId')} fields={len(fields)} ai_fields={len(items)}"
+           f" materials={len(materials)}"
            f" previous={len(previous)}")
     not_sent = [m.source() for m in unreferenced]      # 이전 초안에 없던 요약 항목 (다시 배치)
 
@@ -53,10 +62,12 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
         log.warning("초안 실패 %s error=%s", tag, INPUT_TOO_LONG)
         return failed(request_id, INPUT_TOO_LONG, f"{MESSAGES[INPUT_TOO_LONG]} ({len(materials)}개, 상한 {MAX_MATERIALS}개)")
 
-    if not materials:
-        sections, unplaced = build_sections(items, [], Placement(sections={}, texts={}, unplaced=()))
+    if not materials or not items:
+        # 재료가 없거나 AI 가 채울 필드가 없으면 AI 를 부르지 않는다. 재료는 모두 넣지 못한 것으로 돌려준다
+        nothing = Placement(sections={}, texts={}, unplaced=tuple(m.ref for m in materials))
+        sections, unplaced = build_sections(fields, materials, nothing, v07)
         log.info("초안 완료 %s attempts=0 ms=%d", tag, _ms(t0))
-        return succeeded(request_id, sections, not_sent + unplaced)
+        return succeeded(request_id, sections, not_sent + unplaced, unplaced_lines(materials, nothing, previous), extra)
 
     if previous:
         prompt = relayout_prompt or load_prompt(kind=RELAYOUT_KIND)
@@ -69,18 +80,22 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
         log.warning("초안 실패 %s error=%s ms=%d", tag, outcome.error_code, _ms(t0))
         return failed(request_id, outcome.error_code, MESSAGES[outcome.error_code])
 
-    sections, unplaced = build_sections(items, materials, outcome.placement)
+    placement = outcome.placement
+    placement = Placement(sections={ref: ai_fields[i] for ref, i in placement.sections.items()},
+                          texts=placement.texts, unplaced=placement.unplaced)
+    sections, unplaced = build_sections(fields, materials, placement, v07)
     unplaced = not_sent + unplaced
-    lost_lines = unplaced_lines(materials, outcome.placement, previous)
+    lost_lines = unplaced_lines(materials, placement, previous)
     lines = sum(len(s["evidence"]) for s in sections)
     log.info("초안 완료 %s lines=%d unplaced=%d unplaced_lines=%d ms=%d",
              tag, lines, len(unplaced), len(lost_lines), _ms(t0))
-    return succeeded(request_id, sections, unplaced, lost_lines)
+    return succeeded(request_id, sections, unplaced, lost_lines, extra)
 
 
-def succeeded(request_id, sections, unplaced, unplaced_lines_=()) -> dict:
-    return {"requestId": request_id, "status": SUCCEEDED, "sections": sections, "unplaced": unplaced,
-            "unplacedLines": list(unplaced_lines_)}
+def succeeded(request_id, sections, unplaced, unplaced_lines_=(), extra=None) -> dict:
+    """extra 는 v0.7 요청의 머리글·바닥글. v0.6 요청이면 None 이고 결과에 그 칸이 없다."""
+    head = {"requestId": request_id, "status": SUCCEEDED, **(extra or {})}
+    return {**head, "sections": sections, "unplaced": unplaced, "unplacedLines": list(unplaced_lines_)}
 
 
 def failed(request_id, code, message) -> dict:

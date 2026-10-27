@@ -43,9 +43,21 @@ class Material:
         return [self.source()] if self.sourced else []
 
 
+TEXT, TABLE = "text", "table"
+
+
+@dataclass(frozen=True)
+class Field:
+    """양식 필드 하나 (명세 5.8). v0.6 요청(template.items)의 이름은 글·AI 채움 필드로 읽는다."""
+    title: str
+    type: str = TEXT
+    ai_fill: bool = True
+    content: str = ""               # 사용자가 채우는 필드에 이미 써 둔 글. 결과에 그대로 돌려준다
+
+
 @dataclass(frozen=True)
 class Placement:
     """검사를 통과한 AI 배치 결과. 모든 재료가 sections 나 unplaced 중 한 곳에만 있다."""
-    sections: dict[str, int]        # 재료 번호 → 칸 위치 (template.items 의 0부터 순서)
+    sections: dict[str, int]        # 재료 번호 → 필드 위치 (양식 필드의 0부터 순서)
     texts: dict[str, str]           # 재료 번호 → AI 가 다듬은 글. AI 가 다듬는 재료만 쓰고, 고정 재료의 글은 무시한다
     unplaced: tuple[str, ...]       # 어느 칸에도 넣지 못한 재료 번호

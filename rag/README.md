@@ -157,7 +157,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 ```
 
 - 가짜 LLM 은 검색된 조각을 모두 근거로 단다. 어느 문서의 어떤 조각이 찾아졌는지 보는 용도다 (`--top-k` 로 개수 조정)
-- 실제 LLM 으로 보려면 서버를 띄울 때 `RAG_LLM_PROVIDER=gemini`, `RAG_LLM_MODEL`, `GEMINI_API_KEY` 를 넣는다 (`rag/.env` 에 적어 두면 된다). 질문마다 요금이 나간다
+- 실제 LLM 으로 보려면 서버를 띄울 때 `RAG_LLM_PROVIDER=openai`, `RAG_LLM_MODEL=gpt-5.6-luna`, `OPENAI_API_KEY` 를 넣는다 (`rag/.env` 에 적어 두면 된다). 질문마다 요금이 나간다
 - 실제 회의 데이터는 레포 밖(또는 git 이 무시하는 `data/`)에 두고 `--file` 로 경로만 넘긴다
 
 ## 작업자
@@ -234,8 +234,8 @@ set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면
 | `RAG_MAX_DOC_TOKENS` | 문서 하나의 조각 토큰 합계 상한. 넘으면 임베딩 전에 `too_large`. 임베딩 시간이 토큰 수에 비례해서 둔다 (기본 100000, 합성 문서로 PDF 약 145쪽·엑셀 약 2,000행). 처리 완료 로그의 `tokens`·`걸린시간`으로 서버 속도를 보고 조정 |
 | `RAG_TORCH_THREADS` | 임베딩 스레드 수 (작업자·답변이 같이 씀) (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |
 | `RAG_DB_STATEMENT_TIMEOUT_MS`, `RAG_DB_IDLE_TX_TIMEOUT_MS` | 작업자 DB 연결의 시간 제한 (기본 30000, 60000) |
-| `RAG_LLM_PROVIDER` | 답변 LLM 공급자: `fake`(기본, 시험용 가짜) / `gemini`(시험) / `openai`(운영). 설정이 잘못되면 서버는 뜨고 답변만 503 |
-| `RAG_LLM_MODEL` | 공급자의 모델 이름. `gemini`·`openai` 는 꼭 넣는다 (기본값 없음) |
+| `RAG_LLM_PROVIDER` | 답변 LLM 공급자: `fake`(기본, 시험용 가짜) / `gemini`(시험) / `openai`(운영, 값 `openai`). 설정이 잘못되면 서버는 뜨고 답변만 503 |
+| `RAG_LLM_MODEL` | 공급자의 모델 이름. `gemini`·`openai` 는 꼭 넣는다 (기본값 없음). 운영 값은 `gpt-5.6-luna` (회의록 초안과 같음) |
 | `RAG_ANSWER_PROMPT_VERSION` | 답변 지시문 버전 (`v1`, `v2` …). 없으면 `rag/prompts/answer/` 에서 번호가 가장 큰 파일. 없는 버전이면 답변만 503 |
 | `RAG_LLM_TIMEOUT_S` | 답변 LLM 을 기다리는 상한 (기본 30초). 넘으면 `llm_timeout`. 재시도는 하지 않는다 |
 | `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`), `OPENAI_API_KEY` | 공급자 API 키. 요약 서버와 같은 이름이라 하나로 같이 쓴다. 이미지에 넣지 않고 실행할 때 비밀값으로 |

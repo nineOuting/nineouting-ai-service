@@ -1,9 +1,10 @@
 """엑셀(xlsx) -> Piece 목록. 시트마다 머리 행 아래의 행을 GROUP_ROWS 행 이하로 고르게 묶어 Piece 하나로 만든다. SCRUM-109.
-(11행이면 10+1 이 아니라 6+5. 한 줄짜리 조각이 생기지 않게)
+(GROUP_ROWS 가 10 이면 11행은 10+1 이 아니라 6+5). 지금은 1, 행 하나가 Piece 하나다:
+10행 묶음과 비교해 표 질문이 크게 좋아졌다 (SCRUM-110, 운영계획서 엑셀 질문 22개, Hit@1 59% → 77%)
 
   머리 행     시트에서 처음으로 글이 있는 행. 각 열의 이름으로 쓴다
   행 한 줄    "열 이름: 값 | 열 이름: 값" (워드 표와 같은 모양). 빈 칸은 뺀다
-  location   {"type": "sheet", "sheet": 시트 이름, "rows": [시작 행, 끝 행], "label": "1분기 시트 12~20행"}  (RAG 명세)
+  location   {"type": "sheet", "sheet": 시트 이름, "rows": [시작 행, 끝 행], "label": "1분기 시트 12행"}  (RAG 명세)
              행 번호는 엑셀 화면에 보이는 번호 그대로다
   context    시트 이름. 검색할 때 조각 앞에 붙는다
 
@@ -23,7 +24,7 @@ from ..models import Piece
 from .minutes import LoadResult
 from .text import normalize
 
-GROUP_ROWS = 10                  # 조각 하나에 넣는 최대 행 수. SCRUM-110 에서 다른 값과 비교한다
+GROUP_ROWS = 1                   # 조각 하나에 넣는 최대 행 수. 10·5·1 을 비교해 정함 (SCRUM-110)
 MAX_CELLS = 200_000              # 정해 둔 값. SCRUM-110 에서 재서 조정한다
 _DECIMALS = re.compile(r"0\.(0+)")
 

@@ -138,20 +138,20 @@ def test_넣을_항목이_없으면_재시도_없이_failed_콜백(conn, fake_em
     assert (job_status, attempts, payload) == ("failed", 1, {}) and last_error.startswith("no_text")
 
 
-def test_엑셀은_받아서_시트_행_범위마다_저장하고_ready(conn, fake_embedder, storage):
+def test_엑셀은_받아서_행마다_저장하고_ready(conn, fake_embedder, storage):
     backend = FakeBackend()
     storage.files["/ws/1/edge.xlsx"] = (Path(__file__).parent / "fixtures" / "upload_edge.xlsx").read_bytes()
     submit(conn, request(source="upload", version="sha256:xlsx", file_url=storage.url("/ws/1/edge.xlsx")))
     make_worker(conn, fake_embedder, backend, upload=storage.settings()).process_one()
     assert storage.hits == ["/ws/1/edge.xlsx"]
-    assert backend.bodies[0]["status"] == "ready" and backend.bodies[0]["chunkCount"] == 4
+    assert backend.bodies[0]["status"] == "ready" and backend.bodies[0]["chunkCount"] == 27     # 1분기 예산 4행 + 참가 회사 23행
     labels = [r[0] for r in conn.execute("SELECT location->>'label' FROM rag_chunks WHERE doc_id = 1 ORDER BY chunk_index")]
-    assert labels[0] == "1분기 예산 시트 2~6행" and labels[-1] == "참가 회사 시트 20~26행"
+    assert labels[0] == "1분기 예산 시트 2행" and labels[-1] == "참가 회사 시트 26행"
     _, _, _, status, attempts, _, payload, _ = job_rows(conn)[0]
     assert (status, attempts, payload) == ("done", 1, {})     # 서명 주소가 든 요청은 지운다
 
 
-def test_PDF는_받아서_쪽마다_저장하고_ready(conn, fake_embedder, storage):
+def test_PDF는_받아서_쪽_번호로_저장하고_ready(conn, fake_embedder, storage):
     backend = FakeBackend()
     storage.files["/ws/1/report.pdf"] = (Path(__file__).parent / "fixtures" / "upload_report.pdf").read_bytes()
     submit(conn, request(source="upload", version="sha256:abc", file_url=storage.url("/ws/1/report.pdf")))

@@ -22,6 +22,7 @@ import time
 
 from .callback import CallbackSender, allowed_hosts_from_env
 from .chunking import split_pieces
+from .config import CHUNK_TOKENS
 from .download import UPLOAD_OFF, UploadSettings, fetch, settings_from_env
 from .errors import INTERNAL_ERROR, UNSUPPORTED_FORMAT, IngestError
 from .filetype import DOCX, PDF, XLSX, detect
@@ -104,7 +105,7 @@ class Worker:
             pieces = loaders[kind](data).pieces
         else:
             raise IngestError(INTERNAL_ERROR, "알 수 없는 sourceType")
-        chunks = split_pieces(pieces, self.embedder.passage_tokens, self.embedder.max_tokens)
+        chunks = split_pieces(pieces, self.embedder.passage_tokens, min(CHUNK_TOKENS, self.embedder.max_tokens))
         vectors = self.embedder.embed_passages([c.embed_text for c in chunks])
         return chunks, vectors
 

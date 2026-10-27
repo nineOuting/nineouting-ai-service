@@ -6,7 +6,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 
 | 단계 | 상태 |
 |---|---|
-| 회의록 로더, 512토큰 나누기, 임베딩 | 구현. 확정 회의록(`formatVersion` 1.0, 칸의 줄 하나가 조각 하나)과 임시 형식(`schema_version` 0.1)을 받음 |
+| 회의록 로더, 256토큰 나누기, 임베딩 | 구현. 확정 회의록(`formatVersion` 1.0, 칸의 줄 하나가 조각 하나)과 임시 형식(`schema_version` 0.1)을 받음 |
 | 저장(pgvector, 버전 교체), 검색(workspaceId + docIds) | 구현 |
 | 대기열·작업자, 완료 콜백 | 구현 |
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
@@ -115,9 +115,9 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 - `sourceType=upload` 는 허용 저장소(`RAG_UPLOAD_ALLOWED_HOSTS`)가 설정됐을 때만 받는다. 없으면 400. `fileUrl` 의 호스트가 허용 저장소가 아니어도 400
   - 작업자가 파일을 메모리로 받아(디스크에 쓰지 않음) 안쪽 모양으로 형식을 알아낸다. 확장자는 믿지 않는다
   - 실패: 서명 만료 `url_expired`, 그 밖에 받지 못함 `download_failed` (둘 다 다시 시도하지 않음. 백엔드가 다시 호출), 크기·푼 크기 초과 `too_large`, 암호 `encrypted`, pdf·docx·xlsx 가 아님(사용자가 묶은 zip, 옛 doc·xls, hwp 포함) `unsupported_format`
-  - PDF: 쪽 하나가 조각 재료 하나, 근거 위치 `{type: "page", page, label: "3쪽"}`. 글 없는 쪽은 건너뛰고, 모든 쪽에 글이 없으면(스캔 PDF 등) `no_text`, 1,000쪽 넘으면 `too_large`. PDFium(`pypdfium2`)으로 읽는다. pypdf 는 글자 폭 정보가 어긋난 PDF 에서 글자마다 띄어 꺼내서 쓰지 않는다
+  - PDF: 쪽마다 머리글·바닥글(여러 쪽의 위·아래 두 줄 안에 되풀이되는 줄)을 지우고, 쪽 안에서 번호 제목(`1.`, `3.2`)마다 조각 재료 하나. 검색 맥락은 제목 경로, 쪽 첫 부분은 앞 쪽 제목을 이어받음. 번호 없는 제목은 나누지 못함. 근거 위치 `{type: "page", page, label: "3쪽"}`. 글 없는 쪽은 건너뛰고, 모든 쪽에 글이 없으면(스캔 PDF 등) `no_text`, 1,000쪽 넘으면 `too_large`. PDFium(`pypdfium2`)으로 읽는다. pypdf 는 글자 폭 정보가 어긋난 PDF 에서 글자마다 띄어 꺼내서 쓰지 않는다
   - 워드: 제목 하나 아래의 글이 조각 재료 하나. 근거 위치 `{type: "section", heading, label}`(가장 가까운 제목, 첫 제목 전 글은 label "문서 처음"), 검색 맥락은 제목 경로("2. 예산 계획 > 2.1 마케팅"). 표는 행마다 "머리 행 이름: 값 | …" 한 줄. 머리글·바닥글은 본문과 따로 저장돼 읽지 않는다. 글상자·각주·자동 번호는 읽지 못한다
-  - 엑셀: 시트마다 처음으로 글이 있는 행을 머리 행으로 보고, 그 아래 행을 10행 이하로 고르게 묶어 조각 재료 하나. 행마다 "열 이름: 값 | …" 한 줄. 근거 위치 `{type: "sheet", sheet, rows: [시작, 끝], label: "1분기 시트 12~20행"}`(행 번호는 엑셀 화면 그대로), 검색 맥락은 시트 이름. 병합 칸은 범위 전체에 채우고, 숫자는 쉼표·백분율·날짜 서식을 따름. 수식은 저장된 계산 결과만(없으면 빠짐). 숨긴 시트는 읽지 않음. 칸 20만 개 넘으면 `too_large`. 차트·그림·칸 메모는 읽지 못하고, 한 시트에 표가 여럿이면 첫 행만 머리 행으로 봄
+  - 엑셀: 시트마다 처음으로 글이 있는 행을 머리 행으로 보고, 그 아래 행 하나가 조각 재료 하나. 행은 "열 이름: 값 | …" 한 줄. 근거 위치 `{type: "sheet", sheet, rows: [시작, 끝], label: "1분기 시트 12행"}`(행 번호는 엑셀 화면 그대로), 검색 맥락은 시트 이름. 병합 칸은 범위 전체에 채우고, 숫자는 쉼표·백분율·날짜 서식을 따름. 수식은 저장된 계산 결과만(없으면 빠짐). 숨긴 시트는 읽지 않음. 칸 20만 개 넘으면 `too_large`. 차트·그림·칸 메모는 읽지 못하고, 한 시트에 표가 여럿이면 첫 행만 머리 행으로 봄
   - 머리글·바닥글·쪽 번호 빼기 같은 정제는 아직 없다 (SCRUM-110)
   - 시험 샘플(합성): `rag/tests/fixtures/upload_*.pdf` (짧은 보고서, 상세 운영계획서 `upload_plan.pdf`, 글 없는 PDF, 암호 PDF), 만드는 스크립트 `make_upload_samples.py` (fpdf2, Noto Sans CJK KR, 운영계획서 내용은 `plan_content.py`)
   - `fileUrl` 에는 접근 서명이 들어 있어 로그·오류 글에 남기지 않는다
@@ -188,7 +188,10 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 ```bash
 .venv/bin/python -m rag.eval_search data/eval/questions_v1.json                    # Top-5, Top-10
 .venv/bin/python -m rag.eval_search data/eval/questions_v1.json --k 5 10 20 --detail --out data/eval/results/x.json
+.venv/bin/python -m rag.eval_search rag/tests/fixtures/eval_plan.json --format pdf --k 1 3 5   # 업로드 문서 (합성), pdf·docx·xlsx
 ```
+
+- 업로드 문서 질문 파일 `eval_plan.json` 은 합성 운영계획서(pdf·docx·xlsx 같은 내용) 질문 40개다. 정답은 위치(쪽, 제목, 시트·행)로 적는다
 
 - 청크는 실제 작업자와 같은 함수(로더 → 나누기 → 임베딩)로 만들고, 서버 검색과 같은 모델·기준(코사인)으로 순위를 낸다. DB 를 쓰지 않는다
 - 질문 파일 형식은 `rag/eval_search.py` 맨 위 설명. `gold` 가 빈 질문(답할 수 없음)은 검색 지표에서 뺀다

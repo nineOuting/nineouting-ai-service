@@ -71,12 +71,23 @@ class E5Embedder:
             return len(self._tokenizer(text, add_special_tokens=True, truncation=False)["input_ids"])
 
     def _encode(self, inputs):
-        with self._lock:
-            vecs = self._model.encode(list(inputs), batch_size=self.batch_size, normalize_embeddings=True,
-                                      convert_to_numpy=True, show_progress_bar=False)
-        if vecs.shape[1] != self.dim:
-            raise RuntimeError(f"벡터 차원 {vecs.shape[1]} 이 {self.dim} 이 아님")
-        return vecs.tolist()
+        # 묶음(batch_size)마다 잠금을 풀어, 큰 문서를 임베딩하는 동안 들어온 질문이 묶음 하나만 기다리게 한다.
+        # 한 번에 잡으면 질문이 문서 전체를 기다린다 (SCRUM-110: 198쪽 PDF 를 넣는 동안 질문 15.4초)
+        # 길이가 비슷한 글끼리 묶어야 채움(padding)이 적어 빠르다. 모델에 통째로 넘길 때는 모델이 길이순으로
+        # 정렬해 주지만, 나눠 넘기면 그 효과가 없어지므로 여기서 길이순으로 묶고 결과는 원래 순서로 돌려놓는다
+        inputs = list(inputs)
+        order = sorted(range(len(inputs)), key=lambda i: -len(inputs[i]))
+        vecs = [None] * len(inputs)
+        for start in range(0, len(order), self.batch_size):
+            idx = order[start:start + self.batch_size]
+            with self._lock:
+                part = self._model.encode([inputs[i] for i in idx], batch_size=self.batch_size,
+                                          normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False)
+            if part.shape[1] != self.dim:
+                raise RuntimeError(f"벡터 차원 {part.shape[1]} 이 {self.dim} 이 아님")
+            for i, v in zip(idx, part.tolist()):
+                vecs[i] = v
+        return vecs
 
 
 def verify_model_files(name=MODEL_NAME, revision=MODEL_REVISION):

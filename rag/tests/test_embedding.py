@@ -87,3 +87,34 @@ def test_여러_스레드가_같이_써도_오류_없음(embedder):
 
     with ThreadPoolExecutor(max_workers=8) as ex:
         assert all(ex.map(work, range(64)))
+
+
+def test_묶음으로_나눠도_결과는_입력_순서대로(embedder):
+    """임베딩을 길이순 묶음으로 나눠 한다 (질문이 문서 전체를 기다리지 않게). 결과는 입력 순서여야 한다"""
+    texts = [("긴 글 " * n).strip() for n in (1, 40, 3, 25, 7, 60, 2)] * 5     # 35개, 길이가 섞임 → 묶음 3개
+    together = embedder.embed_passages(texts)
+    for i in (0, 1, 5, 20, 34):
+        alone = embedder.embed_passages([texts[i]])[0]
+        assert max(abs(x - y) for x, y in zip(together[i], alone)) < 1e-4, i
+
+
+def test_문서를_임베딩하는_동안에도_질문이_끼어든다(embedder):
+    import threading
+    import time
+    texts = [f"{i}번째 문단: " + "회의록 검색 대기 시간 측정용 글. " * 20 for i in range(400)]
+    started, done, waits = threading.Event(), threading.Event(), []
+
+    def ingest():
+        started.set()
+        embedder.embed_passages(texts)
+        done.set()
+
+    threading.Thread(target=ingest).start()
+    started.wait()
+    time.sleep(0.3)
+    while not done.is_set():
+        t = time.monotonic()
+        embedder.embed_query("대기 시간")
+        waits.append(time.monotonic() - t)
+        time.sleep(0.2)
+    assert len(waits) >= 2                       # 문서가 끝나기 전에 질문이 여러 번 답을 받음

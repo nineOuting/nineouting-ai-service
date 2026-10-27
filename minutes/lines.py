@@ -10,22 +10,35 @@
   줄의 순서   재료 순서 = 이전 초안의 줄 순서
   표시        draftEdited 를 더한다 (들어온 값 그대로). 작성자가 새로 쓴 줄은 sources 가 빈 목록
   넣지 못함   이전 줄에서 온 재료는 unplaced 가 아니라 unplacedLines 로, 받은 줄 그대로 돌려준다
+
+양식 필드 (명세 v0.7, 5.4)
+  사용자가 채우는 필드   받은 글 그대로, evidence 는 빈 목록. AI 는 이 필드를 고르지 않는다
+  필드 모양              v0.7 요청이면 title·type·aiFilled·content·evidence. v0.6 요청(items)이면 지금처럼 title·content·evidence
 """
-from .models import Material, Placement
+from .models import Field, Material, Placement
 
 EMPTY_SECTION = "해당 내용 없음"
 
 
-def build_sections(items: list[str], materials: list[Material], placement: Placement) -> tuple[list[dict], list[dict]]:
-    """(sections, unplaced). sections 는 items 의 순서·이름 그대로다."""
-    grouped: list[list[Material]] = [[] for _ in items]
+def build_sections(fields: list[Field | str], materials: list[Material], placement: Placement,
+                   v07: bool = False) -> tuple[list[dict], list[dict]]:
+    """(sections, unplaced). sections 는 양식 필드의 순서·이름 그대로다. 이름(str)만 오면 글·AI 채움 필드로 본다."""
+    fields = [f if isinstance(f, Field) else Field(f) for f in fields]
+    grouped: list[list[Material]] = [[] for _ in fields]
     for m in sorted(materials, key=lambda m: m.order):
         if m.ref in placement.sections:
             grouped[placement.sections[m.ref]].append(m)
     sections = []
-    for title, ms in zip(items, grouped):
-        lines = [line_of(m, placement) for m in ms]
-        sections.append({"title": title, "content": content_of(lines), "evidence": lines})
+    for field, ms in zip(fields, grouped):
+        if field.ai_fill:
+            evidence = [line_of(m, placement) for m in ms]
+            content = content_of(evidence)
+        else:
+            evidence, content = [], field.content
+        section = {"title": field.title}
+        if v07:
+            section.update(type=field.type, aiFilled=field.ai_fill)
+        sections.append({**section, "content": content, "evidence": evidence})
     unplaced_refs = set(placement.unplaced)
     unplaced = [m.source() for m in sorted(materials, key=lambda m: m.order)
                 if m.ref in unplaced_refs and m.previous is None]

@@ -1,6 +1,6 @@
 # minutes
 
-회의록 초안 (AI-10). 회의 끝 요약(안건 보드 `todaySummary`)과 사용자가 고른 양식을 받아, 양식의 칸마다 근거가 붙은 줄 목록을 만든다. 명세는 `docs/api/minutes-draft-contract.md`.
+회의록 초안 (AI-10). 회의 끝 요약(안건 보드 `todaySummary`)과 사용자가 고른 양식을 받아, 양식에서 AI가 채우는 필드마다 근거가 붙은 줄 목록을 만든다. 사용자가 채우는 필드와 머리글·바닥글은 받은 그대로 돌려준다. 명세는 `docs/api/minutes-draft-contract.md`.
 
 ## 현재 상태
 
@@ -8,6 +8,7 @@
 |---|---|
 | 재료 만들기 (요약 → 줄 재료), 칸 배치(AI), 코드 검사, 줄 글 | 구현. AI 는 칸 고르기와 결정 문장 다듬기만 한다 |
 | 접수 주소 `POST /internal/minutes/drafts`, 대기열·작업자, 결과 콜백 | 구현 |
+| 양식 필드 (명세 v0.7: 필드마다 글/표·AI 채움 설정, 머리글·바닥글) | 구현 (SCRUM-113). AI 에는 AI 가 채우는 필드만 칸으로 넘긴다. v0.6 요청(`template.items`)은 결과도 v0.6 모양. AI 가 채우는 표 필드는 SCRUM-114 전까지 `400` |
 | 양식 변경 시 다시 배치 (`previousLines`) | 구현 (SCRUM-98, `relayout.py`). 고친 줄·새로 쓴 줄은 글 그대로 칸만 다시 고름. 처음 초안과 지시문을 따로 씀 (`prompts/relayout/`) |
 | 근거·맥락 연결 (AI-11) | ai-service API 없음. 결과의 `sources`·`transcriptSeqs` 를 백엔드가 따라간다 |
 
@@ -26,7 +27,7 @@
 | `request.py` | 요청 형식 검사 (명세 2.1, 7.5 상한) |
 | `materials.py` | 요약 항목 → 재료 (명세 7.1). 요약 문장·의견·할 일은 글을 고정하고, 결정만 AI 가 다듬는다 |
 | `placement.py` | AI 에게 칸을 고르게 하고 결과를 코드로 검사, 걸리면 이유를 붙여 다시 시킴 (명세 7.2·7.3) |
-| `lines.py` | 칸별 줄 목록과 `content` 만들기 |
+| `lines.py` | 필드별 줄 목록과 `content` 만들기. 사용자가 채우는 필드는 받은 글 그대로 |
 | `draft.py` | 위를 묶어 결과 JSON 하나를 만든다 (`make_draft`) |
 | `jobs.py`, `worker.py` | 대기열 표와 작업자 |
 | `api.py`, `runtime.py` | 접수 주소와 `server/main.py` 에 붙이는 곳 |

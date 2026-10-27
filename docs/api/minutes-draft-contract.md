@@ -8,7 +8,7 @@
 
 ## v0.7에서 바뀐 곳
 
-기획에서 전달받은 두 가지를 반영했다 (2026-10-27). **[구현 전]** 표시는 명세만 정했고 ai-service 코드는 아직 v0.6대로 동작하는 곳이다.
+기획에서 전달받은 두 가지를 반영했다 (2026-10-27). **[구현 전]** 표시는 명세만 정했고 ai-service 코드에 아직 없는 곳이다. 양식 필드·사용자가 채우는 필드·머리글과 바닥글은 구현했다 (SCRUM-113). AI가 채우는 표 필드(7.6)는 SCRUM-114, RAG 넣기의 머리글·바닥글과 표(4.1)는 SCRUM-100에서 구현한다.
 
 | # | 전달받은 것 | 바뀐 곳 |
 |---|---|---|
@@ -64,10 +64,10 @@ X-Request-Id: (선택)
 | `meetingStartAt` | `string` (datetime) | 아니요 | 회의 시작 시각. 초안 내용에는 쓰지 않는다 |
 | `attendees` | `{userId: int, name: string}[]` | 아니요 | 참석자. 초안 내용에는 쓰지 않는다 |
 | `template` | `object` | 예 | 회의록 양식 |
-| `template.fields` | [`TemplateField[]`](#58-templatefield) | 예 | 필드 목록. 1~20개, 이름은 서로 겹치지 않는다. 사용자가 만든 양식 그대로 담는다. 결과는 이 순서·이름 그대로 돌려준다 [구현 전] |
-| `template.header` | `string \| null` | 아니요 | 양식의 머리글. 사용자가 쓴 글 그대로. AI는 쓰지 않고 결과에 그대로 돌려준다 [구현 전] |
-| `template.footer` | `string \| null` | 아니요 | 양식의 바닥글. `header`와 같음 [구현 전] |
-| `template.items` | `string[]` | 아니요 | v0.6 형식 (필드 이름 목록). **전환 기간**에만 받는다. `fields`가 없으면 이것을 읽어 모든 필드를 `{type: "text", aiFill: true}`로 본다. 둘 다 오면 `fields`를 쓴다 |
+| `template.fields` | [`TemplateField[]`](#58-templatefield) | 예 | 필드 목록. 1~20개, 이름은 서로 겹치지 않는다. 사용자가 만든 양식 그대로 담는다. 결과는 이 순서·이름 그대로 돌려준다 |
+| `template.header` | `string \| null` | 아니요 | 양식의 머리글. 사용자가 쓴 글 그대로. AI는 쓰지 않고 결과에 그대로 돌려준다 |
+| `template.footer` | `string \| null` | 아니요 | 양식의 바닥글. `header`와 같음 |
+| `template.items` | `string[]` | 아니요 | v0.6 형식 (필드 이름 목록). **전환 기간**에만 받는다. `fields`가 없으면 이것을 읽어 모든 필드를 `{type: "text", aiFill: true}`로 본다. 이때 **결과도 v0.6 모양**이다 (필드의 `type`·`aiFilled`와 `header`·`footer`가 없음). 둘 다 오면 `fields`를 쓴다 |
 | `agendas` | [`Agenda[]`](#51-agenda) | 예 | 안건 번호·제목·결정할 사항 |
 | `summary` | [`MeetingSummary`](#52-meetingsummary) | 예 | 점검을 마친 회의 끝 요약. ai-service가 안건 보드의 `todaySummary` 칸으로 보낸 값(`final: true`)에 사용자가 고친 내용을 반영한 것 (5.2) |
 | `previousLines` | [`PreviousLine[]`](#57-previousline) | 아니요 | 양식을 바꿔 다시 배치할 때 지금 초안의 줄 전부 (8장). 없거나 빈 목록이면 처음 만들기 [ai-service 제안] |
@@ -189,7 +189,7 @@ X-Request-Id: (요청에서 받았으면 그대로)
 |---|---|---|---|
 | `requestId` | `string` | 예 | 요청의 값 그대로 |
 | `status` | `string` | 예 | `"SUCCEEDED"` |
-| `header`, `footer` | `string \| null` | 예 | 요청의 `template.header`·`footer` 그대로. 없었으면 `null` [구현 전] |
+| `header`, `footer` | `string \| null` | 예 | 요청의 `template.header`·`footer` 그대로. 없었으면 `null`. v0.6 요청(`template.items`)이면 이 칸이 없다 |
 | `sections` | [`Section[]`](#54-section) | 예 | `template.fields`의 순서·이름 그대로. 사용자가 채우는 필드(`aiFill: false`)도 들어 있다 |
 | `unplaced` | [`Source[]`](#56-source) | 예 | 어느 칸에도 넣지 못한 요약 항목. 없으면 빈 목록 [ai-service 제안] |
 | `unplacedLines` | [`PreviousLine[]`](#57-previousline) | 예 | 다시 배치 때 새 양식에 맞는 칸이 없는 기존 줄. 처음 만들기에서는 항상 빈 목록 [ai-service 제안] |
@@ -442,8 +442,8 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 | 칸 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `title` | `string` | 예 | 필드 이름 (`template.fields[].title`) |
-| `type` | `string` | 예 | `"text"` 또는 `"table"`. 요청의 값 그대로 [구현 전] |
-| `aiFilled` | `boolean` | 예 | AI가 채운 필드면 `true`. 요청의 `aiFill`이 `false`였으면 `false` [구현 전] |
+| `type` | `string` | 예 | `"text"` 또는 `"table"`. 요청의 값 그대로. v0.6 요청이면 이 칸이 없다 |
+| `aiFilled` | `boolean` | 예 | AI가 채운 필드면 `true`. 요청의 `aiFill`이 `false`였으면 `false`. v0.6 요청이면 이 칸이 없다 |
 | `columns` | `string[]` | 아니요 | 표 필드를 AI가 채웠을 때만. AI가 정한 열 이름 (7.6). 놓인 항목이 없으면 빈 목록 [구현 전] |
 | `content` | `string` | 예 | 글 필드: 줄 목록의 글을 `- `를 붙여 줄바꿈으로 이은 일반 텍스트 [화면 대기: 7.4]. 표 필드: 마크다운 표. AI가 채울 내용이 없으면 `"해당 내용 없음"`. 사용자가 채우는 필드(`aiFilled: false`)는 요청의 `content` 그대로 (없었으면 빈 글) |
 | `evidence` | [`Line[]`](#55-line) 또는 [`Row[]`](#59-row) | 예 | **이 필드의 줄 목록.** 글 필드는 줄(`Line`), 표 필드는 행(`Row`) 하나에 하나. 백엔드 원안의 이름을 그대로 쓴다. 줄이 없거나 사용자가 채우는 필드면 빈 목록 |
@@ -476,12 +476,12 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 | `transcriptSeqs`, `edited`, `needsCheck`, `sources` | `Line`과 같음 | 예 | 결과 콜백에서 받아 저장한 값 그대로. 작성자가 새로 쓴 줄은 `transcriptSeqs`·`sources`가 빈 목록 |
 | `draftEdited` | `boolean` | 예 | 작성자가 **초안에서** 고쳤거나 새로 쓴 줄이면 `true`. 요약 점검에서 고친 표시인 `edited`와 다르다 |
 
-### 5.8 TemplateField [구현 전]
+### 5.8 TemplateField
 
 | 칸 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `title` | `string` | 예 | 필드 이름. 1~100자, 양식 안에서 겹치지 않는다 |
-| `type` | `string` | 예 | `"text"`(글) 또는 `"table"`(표). 표의 열은 보내지 않는다. AI가 채울 때 정한다 (7.6) |
+| `type` | `string` | 예 | `"text"`(글) 또는 `"table"`(표). 표의 열은 보내지 않는다. AI가 채울 때 정한다 (7.6). AI가 채우는 표 필드(`type: "table"`, `aiFill: true`)는 7.6을 구현하기 전까지 `400`으로 거절한다 |
 | `aiFill` | `boolean` | 예 | `true`면 AI가 요약에서 채운다. `false`면 사용자가 채우는 필드로 보고 AI가 쓰지 않는다 |
 | `content` | `string` | 아니요 | 사용자가 채우는 필드(`aiFill: false`)에 이미 써 둔 글. 표는 마크다운 표. 결과에 그대로 돌려준다. `aiFill: true` 필드에서는 읽지 않는다 |
 
@@ -580,7 +580,7 @@ AI의 결과를 검사하고, 걸리면 걸린 이유를 붙여 다시 시킨다
 |---|---|---|
 | `template.fields` 수 | 20 | `400` |
 | 필드 이름 길이 | 100자 (minutes-service 칸 이름 길이와 같음) | `400` |
-| 사용자가 채우는 필드의 `content`, 머리글·바닥글 길이 | 20,000자 [구현 전] | `400` |
+| 사용자가 채우는 필드의 `content`, 머리글·바닥글 길이 | 20,000자 | `400` |
 | 표의 열 수 | 1~6개, 열 이름 30자 (7.6) [구현 전] | 검사 실패로 다시 시킴 |
 | AI에 넘기는 항목 수 | 300. 처음 초안은 요약 항목 수, 다시 배치는 `previousLines` 줄 수 (이전 초안에 없던 요약 항목은 AI에 넘기지 않으므로 세지 않음) | `INPUT_TOO_LONG` |
 | `previousLines` 수 | 600 | `400` |

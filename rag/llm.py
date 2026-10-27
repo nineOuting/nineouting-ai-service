@@ -7,7 +7,7 @@
 
 모델·키·SDK 가 없으면 LLMConfigError 를 낸다. 서버는 그대로 뜨고 답변 API 만 503 이다.
 공급자 SDK 의 예외는 LLMTimeout(시간 초과)·LLMError(그 밖) 로 바꿔서 던진다. 메시지에는 예외 이름만 넣는다.
-SDK: gemini 는 공용 requirements.txt 의 google-genai. openai 는 운영 모델을 정할 때 넣는다.
+SDK: gemini 는 공용 requirements.txt 의 google-genai, openai(운영)는 rag/requirements.txt 의 openai.
 """
 import re
 from dataclasses import dataclass

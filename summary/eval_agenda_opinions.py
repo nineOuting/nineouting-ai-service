@@ -101,7 +101,7 @@ def make_modules(cls, targets, provider, model, dry, extra=None):
     return mods, recs
 
 
-def replay(batches, agendas_msg, gold, targets, provider, model, dry, extra=None):
+def replay(batches, agendas_msg, gold, targets, provider, model, dry, extra=None, roster=None):
     ad = adapt_agendas(agendas_msg)
     ccfg = ac.ClassifyCfg(provider=provider, model=model)
     cls = ac.AgendaClassifier(ad["meeting_id"], ccfg, llm=lambda u: ac.echo_llm(u))
@@ -109,6 +109,8 @@ def replay(batches, agendas_msg, gold, targets, provider, model, dry, extra=None
     cls.apply_corrections([{"seq": s, "agenda_id": a, "rev": 1} for s, a in gold.items()])
     cls.halted = "평가: 사람이 확정한 분류만 사용"          # 분류 모델은 부르지 않는다
     mods, recs = make_modules(cls, targets, provider, model, dry, extra)
+    if roster and "todos" in mods:
+        mods["todos"].set_roster([{"user_id": p["user_id"], "name": p["name"]} for p in roster])
     ids = {a["key"]: cls._id(a["key"]) for a in cls.agendas}
     for b in batches:
         cls.receive(b)
@@ -164,6 +166,81 @@ def score(target, board, truth, gold):
         r["extraInNoTodoAgendas"] = extra
         r["filledAssigneeOrDue"] = filled
     return r
+
+
+def _norm(x):
+    return "".join(str(x).split()) if x else ""
+
+
+def _due_ok(out_due, truth_due):
+    a, b = _norm(out_due), _norm(truth_due)
+    if not b:
+        return not a
+    return bool(a) and (a == b or a in b or b in a)
+
+
+def score_fields(board, truth, gold):
+    """찾은 정답 할 일마다 담당자·기한이 맞는지 본다. 이름이 정답에 있는데 못 맞히면 오답, 정답에 없는데 지어내면 지어낸 것."""
+    gold_by_agenda = {}
+    for s_, a_ in gold.items():
+        if a_:
+            gold_by_agenda.setdefault(a_, set()).add(s_)
+    r = {"assigneeTruthNamed": 0, "assigneeCorrect": 0, "assigneeInvented": 0, "assigneeNullOk": 0,
+         "dueTruthNamed": 0, "dueCorrect": 0, "dueInvented": 0, "dueNullOk": 0, "pairs": 0, "wrong": []}
+    for aid, tr in truth.items():
+        own = gold_by_agenda.get(aid, set())
+        outs = board.get(aid, [])
+        for t in spans(tr["todos"], own):
+            ti = next(x for x in tr["todos"] if x["id"] == t["id"])
+            cand = [o for o in outs if set(o["evidenceSeqs"]) & t["span"]]
+            if not cand:
+                continue
+            o = max(cand, key=lambda o: len(set(o["evidenceSeqs"]) & t["span"]))
+            r["pairs"] += 1
+            tn, on = ti.get("assigneeName"), o.get("assigneeName")
+            if tn:
+                r["assigneeTruthNamed"] += 1
+                if on == tn:
+                    r["assigneeCorrect"] += 1
+                else:
+                    r["wrong"].append({"agenda": aid, "todo": ti["id"], "field": "assignee", "truth": tn, "got": on})
+            elif on:
+                r["assigneeInvented"] += 1
+                r["wrong"].append({"agenda": aid, "todo": ti["id"], "field": "assignee", "truth": None, "got": on})
+            else:
+                r["assigneeNullOk"] += 1
+            td, od = ti.get("dueText"), o.get("dueText")
+            if td:
+                r["dueTruthNamed"] += 1
+                if _due_ok(od, td):
+                    r["dueCorrect"] += 1
+                else:
+                    r["wrong"].append({"agenda": aid, "todo": ti["id"], "field": "due", "truth": td, "got": od})
+            elif od:
+                r["dueInvented"] += 1
+                r["wrong"].append({"agenda": aid, "todo": ti["id"], "field": "due", "truth": None, "got": od})
+            else:
+                r["dueNullOk"] += 1
+    r["assigneeAcc"] = round(r["assigneeCorrect"] / r["assigneeTruthNamed"], 4) if r["assigneeTruthNamed"] else None
+    r["dueAcc"] = round(r["dueCorrect"] / r["dueTruthNamed"], 4) if r["dueTruthNamed"] else None
+    return r
+
+
+def score_cancelled(board, cancelled, truth, gold):
+    """취소된 할 일(정답에 없음)을 모델이 항목으로 냈는지. 근거 줄이 취소 항목 근거와 겹치고 정답 할 일과는 안 겹치는 출력만 센다."""
+    gold_by_agenda = {}
+    for s_, a_ in gold.items():
+        if a_:
+            gold_by_agenda.setdefault(a_, set()).add(s_)
+    res = []
+    for c in cancelled:
+        aid = c["agenda"]
+        own = gold_by_agenda.get(aid, set())
+        tspans = spans(truth.get(aid, {}).get("todos", []), own)
+        hit = [o for o in board.get(aid, []) if set(o["evidenceSeqs"]) & set(c["evidence"])
+               and not any(set(o["evidenceSeqs"]) & t["span"] for t in tspans)]
+        res.append({"task": c["task"], "agenda": aid, "emitted": len(hit)})
+    return {"cancelledTotal": len(res), "cancelledEmitted": sum(1 for x in res if x["emitted"]), "items": res}
 
 
 def judge_pass(target, sc):
@@ -236,6 +313,7 @@ def main():
     ap.add_argument("--truth", required=True)
     ap.add_argument("--targets", default="opinions,todos")
     ap.add_argument("--synthetic", action="store_true", help="이름·기한이 나오는 지어낸 대화로 담당자 맞추기도 본다")
+    ap.add_argument("--roster", help="참석자 명단 JSON ([{user_id,name}]). 주면 담당자 이름 확인과 담당·기한 채점을 한다")
     ap.add_argument("--min-new-lines", type=int, help="새 줄이 이만큼 쌓이면 바로 호출 (기본 2). 비용을 줄이는 평가용 설정")
     ap.add_argument("--provider", default="echo")
     ap.add_argument("--model")
@@ -267,10 +345,16 @@ def main():
         agendas_msg = json.load(f)
     gold, _unsure = ea.load_labels(a.labels, a.use_draft)
     truth, confirmed = load_truth(a.truth, a.use_draft)
+    with open(a.truth, encoding="utf-8") as f:
+        cancelled = json.load(f).get("cancelledTodos", [])
+    roster = None
+    if a.roster:
+        with open(a.roster, encoding="utf-8") as f:
+            roster = json.load(f)
     dry = a.dry_run or a.provider == "echo"
     t0 = time.time()
     board, cls, mods, recs = replay(batches, agendas_msg, gold, targets, a.provider, a.model, dry,
-                                    {"min_new_lines": a.min_new_lines} if a.min_new_lines else None)
+                                    {"min_new_lines": a.min_new_lines} if a.min_new_lines else None, roster=roster)
     result = {"provider": a.provider, "model": a.model, "dryRun": dry, "labels": len(gold), "truthConfirmed": confirmed,
               "criteria": CRITERIA, "minNewLines": a.min_new_lines or 2, "targets": {}}
     total_krw, total_usd, total_calls = 0, 0.0, 0
@@ -283,6 +367,9 @@ def main():
         elif not a.dry_run:
             r["score"] = score(t, board[t], truth, gold)
             r["pass"] = judge_pass(t, r["score"])
+            if t == "todos":
+                r["fields"] = score_fields(board[t], truth, gold)          # 참고 지표: 기준 통과 판정에는 넣지 않음
+                r["cancelled"] = score_cancelled(board[t], cancelled, truth, gold)
         result["targets"][t] = r
         total_krw += cst["krw"]; total_usd += cst["usd"]; total_calls += rec.calls
     syn_out = None

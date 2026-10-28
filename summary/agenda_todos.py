@@ -35,7 +35,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from agenda_items import AgendaItemExtractor, ItemCfg  # noqa: E402
+from agenda_items import AgendaItemExtractor, ItemCfg, unquote_trivial  # noqa: E402
 from meeting_summary import build_char_stream, squash  # noqa: E402
 
 TASK = "agenda_todos"
@@ -47,7 +47,10 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건에 나온 할 일을 뽑는 �
 1. 전사는 회의 전체가 아니라 하나의 안건에 연결된 발언만 모은 거야. 근거 줄 번호는 이 전사의 번호만 써.
 2. [안건]의 제목과 결정할 사항은 이야기가 무엇에 관한 것인지 이해하는 데만 써. 전사에 없는 내용을 제목에서 가져와 쓰지 마.
 3. 누가 무엇을 하겠다, 하자, 해 달라고 말한 발언에서 할 일을 뽑아. 말하는 사람이 스스로 맡겠다고 한 말("~해 줄게요", "~하겠습니다")과 상대에게 부탁한 말("~해 주세요")도 모두 포함해. 단순한 의견, 질문, 이미 끝난 일의 보고는 할 일이 아니야.
-4. task는 "~하기"처럼 해야 할 일을 짧은 한 문장으로 네 말로 정리해서 써. 말을 통째로 옮기지 마. 전사에 있는 내용만 쓰고, 전사에 없는 사실, 이름, 숫자를 쓰지 마. 숫자나 고유한 용어만 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 그 부분을 근거로 쓰면 task에 "STT 불확실"이라고 밝혀. 숫자는 말한 한글 표기를 「」로 그대로 인용해.
+   3-1. 회의에 없는 외부 사람(거래처, 다른 부서, 담당 공무원 등)이 하기로 한 일이나 그 사람에게 맡긴 일도 할 일이야. 회의 참석자만 고르지 마. assigneeName에는 전사에 나온 그 사람의 이름이나 호칭을 그대로 써.
+   3-2. 담당이 정해지지 않았어도 "~해야 해요", "~해야 합니다"처럼 구체적인 행동을 해야 한다고 말했고 아무도 반대하지 않았으면 할 일로 뽑아. 이때 assigneeName은 null이야. 구체적인 행동이 없는 일반적인 바람이나 의견("잘하면 좋겠다")은 뽑지 마.
+   3-3. 보류하거나 취소하기로 한 일은 뽑지 마. 보류 뒤에 다시 하기로 했으면 다시 하기로 한 내용만 뽑아.
+4. task는 "~하기"처럼 해야 할 일을 짧은 한 문장으로 네 말로 정리해서 써. 말을 통째로 옮기지 마. 전사에 있는 내용만 쓰고, 전사에 없는 사실, 이름, 숫자를 쓰지 마. 숫자(금액, 날짜, 시간처럼 값이 있는 말)나 고유한 용어만 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). 사람 이름, 호칭, "한 명"처럼 단위 앞의 한 글자 말은 「」로 묶지 말고 그냥 써. ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 그 부분을 근거로 쓰면 task에 "STT 불확실"이라고 밝혀. 숫자는 말한 한글 표기를 「」로 그대로 인용해.
 5. assigneeName은 전사에 나온 이름을 글자 그대로 써. "님", "씨"는 빼도 돼. 이름이 전사에 없으면 null이야. "제가", "저는", "우리가"처럼 누구인지 알 수 없는 말은 이름이 아니야. 이름을 추측하거나 지어내지 마.
 6. dueText는 기한을 전사에 나온 말 그대로("수요일까지") 써. 날짜로 바꾸지 마. 기한이 없으면 null이야.
 7. unclear는 할 일인지 분명하지 않은 발언일 때 true야(예: "누가 좀 알아봐요"). 분명하면 false야.
@@ -182,7 +185,8 @@ class AgendaTodos(AgendaItemExtractor):
         if due is not None and squash(due) not in stream:
             due, unclear = None, True
             self.scrubbed += 1
-        return [], {"task": d["task"].strip(), "assignee_name": name, "assignee_user_id": None, "due_text": due, "unclear": unclear}
+        task = unquote_trivial(d["task"].strip(), [name] + [p["name"] for p in self.roster])
+        return [], {"task": task, "assignee_name": name, "assignee_user_id": None, "due_text": due, "unclear": unclear}
 
     def _edit_data(self, e):
         name = (e.get("assignee_name") or "").strip() or None
@@ -300,6 +304,13 @@ def selftest():
     def ans(*rows):
         return json.dumps({"todos": [{"task": t, "assigneeName": n, "dueText": d, "unclear": u, "evidence": ev}
                                      for t, n, d, u, ev in rows]}, ensure_ascii=False)
+
+    # 1-2) 이름·단위 글자에 잘못 붙은 낫표는 뗀다. 값이 있는 숫자 인용은 그대로 둔다
+    assert unquote_trivial("답사 때 「박」 주무관에게 묻기") == "답사 때 박 주무관에게 묻기"
+    assert unquote_trivial("요원 「한」 명 더 두기") == "요원 한 명 더 두기"
+    assert unquote_trivial("「김철수」가 공유하기", ["김철수"]) == "김철수가 공유하기"
+    assert unquote_trivial("예산 「삼십 오만」 원 확정하기") == "예산 「삼십 오만」 원 확정하기"
+    assert "외부 사람" in SYSTEM_PROMPT and "해야 해요" in SYSTEM_PROMPT and "보류" in SYSTEM_PROMPT
 
     # 2) 줄이 없으면 모델을 부르지 않는다. 줄이 1개라도 호출 대상이다 (60초 기다린 뒤)
     c, t = fresh()

@@ -45,7 +45,7 @@ CRITERIA = {                        # 제안 기준. 실행 전에 확인받는�
     "titleValid": 1.0,              # 제안이 나온 구간 중 검증을 통과한 제목이 나온 비율 (지어낸 내용은 사람이 읽고 따로 본다)
 }
 OUT_TOK_PER_CALL = 40               # 호출 한 번의 출력 (제목 한 줄과 근거) 추정
-MAX_CALLS_PER_EPISODE = 2           # 검증 오류 시 한 번 더 부른다
+MAX_CALLS_PER_EPISODE = 4   # 제목 2회(재시도 포함) + 긴 구간 최근 줄 재시도 2회
 
 
 class TitleRecorder:

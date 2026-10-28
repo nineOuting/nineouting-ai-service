@@ -27,7 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from agenda_items import AgendaItemExtractor, ItemCfg  # noqa: E402
+from agenda_items import AgendaItemExtractor, ItemCfg, unquote_trivial  # noqa: E402
 
 TASK = "agenda_opinions"
 KINDS = ("OPINION", "EVIDENCE", "CONCERN", "QUESTION")
@@ -47,7 +47,7 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건에 나온 의견을 정리하�
 6. 같은 안(예: A안)에 대한 의견, 근거, 우려는 이어서 나열해.
 7. text는 한 문장으로, 무슨 말이 나왔는지를 써. "~라는 의견이 나옴", "~라는 우려가 나옴"처럼 써. 결정이 났다고 쓰지 마(결정 여부는 따로 판정해).
 8. 모든 항목에 근거 줄 번호 구간 [[첫 번호, 끝 번호], ...]을 달아. 구간의 양 끝은 입력에 있는 번호여야 해. 그 의견이 나온 줄만 가리켜.
-9. text에는 근거 줄에 없는 사실, 이름, 숫자를 쓰지 마. 말을 인용할 때는 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 그 부분을 근거로 쓰면 text에 "STT 불확실"이라고 밝혀. 숫자는 말한 한글 표기를 「」로 그대로 인용해.
+9. text에는 근거 줄에 없는 사실, 이름, 숫자를 쓰지 마. 말을 인용할 때는 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 그 부분을 근거로 쓰면 text에 "STT 불확실"이라고 밝혀. 숫자는 말한 한글 표기를 「」로 그대로 인용해. 사람 이름, 호칭, "한 명"처럼 단위 앞의 한 글자 말은 「」로 묶지 말고 그냥 써.
 10. [사람이 확정한 항목]이 있으면 그 내용은 다시 쓰지 마.
 11. 정리할 의견이 없으면 opinions를 빈 목록으로 줘.
 
@@ -113,7 +113,7 @@ class AgendaOpinions(AgendaItemExtractor):
         kind = d.get("kind")
         if kind not in KINDS:
             return ["kind는 OPINION, EVIDENCE, CONCERN, QUESTION 중 하나여야 함"], None
-        return [], {"text": d["text"].strip(), "kind": kind}
+        return [], {"text": unquote_trivial(d["text"].strip()), "kind": kind}
 
     def _edit_data(self, e):
         return {"text": e["text"], "kind": e["kind"]}

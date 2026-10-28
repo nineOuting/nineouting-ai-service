@@ -69,7 +69,7 @@ SYSTEM_PROMPT = """너는 회의에서 등록된 안건과 관계없이 이어�
 2. [전사]는 등록된 안건과 관계없다고 분류된 줄이야. 이 줄들이 공통으로 다루는 주제를 짧은 명사구 하나로 제목을 만들어. 공백을 포함해 30자 이내로 써.
 3. 전사에 없는 내용, 사람 이름, 숫자를 지어내지 마. 제목에 쓰는 말은 전사에서 가져와.
 4. 제목의 근거로 삼은 줄 번호를 evidence에 [[시작, 끝], ...] 형태로 적어. 근거는 1개 이상이어야 해.
-5. 줄들이 하나의 주제로 모이지 않거나 제목을 만들 수 없으면 title을 null로 하고 evidence는 빈 배열로 해.
+5. 줄들이 여러 주제로 흩어져 있으면 가장 마지막에 이어진 주제로 제목을 만들어. 어떤 주제로도 제목을 만들 수 없을 때만 title을 null로 하고 evidence는 빈 배열로 해.
 
 출력은 JSON만. {"title": "제목 또는 null", "evidence": [[1, 3]]}"""
 
@@ -85,6 +85,7 @@ class OffTopicCfg:
         self.max_calls = 20               # 회의당 제목 호출 상한
         self.max_lines = 40               # 제목을 만들 때 모델에 주는 줄 수 (구간이 길면 가장 최근 줄)
         self.title_max_chars = 30         # 제안 제목의 최대 글자 수
+        self.tail_lines = 12              # 긴 구간에서 제목을 못 만들었을 때 한 번 더 시도하는 최근 줄 수 (0이면 쓰지 않음)
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError(f"알 수 없는 설정: {k}")
@@ -236,9 +237,13 @@ class AgendaOffTopic:
             log.warning("호출 상한에 도달해 제목 만들기를 멈춤 meeting=%s calls=%s", self.c.meeting_id, self.calls)
             return None
         lines = run["lines"][-self.cfg.max_lines:]
-        user = ("[등록된 안건]\n" + "\n".join(f"- {_clean(t)}" for t in view["titles"]) +
+        titles = list(view["titles"])
+        return {"ep": ep["id"], "lines": lines, "user": self._user_text(titles, lines), "titles": titles, "tail": False}
+
+    @staticmethod
+    def _user_text(titles, lines):
+        return ("[등록된 안건]\n" + "\n".join(f"- {_clean(t)}" for t in titles) +
                 "\n\n[전사]\n" + "\n".join(f"[{k}] {mmss(ln['start_ms'])} {ln['text_marked']}" for k, ln in enumerate(lines, 1)))
-        return {"ep": ep["id"], "lines": lines, "user": user, "titles": list(view["titles"])}
 
     def _check_title(self, d, job):
         """모델 출력을 검증한다. 반환: (제목 또는 None, 근거 seq 목록, 오류 목록)."""
@@ -306,6 +311,12 @@ class AgendaOffTopic:
             ep = self.ep
             if ep is not None and ep["id"] == job["ep"]:
                 ep["title"], ep["evidence"] = title, ids
+        n = self.cfg.tail_lines
+        if ok and title is None and not rejected and not job["tail"] and n and len(job["lines"]) > n and not self.halted:
+            # 긴 구간이 여러 주제로 흩어져 모델이 제목을 못 만들었다: 가장 최근 줄만 보여 주고 한 번 더 부른다
+            lines = job["lines"][-n:]
+            job2 = {"ep": job["ep"], "lines": lines, "user": self._user_text(job["titles"], lines), "titles": job["titles"], "tail": True}
+            calls += self._run_title(job2)
         return calls
 
     def _fail(self, name):
@@ -608,9 +619,29 @@ def selftest():
         assert b and b["stage"] == SUGGEST and b["suggestedTitle"] is None, (bad, b)
         assert w.o.calls == 2 and w.o.rejected == 1, (bad, w.o.calls, w.o.rejected)
     w = World(llm=lambda u: json.dumps({"title": None, "evidence": []}))
-    w.none(18)
+    for _ in range(4):
+        w.add(None, 50000)                                        # 줄 4개, 200초: 짧은 구간은 다시 부르지 않는다
     b = w.go()
     assert b["suggestedTitle"] is None and w.o.calls == 1 and w.o.rejected == 0, "모델이 제목을 못 만들겠다고 한 것은 거부가 아니다"
+    w = World(llm=lambda u: json.dumps({"title": None, "evidence": []}))
+    w.none(30)
+    b = w.go()
+    assert b["suggestedTitle"] is None and w.o.calls == 2 and w.o.rejected == 0, "긴 구간은 최근 줄로 한 번 더 부른다"
+    assert len(w.prompts[1].split("[전사]\n")[1].splitlines()) == 12, "두 번째 호출은 최근 12줄만"
+
+    def tail_only(u):
+        rows = u.split("[전사]\n")[1].splitlines()
+        if len(rows) > 12:
+            return json.dumps({"title": None, "evidence": []})
+        return json.dumps({"title": "최근 주제", "evidence": [[1, len(rows)]]}, ensure_ascii=False)
+    w = World(llm=tail_only)
+    w.none(30)
+    b = w.go()
+    assert b["suggestedTitle"] == "최근 주제" and w.o.calls == 2, b
+    assert b["evidenceSeqs"] == list(range(19, 31)), "근거는 두 번째 호출에 준 최근 줄 번호"
+    w = World(llm=tail_only, tail_lines=0)
+    w.none(30)
+    assert w.go()["suggestedTitle"] is None and w.o.calls == 1, "tail_lines=0 이면 쓰지 않는다"
 
     # 15) JSON 이 아닌 응답: 한 번 더 부르고, 또 아니면 실패로 센다
     w = World(llm=lambda u: "이건 JSON 이 아님")

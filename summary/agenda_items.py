@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 import threading
@@ -37,11 +38,34 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from meeting_summary import validate_items, call_llm, parse_llm_json, mmss  # noqa: E402
+from meeting_summary import validate_items, call_llm, parse_llm_json, mmss, squash  # noqa: E402
 from agenda_classifier import _clean  # noqa: E402
 from agenda_summarizer import _b36  # noqa: E402
 
 MAX_STREAK = 3                        # 연속 실패가 이만큼이면 이 기능을 멈춘다
+
+
+# 이름·단위 글자에 낫표가 잘못 붙는 문제를 고친다. 「박」 주무관, 요원 「한」 명 처럼 숫자가 아닌 말을 인용으로 묶으면 낫표를 뗀다.
+_QUOTE = re.compile(r"「([^」]*)」")
+_AFTER_NAME = re.compile(r"^\s*(주무관|대리|과장|차장|부장|팀장|사원|님|씨|선생|교수|감독|코치|매니저|실장|사장|대표)")
+_AFTER_COUNTER = re.compile(r"^\s*(명|개|곳|분|번째|군데|사람|팀|대|부|가지|건)")
+
+
+def unquote_trivial(text, names=()):
+    """숫자가 아닌데 낫표로 묶인 한 글자 말, 호칭·단위 앞의 말, 알려진 이름의 낫표를 뗀다. 숫자 인용(두 글자 이상 숫자말)은 그대로 둔다."""
+    if not isinstance(text, str) or "「" not in text:
+        return text
+    known = {squash(n) for n in names if n}
+
+    def fix(m):
+        q = squash(m.group(1))
+        rest = text[m.end():]
+        if not q:
+            return m.group(1)
+        if q in known or len(q) == 1 or _AFTER_NAME.match(rest) or _AFTER_COUNTER.match(rest) and len(q) == 1:
+            return m.group(1)
+        return m.group(0)
+    return _QUOTE.sub(fix, text)
 
 
 class ItemCfg:

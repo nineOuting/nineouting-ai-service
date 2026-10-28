@@ -92,6 +92,7 @@ def load_truth(path, use_draft):
 
 
 SHOW_UNCERTAIN = False        # --show-uncertain: 낮은 확신도 줄을 [불확실] 표시로 보여 주고 판정한다 (기본은 예전처럼 뺀다)
+MIN_NEW_LINES = None          # --min-new-lines: 새 줄이 이만큼 쌓여야 판정한다 (None 이면 서비스 기본값). 값을 키우면 호출 수와 비용이 줄지만 갱신이 덜 잦은 설정의 결과가 된다
 
 
 def replay(batches, agendas_msg, gold, mode, provider, model, dry, points):
@@ -104,7 +105,8 @@ def replay(batches, agendas_msg, gold, mode, provider, model, dry, points):
     if mode == "gold":                                      # 사람이 확정한 분류를 고정하고 분류 모델은 부르지 않는다
         cls.apply_corrections([{"seq": s, "agenda_id": a, "rev": 1} for s, a in gold.items()])
         cls.halted = "평가: 사람이 확정한 분류만 사용"
-    scfg = ast.StatusCfg(provider=provider, model=model, show_uncertain=SHOW_UNCERTAIN)
+    extra = {"min_new_lines": MIN_NEW_LINES} if MIN_NEW_LINES else {}
+    scfg = ast.StatusCfg(provider=provider, model=model, show_uncertain=SHOW_UNCERTAIN, **extra)
     srec = StatusRecorder(ast.make_llm(scfg), dry)
     judge = ast.AgendaStatusJudge(cls, scfg, llm=srec)
     ids = {a["key"]: cls._id(a["key"]) for a in cls.agendas}
@@ -196,12 +198,14 @@ def main():
     ap.add_argument("--modes", default="gold,ai")
     ap.add_argument("--dry-run", action="store_true", help="모델을 부르지 않고 호출 수와 비용 추정만 낸다")
     ap.add_argument("--paid-ok", action="store_true", help="유료 호출 허용 (기준과 비용을 확인한 뒤에만)")
+    ap.add_argument("--min-new-lines", type=int, help="새 줄이 이만큼 쌓이면 바로 판정 (기본은 서비스 설정). 비용을 줄이는 평가용 설정이며 결과 JSON에 기록된다. 기존 결과와 직접 비교하지 않는다")
     ap.add_argument("--show-uncertain", action="store_true", help="낮은 확신도 줄을 [불확실] 표시를 달아 모델에 보여 준다(기본은 빼기). 전후 비교용")
     ap.add_argument("--use-draft", action="store_true", help="확정 전 정답·라벨 초안을 쓴다 (점검용)")
     ap.add_argument("--out", help="결과 JSON 경로 (유료 실행은 이미 있으면 거부)")
     a = ap.parse_args()
-    global SHOW_UNCERTAIN
+    global SHOW_UNCERTAIN, MIN_NEW_LINES
     SHOW_UNCERTAIN = a.show_uncertain
+    MIN_NEW_LINES = a.min_new_lines
 
     paid = a.provider != "echo" and not a.dry_run
     if paid and not a.paid_ok:
@@ -225,7 +229,7 @@ def main():
     gold, _unsure = ea.load_labels(a.labels, a.use_draft)
     points, confirmed = load_truth(a.truth, a.use_draft)
     dry = a.dry_run or a.provider == "echo"
-    result = {"provider": a.provider, "model": a.model, "dryRun": dry, "showUncertain": a.show_uncertain, "labels": len(gold), "truthConfirmed": confirmed,
+    result = {"provider": a.provider, "model": a.model, "dryRun": dry, "showUncertain": a.show_uncertain, "minNewLines": a.min_new_lines or ast.StatusCfg().min_new_lines, "labels": len(gold), "truthConfirmed": confirmed,
               "criteria": CRITERIA, "modes": {}}
     total = {"usd": 0.0, "krw": 0, "calls": 0}
     for mode in modes:

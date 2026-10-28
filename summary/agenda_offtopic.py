@@ -14,10 +14,10 @@
   - 매번 분류기 상태에서 다시 계산한다. 따로 들고 있는 것은 아래 다섯 가지뿐이다: 구간(episode) 기록, 제목, 무시 기록, 마지막 rev, 안건 key 목록.
 
 단계 (보드의 offTopic.stage)
-  SUGGEST  구간이 threshold_sec(기본 180초)에 닿았다 -> 새 안건 등록 제안.
+  SUGGEST  구간이 threshold_sec(기본 60초)에 닿았다 -> 새 안건 등록 제안.
   LONG     제안을 무시한 시각부터 해당 없음이 long_sec(기본 180초) 더 이어졌다 -> "지금 다른 이야기를 하고 있다" 알림.
   (없음)   구간이 짧다 / 무시한 뒤 기다리는 중 / LONG 을 무시했다 / 새 안건이 등록됐다 / 회의가 끝났다 -> offTopic 은 null.
-  구간이 끊기면(안건 줄이 분류되면) 구간 기록과 제목을 지우고, 다음 구간이 다시 180초에 닿으면 SUGGEST 부터 다시 시작한다.
+  구간이 끊기면(안건 줄이 분류되면) 구간 기록과 제목을 지우고, 다음 구간이 다시 threshold_sec 에 닿으면 SUGGEST 부터 다시 시작한다.
 
 무시 기록: dismiss(rev, at_ms). at_ms 가 없으면 받은 시점의 음성 시계(분류기의 now_ms)를 쓰고, 지금 제안이 떠 있지 않으면 받지 않는다.
   at_ms 가 있으면(재시작 복구) 그대로 보관만 한다. 현재 구간의 시작 + threshold 보다 이른 무시는 지난 구간의 것이라 쓰지 않는다.
@@ -80,7 +80,7 @@ class OffTopicCfg:
     def __init__(self, **kw):
         self.provider = "echo"
         self.model = None
-        self.threshold_sec = 180          # 해당 없음이 이만큼 이어지면 새 안건 제안 (PRD 3분, 2026-10-15 확정)
+        self.threshold_sec = 60           # 해당 없음이 이만큼 이어지면 새 안건 제안 (명세서 REQ-091 1분, 2026-10-28 변경. 이전 값은 PRD 3분)
         self.long_sec = 180               # 제안을 무시한 뒤 이만큼 더 이어지면 "지금 다른 이야기" 알림 (REQ-081)
         self.max_calls = 20               # 회의당 제목 호출 상한
         self.max_lines = 40               # 제목을 만들 때 모델에 주는 줄 수 (구간이 길면 가장 최근 줄)
@@ -382,7 +382,9 @@ def selftest():
     class World:
         """분류 결과를 직접 정해 주는 시험용 환경. 줄은 10초씩 이어 붙인다."""
 
-        def __init__(self, llm=None, now_value=1000.0, **cfg_kw):
+        def __init__(self, llm=None, now_value=1000.0, default_cfg=False, **cfg_kw):
+            if not default_cfg:
+                cfg_kw.setdefault("threshold_sec", 180)       # 기존 시험은 180초 기준의 논리를 본다. 서비스 기본값(60초)은 default_cfg=True 로 따로 시험한다
             self.c = AgendaClassifier("t", ClassifyCfg(refresh_sec=0))
             self.c.set_agendas(1, [A1, A2])
             self.t = 0
@@ -427,6 +429,27 @@ def selftest():
     assert b and b["stage"] == SUGGEST, b
     assert b["suggestedTitle"] == "기타 논의" and b["evidenceSeqs"] == [1] and b["detectedAt"].endswith("Z") and b["detectedAtMs"] > 0, b
     assert w2.o.calls == 1 and w2.o.info()["suggested"] == 1
+
+    # 1-1) 기본 설정: 제안은 60초(명세서 REQ-091), 재알림은 무시한 뒤 180초(REQ-092). 서비스 기본값 그대로 경계를 본다
+    assert OffTopicCfg().threshold_sec == 60 and OffTopicCfg().long_sec == 180
+    w = World(default_cfg=True)
+    w.none(5)
+    w.add(None, 9000)                                             # 59초
+    assert stage(w) is None, "59초에 제안이 떴다"
+    w = World(default_cfg=True)
+    w.none(5)                                                     # 50초
+    assert stage(w) is None
+    w.none(1)                                                     # 60초
+    b = w.go()
+    assert b and b["stage"] == SUGGEST and b["evidenceSeqs"] == [1] and w.o.calls == 1, b
+    w.none(12)                                                    # 구간이 180초가 돼도 제안은 그대로이고 제목을 다시 만들지 않는다
+    assert stage(w) == SUGGEST and w.o.calls == 1
+    assert w.o.dismiss(1) == "applied" and stage(w) is None
+    w.none(17)                                                    # 무시한 뒤 170초: 재알림은 아직이다
+    assert stage(w) is None
+    w.none(1)                                                     # 무시한 뒤 180초
+    b = w.go()
+    assert b and b["stage"] == LONG and w.o.calls == 1, b
 
     # 2) 엄격한 연속: 구간 사이에 안건 줄이 끼면 처음부터 다시 센다
     w = World()
@@ -724,7 +747,7 @@ def selftest():
     th.join()
     assert not errs, errs
 
-    print("주제 변경 감지 자체 시험 통과 (경계 179/180초, 엄격한 연속, 맞장구·간투사·낮은 확신도, 미분류 줄, 고친 분류, 제목 1회, 무시 -> LONG -> 재무시, rev, 재시작 복구, 새 안건 등록, 종료, 실패·상한, 검증, 로그에 전사 없음, 동시 접근)")
+    print("주제 변경 감지 자체 시험 통과 (경계 179/180초와 기본값 59/60초, 엄격한 연속, 맞장구·간투사·낮은 확신도, 미분류 줄, 고친 분류, 제목 1회, 무시 -> LONG -> 재무시, rev, 재시작 복구, 새 안건 등록, 종료, 실패·상한, 검증, 로그에 전사 없음, 동시 접근)")
 
 
 if __name__ == "__main__":

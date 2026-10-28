@@ -172,7 +172,7 @@ def todo_cfg_from_env(env=None, cfg=None):
 
 def offtopic_cfg_from_env(env=None, cfg=None):
     """환경변수 -> 주제 변경 감지 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다 (새 안건 제목을 만들 때만 부른다).
-    AGENDA_OFFTOPIC_SEC(해당 없음이 이만큼 이어지면 새 안건 제안, 기본 180초), AGENDA_OFFTOPIC_LONG_SEC(제안을 무시한 뒤 이만큼 더 이어지면
+    AGENDA_OFFTOPIC_SEC(해당 없음이 이만큼 이어지면 새 안건 제안, 기본 60초), AGENDA_OFFTOPIC_LONG_SEC(제안을 무시한 뒤 이만큼 더 이어지면
     "지금 다른 이야기" 알림, 기본 180초), MAX_AGENDA_OFFTOPIC_CALLS_PER_MEETING(회의당 제목 호출 상한, 기본 20)
     """
     env = os.environ if env is None else env

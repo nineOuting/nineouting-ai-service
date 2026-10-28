@@ -86,10 +86,10 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건의 결정할 사항마다 결�
 1. [안건]의 제목과 [결정할 사항]은 무엇을 결정해야 하는지 이해하는 데만 써. 전사에 없는 내용을 제목이나 결정할 사항에서 가져오지 마.
 2. [결정할 사항]마다 하나씩, 빠짐없이 답해. n은 결정할 사항의 번호야. verdict는 넷 중 하나야.
    - "decided": 그 사항에 대한 답이 전사에 나오고, 합의 표현(동의, 확정, 정리하는 말)도 전사에서 확인될 때.
-   - "check": 그 사항에 대한 답처럼 보이는 말은 있지만, 합의가 분명하지 않거나 의견이 갈린 채 남았거나 STT가 불확실해서 확신하지 못할 때.
-   - "undecided": 그 사항을 다룬 말은 있지만 아직 답이 정해지지 않았을 때.
+   - "check": 답이 하나로 좁혀졌고 그 답을 받아들이는 말도 있지만, 합의가 약하거나, 조건이 붙었거나(예: 어떤 일이 되면 그걸로 하고 아니면 다시 정함), 승인이나 확인을 받아야 확정이라고 했거나, STT가 불확실해서 확신하지 못할 때.
+   - "undecided": 그 사항을 다룬 말은 있지만 답이 하나로 좁혀지지 않았을 때(의견이 갈림, 후보만 나옴, 제안에 아무도 동의하지 않음, 다음에 정하기로 함).
    - "none": 그 사항을 다룬 말이 전사에 없을 때.
-3. 제안이나 의견만 나오고 아무도 동의하지 않았으면 decided가 아니야. check나 undecided로 해.
+3. 제안이나 의견만 나오고 아무도 동의하지 않았으면 decided가 아니야. 답이 하나로 좁혀졌으면 check, 좁혀지지 않았으면 undecided로 해.
 4. 누가 말한 내용을 다른 사람이 받아서 확인하는 말("네", "좋아요", "그렇게 해요")은 합의 표현이 될 수 있어. 앞 줄과 함께 봐.
 5. verdict가 decided, check, undecided이면 text에 한 문장을 쓰고, evidence에 근거 줄 번호 구간 [[첫 번호, 끝 번호], ...]을 달아. 구간의 양 끝은 입력에 있는 번호여야 해.
    - decided: 무엇으로 결정됐는지.
@@ -807,6 +807,9 @@ def selftest():
     assert stat(j)["status"] == DECIDED and stat(j)["reason"]["evidenceSeqs"] == [1, 2], stat(j)
     # 모의 판정기는 [불확실] 표시를 무시하고 마지막 줄의 말투로 정한다. 프롬프트가 [불확실] 줄의 처리를 말해 준다
     assert json.loads(echo_llm("[전사]\n[1] 00:00 [불확실] 배포 확정해요"))["points"][0]["verdict"] == "decided"
+    assert "답이 하나로 좁혀졌고 그 답을 받아들이는 말도 있지만" in SYSTEM_PROMPT and "승인이나 확인을 받아야 확정" in SYSTEM_PROMPT       # check: 조건부·확인 대기 (2026-10-28 보강)
+    assert "답이 하나로 좁혀지지 않았을 때" in SYSTEM_PROMPT and "답이 하나로 좁혀졌으면 check, 좁혀지지 않았으면 undecided" in SYSTEM_PROMPT
+    assert "check나 undecided로 해." not in SYSTEM_PROMPT and "아직 답이 정해지지 않았을 때." not in SYSTEM_PROMPT
     assert "[불확실]" in SYSTEM_PROMPT and "8. [불확실] 줄" in SYSTEM_PROMPT and 'text에 "STT 불확실"' in SYSTEM_PROMPT
     # 설정을 끄면 예전처럼 뺀다
     seen = []

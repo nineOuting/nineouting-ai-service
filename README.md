@@ -38,7 +38,7 @@ flowchart LR
 | 안건별 요약 | 구현, 평가 전 | 안건마다 그 안건의 줄만 모아 2~3문장으로 요약하고 문장마다 근거 줄을 붙임. 사람이 고친 문장은 고정하고 근거가 달라지면 "확인 필요" 표시. 안건 보드 전체 상태를 PUT (`docs/api/agenda-summary-contract.md`) |
 | 안건 상태 판정 | 구현, 평가 전 | 안건마다 아직 안 다룸·논의 중·결정·미결·결정 확인 필요 중 하나와 근거 줄을 안건 보드에 담음. 줄이 있는 안건만 모델이 결정 여부를 판정하고, 결정에는 근거 줄이 필수 (`docs/api/agenda-status-contract.md`) |
 | 안건별 의견·할 일 정리 | 구현, 평가 전 | 안건마다 주요 의견·근거와 할 일(담당자·기한)을 안건 보드에 담음. 의견과 할 일은 모델을 따로 부르고 그 안건의 원문 줄만 입력으로 씀. 참석자 명단은 안건 목록 요청의 선택 필드로 받아 담당자 이름을 코드로 맞춤. 사람이 고친 항목은 고정하고 근거가 달라지면 "확인 필요" 표시 (`docs/api/agenda-opinions-contract.md`) |
-| 주제 변경 감지·새 안건 제안 | 구현, 평가 전 | 등록된 안건과 관계없는 이야기(해당 없음)가 끊김 없이 180초 이어지면 안건 보드 `offTopic`에 새 안건 제안(제목 포함)을 담음. 무시한 뒤 180초 더 이어지면 "지금 다른 이야기" 알림. 감지는 분류 결과만 읽고, 모델은 제목을 만들 때 한 번만 부름 (`docs/api/agenda-offtopic-contract.md`) |
+| 주제 변경 감지·새 안건 제안 | 구현, 평가 전 | 등록된 안건과 관계없는 이야기(해당 없음)가 끊김 없이 60초 이어지면 안건 보드 `offTopic`에 새 안건 제안(제목 포함)을 담음. 무시한 뒤 180초 더 이어지면 "지금 다른 이야기" 알림. 감지는 분류 결과만 읽고, 모델은 제목을 만들 때 한 번만 부름 (`docs/api/agenda-offtopic-contract.md`) |
 | 미결 안건 추출 | 구현, 모델 호출 없음 | 종료 버튼을 누르면 안건 상태를 종료 확정으로 가정해 다음 회의로 넘길 후보(미결·아직 안 다룸·결정 확인 필요)와 지금까지의 논의 요약(AI-03 요약 문장)을 안건 보드 `leftover`에 담음. 종료 직전 마지막 판정(flush)을 한 번 하고, 이어서 논의하기로 거둘 수 있음 (`docs/api/agenda-leftover-contract.md`) |
 | 오늘 회의 요약 정리본 | 구현, 모델 호출 없음 | 종료 버튼을 누르면(미결 안건과 같은 시점) 안건마다 상태·판정 근거·요약 문장·의견·할 일을 묶은 정리본을 안건 보드 `todaySummary`에 담음. 새로 요약하지 않고 보드의 값을 복사해 배치만 하며 결정 문장은 만들지 않음(회의록 초안이 판정 근거로 씀) (`docs/api/agenda-today-summary-contract.md`) |
 | 회의록 초안 | 구현, 평가 전 | 회의 끝 요약(`todaySummary`)과 양식을 받아 칸마다 근거가 붙은 줄 목록을 만들고 콜백으로 돌려줌. AI 는 칸 고르기와 결정 문장 다듬기만 함. `MINUTES_DATABASE_URL`이 있을 때만 켜짐 (`minutes/README.md`, `docs/api/minutes-draft-contract.md`) |
@@ -138,7 +138,7 @@ flowchart LR
 | `MAX_AGENDA_OPINION_CALLS_PER_MEETING` | 회의당 의견 정리 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
 | `AGENDA_TODO_REFRESH_SEC` | 안건에 새 줄이 4개 미만일 때 할 일 추출을 기다리는 시간(음성 시간 초). 4개 이상이면 바로 추출 | 60 |
 | `MAX_AGENDA_TODO_CALLS_PER_MEETING` | 회의당 할 일 추출 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
-| `AGENDA_OFFTOPIC_SEC` | 해당 없음이 이만큼 이어지면 새 안건 제안(음성 시간 초) | 180 |
+| `AGENDA_OFFTOPIC_SEC` | 해당 없음이 이만큼 이어지면 새 안건 제안(음성 시간 초) | 60 |
 | `AGENDA_OFFTOPIC_LONG_SEC` | 제안을 무시한 뒤 이만큼 더 이어지면 "지금 다른 이야기" 알림(초) | 180 |
 | `MAX_AGENDA_OFFTOPIC_CALLS_PER_MEETING` | 회의당 새 안건 제목 호출 상한 (평가 뒤 다시 정함) | 20 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 토큰 지표를 OTLP(HTTP)로도 보낼 주소 | 없음 |

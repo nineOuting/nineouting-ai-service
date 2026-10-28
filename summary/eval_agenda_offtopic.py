@@ -22,6 +22,8 @@
   # 제목 점검 (한 번만. 결과 파일이 이미 있으면 거부) -- 키는 환경변수 또는 저장소 루트 .env 로만
   python3 eval_agenda_offtopic.py ... --titles --provider gemini --model gemini-3.8-flash --paid-ok --out R.json
 
+제안 시간의 기본값은 서비스 기본(60초)이다. 합성 대본 OT-01~10의 정답 구간(*_offtopic_runs.json)은 180초 기준이므로 그 대본은 --threshold-sec 180 으로 돌린다.
+
 정답 라벨은 사람이 확정한 것만 쓴다. 확정되지 않은 칸은 --use-draft 일 때만 초안으로 채우며 이때 결과는 점검용(최종 수치 아님)이다.
 """
 import argparse
@@ -133,7 +135,8 @@ def main():
     ap.add_argument("--model")
     ap.add_argument("--titles", action="store_true", help="제안이 나온 구간마다 모델을 불러 제목을 만든다 (유료)")
     ap.add_argument("--expect-none", action="store_true", help="이 회의에서는 제안이 한 번도 나오지 않아야 한다 (오경보 확인)")
-    ap.add_argument("--threshold-sec", type=int, default=180)
+    ap.add_argument("--threshold-sec", type=int, default=ao.OffTopicCfg().threshold_sec,
+                    help="제안 시간(초). 기본은 서비스 기본값(60초). 합성 OT 대본의 정답 구간은 180초 기준이라 --threshold-sec 180 으로 돌린다")
     ap.add_argument("--dry-run", action="store_true", help="모델을 부르지 않고 호출 수와 비용 추정만 낸다")
     ap.add_argument("--paid-ok", action="store_true", help="유료 호출 허용 (기준과 비용을 확인한 뒤에만)")
     ap.add_argument("--use-draft", action="store_true", help="확정 전 라벨 초안을 쓴다 (점검용)")

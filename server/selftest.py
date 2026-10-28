@@ -1096,7 +1096,7 @@ def offtopic_batches(mid, first_seq, count):
 def test_offtopic_cfg():
     from .service import offtopic_cfg_from_env
     d = offtopic_cfg_from_env({})
-    assert (d.provider, d.threshold_sec, d.long_sec, d.max_calls) == ("echo", 180, 180, 20)
+    assert (d.provider, d.threshold_sec, d.long_sec, d.max_calls) == ("echo", 60, 180, 20)
     c = offtopic_cfg_from_env({"LLM_PROVIDER": "gemini", "LLM_MODEL": "m", "AGENDA_OFFTOPIC_SEC": "120", "AGENDA_OFFTOPIC_LONG_SEC": "60",
                                "MAX_AGENDA_OFFTOPIC_CALLS_PER_MEETING": "5"})
     assert (c.provider, c.model, c.threshold_sec, c.long_sec, c.max_calls) == ("gemini", "m", 120, 60, 5)
@@ -1110,7 +1110,7 @@ def test_offtopic_cfg():
 
 
 def test_agenda_offtopic_flow(cap):
-    """해당 없음이 3분 이어지면 새 안건 제안이 보드에 담기고, 무시하면 거두었다가 3분 뒤 다시 알리고, 회의가 끝나면 거둔다 (AI-06)"""
+    """해당 없음이 1분 이어지면 새 안건 제안이 보드에 담기고, 무시하면 거두었다가 무시한 뒤 3분 지나 다시 알리고, 회의가 끝나면 거둔다 (AI-06)"""
     from agenda_classifier import ClassifyCfg
     sent = []
     pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
@@ -1130,9 +1130,9 @@ def test_agenda_offtopic_flow(cap):
             reg.receive_batch(path, {"meetingId": mid, "batch": state["batch"], "lines": g, "edits": []})
             assert reg.wait_idle(path) and pub.wait_idle()
 
-    feed(15)                                                              # 150초: 아직 제안하지 않는다
+    feed(5)                                                               # 50초: 아직 제안하지 않는다
     assert all(b["offTopic"] is None for b in boards())
-    feed(3)                                                               # 180초
+    feed(1)                                                               # 60초
     b = boards()[-1]
     ot = b["offTopic"]
     assert ot and ot["stage"] == "SUGGEST" and ot["suggestedTitle"] == "기타 논의" and ot["evidenceSeqs"] == [1], b

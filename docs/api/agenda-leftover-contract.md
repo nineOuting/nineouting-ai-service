@@ -39,12 +39,24 @@
     {
       "agendaId": 102,
       "status": "UNDECIDED",
-      "statusReason": { "text": "종료를 요청한 시점까지 결정 표현을 찾지 못함 (연결된 발언 4줄)", "evidenceSeqs": [51] },
+      "statusReason": { "text": "결정할 사항 2개 중 1개가 결정됨 (미결 1개)", "evidenceSeqs": [51] },
+      "decisionPoints": [
+        { "decisionPointId": 11, "status": "DECIDED", "decisionText": "...", "evidenceSeqs": [47], "edited": false, "needsCheck": false },
+        { "decisionPointId": 12, "status": "UNDECIDED", "decisionText": "...", "evidenceSeqs": [48, 51], "edited": false, "needsCheck": false }
+      ],
       "summary": [
         { "id": "k3f9a1-3", "text": "...", "evidenceSeqs": [47, 48], "edited": false, "needsCheck": false }
       ]
     },
-    { "agendaId": 103, "status": "NOT_STARTED", "statusReason": null, "summary": [] }
+    {
+      "agendaId": 103,
+      "status": "NOT_STARTED",
+      "statusReason": null,
+      "decisionPoints": [
+        { "decisionPointId": 13, "status": "NOT_STARTED", "decisionText": "...", "evidenceSeqs": [], "edited": false, "needsCheck": false }
+      ],
+      "summary": []
+    }
   ]
 }
 ```
@@ -59,8 +71,9 @@
 | `agendas[].status` | 아래 3.1의 상태 규칙을 따른 값 |
 | `agendas[].statusReason` | 보드의 `statusReason`과 같은 모양(`{text, evidenceSeqs}`). `NOT_STARTED`는 `null` |
 | `agendas[].summary` | 지금까지의 논의 요약. 같은 시점 보드의 요약 문장(AI-03)을 **복사한 것**이다 |
+| `agendas[].decisionPoints` | 그 안건의 결정할 사항마다 상태, 결정 내용, 근거. 같은 시점 보드의 `decisionPoints`(AI-04)를 **복사한 것**이다. 안건의 모든 사항이 들어 있어서, 결정된 사항과 아직 남은 사항을 `status`로 나눌 수 있다 |
 
-- 안건 제목, 결정할 사항은 담지 않는다. 백엔드가 이미 가지고 있다.
+- 안건 제목과 결정할 사항의 문구는 담지 않는다. 백엔드가 이미 가지고 있다. 사항마다 상태, 결정 내용, 근거는 `decisionPoints`로 담는다.
 - `summary`의 문장은 보드와 같은 모양이다(`id`, `text`, `evidenceSeqs`, `edited`, `needsCheck`). 사람이 고친 문장(`edited`), 근거가 달라져 확인이 필요한 문장(`needsCheck`)도 그대로 담긴다. 새로 요약하지 않고, 의견·할 일은 넣지 않는다. 요약이 없는 안건(`NOT_STARTED` 등)은 빈 배열이다.
 - 목록은 요청을 받은 뒤에도 새 줄이 들어오면 바뀐다. 바뀔 때만 보드를 다시 보낸다(`agenda-summary-contract.md` 전송 규칙 그대로).
 - 보드는 안건 목록을 받은 뒤에만 나간다. 안건 목록을 받지 못한 회의에서는 요청을 받아도 `leftover`가 나가지 않는다.
@@ -79,7 +92,8 @@
 
 - 요청 중에는 보드의 `agendas[].status`와 목록의 `status`가 다를 수 있다. 보드의 `agendas[].status`는 이어서 논의하기로 돌아갈 수 있어서 요청 중에도 확정하지 않는다(예: 보드는 `DISCUSSING`, 목록은 `UNDECIDED`).
 - 회의가 끝나면(`final: true`) 상태가 확정되어 보드의 상태와 목록의 상태가 같다.
-- 사람이 안건 상태를 직접 고치는 기능은 범위 밖이다(`agenda-status-contract.md` 9장).
+- 사람이 안건 상태를 직접 고치는 기능은 범위 밖이다(`agenda-status-contract.md` 11장).
+- 안건 상태는 결정할 사항의 상태에서 정한다(`agenda-status-contract.md` 2.2). 종료를 확정한다고 가정하므로, 사항 중 하나라도 미결이거나 논의 전이면 그 안건은 `UNDECIDED`이고 목록에 들어간다. 모든 사항이 결정이거나 확인 필요이고 확인 필요가 1개 이상이면 `DECISION_CHECK`로 들어간다.
 
 ## 4. 종료 버튼 알림 받기 (백엔드 → ai-service)
 
@@ -179,12 +193,13 @@ POST /internal/meetings/{meetingId}/end-requests
 | `DECISION_CHECK`를 이월 대상에 넣는다 | 기획 확인 필요 |
 | 이어서 논의하기 뒤 종료 때 목록을 다시 보여 주는 흐름(REQ-084 비고) | 기획 확인 필요 (화면 처리) |
 | 이월할 때 의견·할 일도 필요한지 | 기획 확인 필요 (지금은 요약 문장만) |
+| 목록의 안건마다 `decisionPoints`(보드 사본)를 담는다. 이월 저장에 사항별 결정 내용과 근거까지 필요한지 | AI 제안, cn 팀 확인 필요 (cn 팀이 말한 남은 안건 항목은 안건명, 결정할 사항, 이월된 회의, 이월 날짜뿐이다) |
 
 ## 11. 예시 파일
 
 | 파일 | 내용 |
 |---|---|
-| `examples/api/agenda-board-leftover-put.json` | 안건 보드 한 번의 본문 (종료 버튼 요청을 받은 상태. 보드는 논의 중인 안건이 목록에서는 미결로 담겨 있다) |
+| `examples/api/agenda-board-leftover-put.json` | 안건 보드 한 번의 본문 (종료 버튼 요청을 받은 상태. 보드는 논의 중인 안건이 목록에서는 미결로 담겨 있다. 안건마다 `decisionPoints`) |
 | `examples/api/end-request-post.json` | 종료 버튼 요청 (`request`) |
 | `examples/api/end-request-cancel-post.json` | 이어서 논의하기 (`cancel`) |
 

@@ -109,6 +109,35 @@ def adapt_event(msg):
     return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "event": event, "at_ms": at_ms, "wall": msg.get("wall")}
 
 
+def _decision_points(a, where):
+    """안건의 결정할 사항 (agenda-contract.md 4.2.1). 반환: (사항 목록 또는 None, 프롬프트에 쓸 한 줄 문자열).
+    decisionPoints 가 있으면 1개 이상이어야 하고, 사항마다 번호(decisionPointId, 안건 안에서 겹치지 않음), position, text 가 있어야 한다.
+    없으면 전환 기간의 옛 모양이다: decisionPoint 문자열 하나를 받고 사항 목록은 None (번호 없는 사항 1개로 본다)."""
+    raw = a.get("decisionPoints")
+    if raw is None:
+        return None, _need(a, "decisionPoint", str, where)
+    if not isinstance(raw, list) or not raw:
+        raise AdapterError(f"{where}: 'decisionPoints' 는 1개 이상의 배열이어야 함")
+    pts, seen = [], set()
+    for p in raw:
+        if not isinstance(p, dict):
+            raise AdapterError(f"{where}: decisionPoints 항목이 객체가 아님")
+        pw = f"{where} decisionPoint {p.get('decisionPointId', '?')}"
+        pid = _need(p, "decisionPointId", (str, int), pw)
+        pk = str(pid)
+        if not pk.strip():
+            raise AdapterError(f"{pw}: decisionPointId가 비어 있음")
+        if pk in seen:
+            raise AdapterError(f"{pw}: decisionPointId가 겹침")
+        seen.add(pk)
+        text = _need(p, "text", str, pw)
+        if not text.strip():
+            raise AdapterError(f"{pw}: text가 비어 있음")
+        pts.append({"id": pid, "key": pk, "position": _need(p, "position", int, pw), "text": text.strip()})
+    pts.sort(key=lambda p: p["position"])
+    return pts, " / ".join(p["text"] for p in pts)
+
+
 def adapt_agendas(msg):
     """안건 목록 전체 (docs/api/agenda-contract.md 4장) -> {"meeting_id", "version", "agendas"}.
     agendaId 는 문자열이나 정수. 결과를 돌려줄 때 같은 타입을 쓰도록 받은 값(id)과 문자열 key 를 함께 둔다."""
@@ -130,9 +159,12 @@ def adapt_agendas(msg):
         title = _need(a, "title", str, where)
         if not title.strip():
             raise AdapterError(f"{where}: title이 비어 있음")
-        out.append({"id": aid, "key": key, "position": _need(a, "position", int, where), "title": title,
-                    "decision_point": _need(a, "decisionPoint", str, where),
-                    "added": bool(a.get("addedDuringMeeting", False))})
+        points, decision = _decision_points(a, where)
+        row = {"id": aid, "key": key, "position": _need(a, "position", int, where), "title": title,
+               "decision_point": decision, "added": bool(a.get("addedDuringMeeting", False))}
+        if points is not None:                               # 옛 모양(decisionPoint 문자열)이면 points 를 두지 않는다
+            row["points"] = points
+        out.append(row)
     attendees = None
     if msg.get("attendees") is not None:                     # 선택 필드. 없거나 null 이면 이전 명단을 그대로 둔다
         raw = msg["attendees"]
@@ -200,6 +232,30 @@ def adapt_summary_edits(msg):
                 raise AdapterError(f"{where}: 'evidenceSeqs' 는 1개 이상의 정수 배열이어야 함")
             row.update({"text": text, "evidence_seqs": ev})
         out.append(row)
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "edits": out}
+
+
+def adapt_decision_edits(msg):
+    """사람이 고친 결정 내용 (agenda-status-contract.md 7장) -> {"meeting_id", "edits"}.
+    decisionText 는 비어 있으면 안 되고, evidenceSeqs 는 정수 배열이다 (비어 있어도 된다)."""
+    meeting_id, raw_id = _meeting_id(msg, "decision-edits")
+    items = _need(msg, "edits", list, "edits")
+    out = []
+    for e in items:
+        if not isinstance(e, dict):
+            raise AdapterError("edits: 항목이 객체가 아님")
+        where = f"decision edit decisionPointId={e.get('decisionPointId', '?')}"
+        aid = _need(e, "agendaId", (str, int), where)
+        pid = _need(e, "decisionPointId", (str, int), where)
+        if isinstance(pid, str) and not pid.strip():
+            raise AdapterError(f"{where}: 'decisionPointId' 가 비어 있음")
+        text = _need(e, "decisionText", str, where)
+        if not text.strip():
+            raise AdapterError(f"{where}: 'decisionText' 가 비어 있음")
+        ev = _need(e, "evidenceSeqs", list, where)
+        if any(isinstance(x, bool) or not isinstance(x, int) for x in ev):
+            raise AdapterError(f"{where}: 'evidenceSeqs' 는 정수 배열이어야 함")
+        out.append({"agenda_id": aid, "point_id": pid, "text": text, "evidence_seqs": ev, "rev": _need(e, "rev", int, where)})
     return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "edits": out}
 
 
@@ -545,8 +601,50 @@ def selftest():
         except AdapterError:
             pass
 
+    # 결정할 사항 (agenda-contract.md 4.2.1): 사항마다 번호, position, text. 1개 이상, 번호는 안건 안에서 겹치지 않는다
+    a0 = adapt_agendas(load("agendas-decision-points-put.json"))["agendas"][0]
+    assert [p["id"] for p in a0["points"]] == [7, 8, 9] and [p["key"] for p in a0["points"]] == ["7", "8", "9"]
+    assert a0["decision_point"] == "1차 배포 날짜 확정 / 배포 담당 지정 / 배포 전 점검 항목 확정"
+    assert all("points" not in a for a in adapt_agendas(load("agendas-put.json"))["agendas"]), "옛 모양(decisionPoint 문자열)은 points 를 두지 않는다"
+    dbase, dag = {"meetingId": "m", "version": 1}, {"agendaId": "a", "position": 1, "title": "t"}
+    with_dp = lambda dps: dict(dbase, agendas=[dict(dag, decisionPoints=dps)])
+    r = adapt_agendas(with_dp([{"decisionPointId": 2, "position": 2, "text": " 둘째 "}, {"decisionPointId": 1, "position": 1, "text": "첫째"}]))
+    assert r["agendas"][0]["decision_point"] == "첫째 / 둘째" and r["agendas"][0]["points"][1]["text"] == "둘째", "position 순으로 합치고 앞뒤 공백을 뗀다"
+    for bad in ([], "x", [1], [{"decisionPointId": 1, "position": 1}], [{"position": 1, "text": "t"}], [{"decisionPointId": 1, "position": 1, "text": " "}],
+                [{"decisionPointId": " ", "position": 1, "text": "t"}], [{"decisionPointId": 1, "position": "1", "text": "t"}],
+                [{"decisionPointId": 1, "position": 1, "text": "a"}, {"decisionPointId": "1", "position": 2, "text": "b"}]):
+        try:
+            adapt_agendas(with_dp(bad))
+            raise SystemExit(f"잘못된 decisionPoints 를 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    try:
+        adapt_agendas(dict(dbase, agendas=[dag]))
+        raise SystemExit("decisionPoints 도 decisionPoint 도 없는 안건을 못 잡음")
+    except AdapterError:
+        pass
+    # 고친 결정 내용 (agenda-status-contract.md 7장)
+    de = adapt_decision_edits(load("decision-edits-post.json"))
+    assert de["meeting_id"] == "m_1234" and de["edits"] == [{"agenda_id": 102, "point_id": 10, "text": "외부 API 비용 한도는 월 30만 원으로 한다",
+                                                              "evidence_seqs": [55, 56], "rev": 2}], de
+    okd = {"agendaId": "a", "decisionPointId": 1, "decisionText": "t", "evidenceSeqs": [], "rev": 1}
+    assert adapt_decision_edits({"meetingId": "m", "edits": [okd]})["edits"][0]["evidence_seqs"] == [], "빈 근거도 받는다"
+    assert adapt_decision_edits({"meetingId": "m", "edits": []})["edits"] == []
+    for bad in (dict(okd, decisionText=" "), dict(okd, decisionText=3), dict(okd, evidenceSeqs=["1"]), dict(okd, evidenceSeqs=[True]),
+                dict(okd, evidenceSeqs=None), {k: v for k, v in okd.items() if k != "rev"}, {k: v for k, v in okd.items() if k != "agendaId"},
+                dict(okd, decisionPointId=" "), dict(okd, rev="1"), "x"):
+        try:
+            adapt_decision_edits({"meetingId": "m", "edits": [bad]})
+            raise SystemExit(f"잘못된 고침을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    try:
+        adapt_decision_edits({"meetingId": "m"})
+        raise SystemExit("edits 없음을 못 잡음")
+    except AdapterError:
+        pass
     print("입력 어댑터 자체 시험 통과 (이벤트 4종, 줄 변환, edits, manual, speakerLabel, 잘못된 입력, 안건 목록, 고친 분류, meetingId 문자열·정수, 고친 요약, "
-          "참석자 명단, 고친 의견·할 일, 주제 변경 무시 요청, 종료 버튼 요청)")
+          "참석자 명단, 고친 의견·할 일, 주제 변경 무시 요청, 종료 버튼 요청, 결정할 사항, 고친 결정 내용)")
 
 
 if __name__ == "__main__":

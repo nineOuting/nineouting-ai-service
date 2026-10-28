@@ -1,0 +1,15 @@
+{
+  "meetingId": "m_1234",
+  "edits": [
+    {
+      "agendaId": 102,
+      "decisionPointId": 10,
+      "decisionText": "외부 API 비용 한도는 월 30만 원으로 한다",
+      "evidenceSeqs": [
+        55,
+        56
+      ],
+      "rev": 2
+    }
+  ]
+}

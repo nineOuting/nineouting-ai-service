@@ -103,6 +103,7 @@ def build_leftover(meta, ents):
         r = si.get("reason")
         out.append({"agendaId": ent["agendaId"], "status": si["status"],
                     "statusReason": {"text": r["text"], "evidenceSeqs": list(r["evidenceSeqs"])} if r else None,
+                    "decisionPoints": copy.deepcopy(ent.get("decisionPoints", [])),
                     "summary": copy.deepcopy(ent["summary"])})
     return {"requestRev": meta["requestRev"], "final": bool(meta["final"]), "agendas": out}
 
@@ -142,8 +143,8 @@ def selftest():
     assert a.take_flush() is False, "끝났으면 flush 없이 마지막 판정으로 간다"
 
     # 4) 목록 만들기: 후보 상태만, 보드 순서대로, 요약 문장은 복사
-    def ent(aid, texts=()):
-        return {"agendaId": aid, "summary": [{"id": f"s{aid}-{i}", "text": t, "evidenceSeqs": [i + 1], "edited": i == 0, "needsCheck": False}
+    def ent(aid, texts=(), dps=()):
+        return {"agendaId": aid, "decisionPoints": list(dps), "summary": [{"id": f"s{aid}-{i}", "text": t, "evidenceSeqs": [i + 1], "edited": i == 0, "needsCheck": False}
                                              for i, t in enumerate(texts)]}
     why = lambda t, *s: {"text": t, "evidenceSeqs": list(s)}
     status = {"k1": {"status": "DECIDED", "reason": why("결정", 3)},
@@ -151,7 +152,8 @@ def selftest():
               "k3": {"status": "NOT_STARTED", "reason": None},
               "k4": {"status": "DECISION_CHECK", "reason": why("확인", 12, 13)},
               "k5": {"status": "DISCUSSING", "reason": why("논의 중", 20)}}      # 미리보기에서는 오지 않지만 오면 거른다
-    ents = [("k1", ent(101, ["a"])), ("k2", ent(102, ["b", "c"])), ("k3", ent(103)), ("k4", ent(104, ["d"])), ("k5", ent(105, ["e"])),
+    ents = [("k1", ent(101, ["a"])), ("k2", ent(102, ["b", "c"], [{"decisionPointId": 9, "status": "UNDECIDED", "decisionText": "점검 항목은 정해지지 않음",
+                                                  "evidenceSeqs": [4], "edited": False, "needsCheck": False}])), ("k3", ent(103)), ("k4", ent(104, ["d"])), ("k5", ent(105, ["e"])),
             ("k6", ent(106, ["f"]))]                                              # k6 은 상태가 없다 -> 거른다
     out = build_leftover({"requestRev": 4, "final": False, "status_info": status}, ents)
     assert out["requestRev"] == 4 and out["final"] is False
@@ -159,11 +161,14 @@ def selftest():
     assert [x["status"] for x in out["agendas"]] == ["UNDECIDED", "NOT_STARTED", "DECISION_CHECK"]
     assert out["agendas"][1]["statusReason"] is None and out["agendas"][2]["statusReason"] == why("확인", 12, 13)
     assert [s["text"] for s in out["agendas"][0]["summary"]] == ["b", "c"] and out["agendas"][1]["summary"] == []
-    assert set(out["agendas"][0]) == {"agendaId", "status", "statusReason", "summary"}
+    assert set(out["agendas"][0]) == {"agendaId", "status", "statusReason", "decisionPoints", "summary"}
+    assert [p["decisionPointId"] for p in out["agendas"][0]["decisionPoints"]] == [9] and out["agendas"][1]["decisionPoints"] == []
     assert set(out["agendas"][0]["summary"][0]) == {"id", "text", "evidenceSeqs", "edited", "needsCheck"}, "요약 문장은 보드 모양 그대로"
     ents[1][1]["summary"][0]["text"] = "바뀜"
+    ents[1][1]["decisionPoints"][0]["evidenceSeqs"].append(99)
     status["k4"]["reason"]["evidenceSeqs"].append(99)
     assert out["agendas"][0]["summary"][0]["text"] == "b" and out["agendas"][2]["statusReason"]["evidenceSeqs"] == [12, 13], "복사해 담는다"
+    assert out["agendas"][0]["decisionPoints"][0]["evidenceSeqs"] == [4], "결정할 사항도 복사해 담는다"
     assert build_leftover({"requestRev": None, "final": True, "status_info": {"k1": status["k1"]}}, ents) == {
         "requestRev": None, "final": True, "agendas": []}, "남은 안건이 없으면 빈 목록"
     print("AI-07 미결 안건 추출 자체 시험 통과 (요청 번호 규칙, 취소, 순서 뒤바뀜, 끝, flush 한 번, 후보 거르기, 복사)")

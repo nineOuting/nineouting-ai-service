@@ -5,6 +5,7 @@
 
 - 근거: PRD v0.1 AI-02, 요구사항 REQ-061·062·065·079
 - 예시 파일: `examples/api/` (아래 12장)
+- v0.2에서 바뀐 것: 안건의 결정할 사항이 문자열 하나(`decisionPoint`)에서 목록(`decisionPoints`)으로 바뀌었다 (4.2). 사항마다 번호(`decisionPointId`)가 있고 사용자가 문구를 고쳐도 유지된다. 모양은 cn 팀이 요청한 것을 따랐다
 
 ## 1. 목적과 범위
 
@@ -33,6 +34,7 @@
 | 시간 단위 | 정수 밀리초. `atMs`는 회의 시작 기준 음성 시간 (`input-contract.md` 3장) |
 | `meetingId` | 문자열 또는 정수 (연동 API 초안의 공통 규칙은 숫자). 주소의 값과 본문의 값이 문자열로 바꿔 비교해서 다르면 `400`. ai-service가 백엔드로 보낼 때는 받은 타입 그대로 쓴다 |
 | `agendaId` | 안건 목록에서 받은 값을 타입 그대로 돌려준다. 문자열 또는 정수를 받는다 |
+| `decisionPointId` | 결정할 사항 번호. 안건 목록에서 받은 값을 타입 그대로 돌려준다. 문자열 또는 정수를 받는다. **ai-service는 번호를 만들지 않는다** |
 | `seq` | 전사 줄 번호. `input-contract.md`의 `lines[].seq`와 같다 |
 | 해당 없음 | 어느 안건에도 맞지 않으면 `agendaId`가 `null`이다 |
 
@@ -58,10 +60,22 @@
 | `agendaId` | 문자열 또는 정수 | 안건 번호. 목록 안에서 겹치지 않는다 |
 | `position` | 정수 | 안건 순서 (REQ-065). 1부터 |
 | `title` | 문자열 | 안건 제목 (REQ-061). 비어 있으면 안 된다 |
-| `decisionPoint` | 문자열 | 결정할 사항 (REQ-062) |
+| `decisionPoints` | 배열 | 결정할 사항 목록 (REQ-062, REQ-086). 항목은 4.2.1. **1개 이상**이어야 한다 (cn 팀 답: 사항이 없는 안건은 생길 수 없다) |
 | `addedDuringMeeting` | 불리언 | 회의 중에 추가한 안건이면 `true`. 없으면 `false`로 본다 |
 
 `status`, `pendingAgendaId` 등 다른 필드가 와도 쓰지 않고 무시한다.
+
+### 4.2.1 decisionPoints의 항목
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `decisionPointId` | 문자열 또는 정수 | 결정할 사항 번호. **같은 안건 안에서** 겹치지 않는다. 백엔드가 붙이고, 사용자가 문구를 고치거나 순서를 바꿔도 같은 사항이면 같은 번호를 유지한다 (cn 팀 답) |
+| `position` | 정수 | 안건 안의 사항 순서. 1부터 |
+| `text` | 문자열 | 결정할 사항 문구. 비어 있으면 안 된다 |
+
+- 사항 판정과 결정 내용은 `agenda-status-contract.md`가 정한다. 번호는 그 결과에 그대로 실려 돌아간다.
+- 문구가 바뀌거나 사항이 늘거나 줄면 그 안건의 상태 판정은 바로 다시 한다 (`agenda-status-contract.md` 4장). 이미 분류된 줄은 다시 분류하지 않는다 (8장 규칙 5).
+- 옛 `decisionPoint`(문자열 하나)는 더 이상 쓰지 않는다. 백엔드가 `decisionPoints`로 바꿀 때까지의 전환 기간에는, `decisionPoints`가 없고 `decisionPoint` 문자열이 있으면 사항 1개(번호 없음)로 받는다 (AI 제안). 번호가 없는 사항은 `decisionPointId`가 `null`로 나가고 사람이 고친 결정 내용은 붙일 수 없다.
 
 ### 4.3 응답
 
@@ -69,7 +83,7 @@
 |---|---|
 | 받음 | `200` + `{"accepted": true, "result": "accepted", "version": 3}` |
 | 이미 받은 번호이거나 더 작은 번호 | `200` + `{"accepted": true, "result": "stale"}`. 반영하지 않는다 |
-| 형식 오류, 주소와 본문의 `meetingId` 불일치, `agendaId` 중복, 제목이 빈 안건 | `400` + `{"error": "INVALID_INPUT", "detail": "이유"}` |
+| 형식 오류, 주소와 본문의 `meetingId` 불일치, `agendaId` 중복, 제목이 빈 안건, 결정할 사항이 없거나 번호가 겹치거나 문구가 빈 안건 | `400` + `{"error": "INVALID_INPUT", "detail": "이유"}` |
 | 아직 받을 수 없음 | `503` + `{"error": "NOT_READY", "detail": "이유"}`. 백엔드는 나중에 다시 보낸다 |
 
 ## 5. 분류 결과 보내기 (ai-service → 백엔드)
@@ -188,7 +202,7 @@ ai-service는 회의 상태를 메모리에만 둔다. 재시작하면 안건 �
 | 순서 | 내용 |
 |---|---|
 | 1 | 재시작 직후 모르는 회의의 줄 묶음이 오면 `409` + `{"expectedBatch": 1}`로 답한다 (`input-contract.md` 8장) |
-| 2 | 백엔드는 그 회의의 줄 묶음을 1번부터 다시 보내기 전에 **최신 안건 목록(4장)과 그 회의의 고친 분류 전체(7장)를 먼저 다시 보낸다**. 사람이 고친 안건 요약 문장이 있으면 그것도 보낸다 (`agenda-summary-contract.md` 9장). 참석자 명단과 고친 의견·할 일도 다시 보낸다 (`agenda-opinions-contract.md` 11장) |
+| 2 | 백엔드는 그 회의의 줄 묶음을 1번부터 다시 보내기 전에 **최신 안건 목록(4장)과 그 회의의 고친 분류 전체(7장)를 먼저 다시 보낸다**. 사람이 고친 안건 요약 문장이 있으면 그것도 보낸다 (`agenda-summary-contract.md` 9장). 참석자 명단과 고친 의견·할 일도 다시 보낸다 (`agenda-opinions-contract.md` 11장). 고친 결정 내용도 보낸다 (`agenda-status-contract.md` 10장). 순서는 안건 목록, 고친 분류, 고친 요약, 고친 의견·할 일, 고친 결정 내용, 무시 기록이다 |
 | 3 | ai-service는 안건 목록을 받은 뒤 다시 받은 줄을 분류한다. 고친 줄은 고정되어 있으므로 사람의 수정은 유지된다 |
 
 - 분류 결과의 `version`은 시각 기반이라 재시작 전보다 작아지지 않는다.
@@ -218,6 +232,10 @@ ai-service는 회의 상태를 메모리에만 둔다. 재시작하면 안건 �
 | 분류 모델 호출 주기 | 30초로 정함 (평가 1회: 29분 회의에 59회, 오류 없음. `docs/eval/agenda-classification-eval-v1.md`). 베타에서 다시 본다 |
 | 해당 없음이 이어질 때 현재 안건을 비울지 | 유지로 시작, AI-06 설계 때 다시 정한다 |
 | 사용자가 현재 안건을 직접 바꾸는 기능의 전달 방식 | 미정. cn 팀에 확인 요청함 (10장) |
+| 안건 목록의 `decisionPoint`(문자열 하나)를 `decisionPoints[{decisionPointId, position, text}]`로 바꾼다 | cn 팀 요청 (확정 모양). 이 문서의 4.2는 그 모양을 옮겼다 |
+| 사항 번호는 문구를 고쳐도 유지되고 사항이 0개인 안건은 없다 | cn 팀 답 |
+| 번호의 타입(`decisionPointId`), 같은 안건 안에서만 겹치지 않으면 되는지 | cn 팀 확인 필요 |
+| 전환 기간에 옛 `decisionPoint`를 사항 1개(번호 없음)로 받는다 | AI 제안, cn 팀 확인 필요 |
 
 ### 11.1 안건 보드(연동 API 초안 3.2)와의 관계
 
@@ -235,7 +253,8 @@ ai-service는 회의 상태를 메모리에만 둔다. 재시작하면 안건 �
 
 | 파일 | 내용 |
 |---|---|
-| `examples/api/agendas-put.json` | 안건 목록 (회의 중에 추가한 안건 포함) |
+| `examples/api/agendas-put.json` | 안건 목록 (회의 중에 추가한 안건 포함). 옛 `decisionPoint`(문자열 하나) 모양이다. 전환 기간 호환을 시험하는 데 쓰므로 그대로 둔다 |
+| `examples/api/agendas-decision-points-put.json` | 안건 목록의 새 모양 (`decisionPoints`, 사항이 여러 개인 안건 포함) |
 | `examples/api/agenda-classification-put.json` | 분류 결과 한 번의 본문 (해당 없음 포함) |
 | `examples/api/agenda-corrections-post.json` | 사람이 고친 분류 |
 

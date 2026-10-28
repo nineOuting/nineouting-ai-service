@@ -416,6 +416,7 @@ class AgendaSummarizer:
                 if status_info is not None:
                     r = si["reason"] if si else None
                     ent["statusReason"] = {"text": r["text"], "evidenceSeqs": list(r["evidenceSeqs"])} if r else None
+                    ent["decisionPoints"] = [{**p, "evidenceSeqs": list(p["evidenceSeqs"])} for p in (si or {}).get("points", [])]
                 agendas.append(ent)
                 ents.append((a["key"], ent))
             lf = build_leftover(leftover, ents) if leftover else None
@@ -772,7 +773,7 @@ def selftest():
     b = s.take_board(status_info=main_status, leftover=lf2(5, preview))
     ts = b["todaySummary"]
     assert ts["requestRev"] == 5 and ts["final"] is False and [x["agendaId"] for x in ts["agendas"]] == [x["agendaId"] for x in b["agendas"]], ts
-    assert all(set(x) == {"agendaId", "status", "statusReason", "summary", "opinions", "todos"} for x in ts["agendas"])
+    assert all(set(x) == {"agendaId", "status", "statusReason", "decisionPoints", "summary", "opinions", "todos"} for x in ts["agendas"])
     assert [(x["agendaId"], x["status"]) for x in ts["agendas"] if x["status"] != "DECIDED"] == [(x["agendaId"], x["status"]) for x in b["leftover"]["agendas"]], \
         "결정이 아닌 안건의 상태는 미결 안건 목록과 같다"
     b = s.take_board(status_info=main_status, leftover=lf2(5, preview2))
@@ -810,6 +811,23 @@ def selftest():
     b = s.take_board(status_info=main_status)
     assert b and b["todaySummary"] is None and b["leftover"] is None, "이어서 논의하기: 정리본도 거둔다"
     assert s.today_info()["built"] is False
+    json.dumps(b)
+
+    # 17-4) decisionPoints (AI-04 v0.2): 판정기가 준 사항별 결과를 보드에 담고, 정리본과 미결 목록에도 복사해 담는다
+    pts_a1 = [{"decisionPointId": 7, "status": "DECIDED", "decisionText": "목요일로 정함", "evidenceSeqs": [1, 2], "edited": False, "needsCheck": False}]
+    with_pts = {"a1": {"status": "DECIDED", "reason": {"text": "결정할 사항 1개가 모두 결정됨", "evidenceSeqs": [1, 2]}, "points": pts_a1},
+                "a2": {"status": "NOT_STARTED", "reason": None, "points": [{"decisionPointId": 8, "status": "NOT_STARTED", "decisionText": "아직 논의되지 않았어요",
+                                                                            "evidenceSeqs": [], "edited": False, "needsCheck": False}]}}
+    b = s.take_board(status_info=with_pts, leftover=lf2(7, with_pts))
+    assert board_of(b, "a1")["decisionPoints"] == pts_a1 and board_of(b, "a1")["decisionPoints"] is not pts_a1
+    assert board_of(b, "a2")["decisionPoints"][0]["evidenceSeqs"] == [], "근거가 비어 있어도 그대로 담는다"
+    pts_a1[0]["evidenceSeqs"].append(99)
+    assert board_of(b, "a1")["decisionPoints"][0]["evidenceSeqs"] == [1, 2], "보드에는 복사해 담는다"
+    t1 = [x for x in b["todaySummary"]["agendas"] if x["agendaId"] == "a1"][0]
+    assert t1["decisionPoints"] == board_of(b, "a1")["decisionPoints"] and t1["decisionPoints"] is not board_of(b, "a1")["decisionPoints"]
+    assert [x["agendaId"] for x in b["leftover"]["agendas"]] == ["a2"] and b["leftover"]["agendas"][0]["decisionPoints"][0]["decisionPointId"] == 8
+    b = s.take_board(status_info={k: {"status": v["status"], "reason": v["reason"]} for k, v in with_pts.items()}, leftover=lf2(7, with_pts))
+    assert board_of(b, "a1")["decisionPoints"] == [], "판정기가 사항을 주지 않으면 빈 배열"
     json.dumps(b)
 
     # 18) 로그에는 전사, 안건 제목, 요약 문장이 남지 않는다

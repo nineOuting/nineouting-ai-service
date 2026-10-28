@@ -32,7 +32,7 @@ if SUMMARY_DIR not in sys.path:
     sys.path.insert(0, SUMMARY_DIR)
 
 from input_adapter import (adapt_batch, adapt_event, adapt_agendas, adapt_corrections, adapt_summary_edits,  # noqa: E402
-                           adapt_item_edits, adapt_offtopic_action, adapt_end_request, AdapterError)
+                           adapt_item_edits, adapt_decision_edits, adapt_offtopic_action, adapt_end_request, AdapterError)
 from meeting_live_summary_v2 import LiveSummarizer, Cfg  # noqa: E402
 from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
 from agenda_summarizer import AgendaSummarizer, SummarizeCfg  # noqa: E402
@@ -387,6 +387,21 @@ class Registry:
         r = m.agenda_summarizer.apply_edits(e["edits"])
         if r["applied"]:
             m.queue.put(("tick", None))                         # 고친 안건은 기다리지 않고 다음 주기에 다시 요약한다
+            self._ensure_worker(m)
+        return {"accepted": True, "result": "accepted" if r["applied"] else "stale", "applied": r["applied"], "ignored": r["ignored"]}
+
+    def receive_decision_edits(self, path_meeting_id, msg):
+        """사람이 고친 결정 내용 (agenda-status-contract.md 7장). 고친 사항은 고정하고 상태만 계속 판정한다."""
+        self._require_ready()
+        e = adapt_decision_edits(msg)
+        self._check_same_id(path_meeting_id, e["meeting_id"])
+        m = self._get(e["meeting_id"], e.get("meeting_id_raw"))
+        with m.lock:
+            if m.status == "ended":
+                return {"accepted": False, "result": "ignored", "reason": "ended"}
+        r = m.status_judge.apply_edits(e["edits"])
+        if r["applied"]:
+            m.queue.put(("tick", None))                         # 고친 안건은 기다리지 않고 다음 주기에 다시 판정한다
             self._ensure_worker(m)
         return {"accepted": True, "result": "accepted" if r["applied"] else "stale", "applied": r["applied"], "ignored": r["ignored"]}
 

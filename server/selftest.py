@@ -1307,7 +1307,8 @@ def test_agenda_leftover_flow(cap):
     assert by_agenda(b, 101)["status"] == "DECIDED", "flush 로 방금 나온 결정이 반영된다"
     assert any(6 in x["evidenceSeqs"] for x in by_agenda(b, 101)["summary"]), "flush 로 방금 나온 줄이 요약에도 반영된다"
     assert [x["agendaId"] for x in lf["agendas"]] == [102, 103] and [x["status"] for x in lf["agendas"]] == ["UNDECIDED", "NOT_STARTED"], lf
-    assert all(set(x) == {"agendaId", "status", "statusReason", "summary"} for x in lf["agendas"])
+    assert all(set(x) == {"agendaId", "status", "statusReason", "decisionPoints", "summary"} for x in lf["agendas"])
+    assert all(len(x["decisionPoints"]) == 1 and x["decisionPoints"][0]["decisionPointId"] is None for x in lf["agendas"]), "옛 모양의 안건은 번호 없는 사항 1개"
     assert lf["agendas"][0]["summary"] == by_agenda(b, 102)["summary"] and lf["agendas"][0]["summary"], "논의 요약은 보드의 AI-03 요약 문장 그대로"
     assert lf["agendas"][1]["summary"] == [] and lf["agendas"][1]["statusReason"] is None
     assert lf["agendas"][0]["statusReason"]["evidenceSeqs"], "근거 줄 번호가 있다"
@@ -1335,7 +1336,7 @@ def test_agenda_leftover_flow(cap):
     b = boards()[-1]
     assert by_agenda(b, 102)["status"] == "DISCUSSING", "미리보기는 보드의 상태를 확정하지 않는다"
     assert b["leftover"]["requestRev"] == 4 and [(x["agendaId"], x["status"]) for x in b["leftover"]["agendas"]] == [(102, "UNDECIDED"), (103, "NOT_STARTED")], b["leftover"]
-    assert "종료를 요청한" in b["leftover"]["agendas"][0]["statusReason"]["text"]
+    assert b["leftover"]["agendas"][0]["statusReason"]["text"].startswith("결정할 사항 1개 중 0개가 결정됨"), "상태 문구는 코드가 만든 사항 개수 문장"
 
     # 회의가 끝나면 마지막 값. 이때 상태가 확정되어 보드의 상태와 목록의 상태가 같다
     reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": 40000})
@@ -1344,7 +1345,7 @@ def test_agenda_leftover_flow(cap):
     assert b["leftover"]["final"] is True and b["leftover"]["requestRev"] == 4, b["leftover"]
     assert [(x["agendaId"], x["status"]) for x in b["leftover"]["agendas"]] == [(102, "UNDECIDED"), (103, "NOT_STARTED")]
     assert by_agenda(b, 102)["status"] == "UNDECIDED"
-    assert "끝날 때까지" in b["leftover"]["agendas"][0]["statusReason"]["text"]
+    assert b["leftover"]["agendas"][0]["statusReason"]["text"].startswith("결정할 사항 1개 중 0개가 결정됨"), "상태 문구는 코드가 만든 사항 개수 문장"
     assert reg.receive_end_request(path, {"meetingId": mid, "action": "request", "rev": 9}) == {"accepted": False, "result": "ignored", "reason": "ended"}
     st = reg.status(path)
     assert st["errors"] == 0 and st["agendaLeftover"] == {"requestRev": 4, "active": True, "final": True, "requests": 2}, st
@@ -1499,7 +1500,7 @@ def test_agenda_today_summary_flow():
     assert [x["agendaId"] for x in ts["agendas"]] == [x["agendaId"] for x in b["agendas"]] == [101, 102, 103], "안건 순서 그대로, 안건마다 한 칸"
     assert [x["status"] for x in ts["agendas"]] == ["DECIDED", "UNDECIDED", "NOT_STARTED"], "flush 로 방금 나온 결정이 정리본에 들어간다"
     for x in ts["agendas"]:
-        assert set(x) == {"agendaId", "status", "statusReason", "summary", "opinions", "todos"} and "decision" not in x, x
+        assert set(x) == {"agendaId", "status", "statusReason", "decisionPoints", "summary", "opinions", "todos"} and "decision" not in x, x
         bx = by_agenda(b, x["agendaId"])
         assert x["summary"] == bx["summary"] and x["opinions"] == bx["opinions"] and x["todos"] == bx["todos"], "보드의 AI-03·05 결과 그대로"
         assert x["summary"] is not bx["summary"], "복사해 담는다"
@@ -1636,6 +1637,131 @@ def test_api_end_request():
         main.registry.shutting_down = False
 
 
+def test_decision_points_flow(cap):
+    """결정할 사항 단위 판정 (AI-04 v0.2): 새 모양의 안건 목록을 받으면 보드의 안건마다 decisionPoints 가 담기고, 사람이 고친 결정 내용은
+    고정되며 상태만 계속 판정한다. 같은 고침은 무시하고, 끝난 회의의 고침은 받지 않는다"""
+    from input_adapter import AdapterError
+    reg, path, send, boards, pub = leftover_meeting(91)
+    mid = 91
+    ag = dict(load("agendas-decision-points-put.json"), meetingId=mid, version=100)
+    assert reg.receive_agendas(path, ag)["result"] == "accepted"
+    assert reg.wait_idle(path) and pub.wait_idle()
+    a = by_agenda(boards()[-1], 101)
+    assert [(p["decisionPointId"], p["status"]) for p in a["decisionPoints"]] == [(7, "NOT_STARTED"), (8, "NOT_STARTED"), (9, "NOT_STARTED")], a
+    assert all(p["decisionText"] == "아직 논의되지 않았어요" and p["evidenceSeqs"] == [] for p in a["decisionPoints"]), "줄이 없으면 논의 전 고정 문구"
+    assert [len(by_agenda(boards()[-1], x)["decisionPoints"]) for x in (101, 102, 103)] == [3, 2, 1]
+
+    send([lo_line(1, "배포 일정 이야기 1번"), lo_line(2, "배포 일정 이야기 2번"), lo_line(3, "배포 일정은 목요일로 하기로 확정")])
+    b = boards()[-1]
+    a = by_agenda(b, 101)
+    assert a["status"] == "DECIDED" and [p["status"] for p in a["decisionPoints"]] == ["DECIDED"] * 3, a      # 모의 판정기는 모든 사항에 같은 판정
+    assert all(p["evidenceSeqs"] == [3] and not p["edited"] and not p["needsCheck"] for p in a["decisionPoints"])
+    assert a["statusReason"] == {"text": "결정할 사항 3개가 모두 결정됨", "evidenceSeqs": [3]}, a["statusReason"]
+    assert by_agenda(b, 102)["status"] == "NOT_STARTED" and by_agenda(b, 102)["statusReason"] is None
+    json.dumps(b)
+
+    # 사람이 고친 결정 내용: 고정하고 보드에 바로 반영한다 (주소는 cn 팀이 요청한 decision-edits)
+    edit = {"agendaId": 101, "decisionPointId": 8, "decisionText": "배포 담당은 인프라 팀으로 확정", "evidenceSeqs": [3], "rev": 1}
+    assert reg.receive_decision_edits(path, {"meetingId": mid, "edits": [edit]}) == {"accepted": True, "result": "accepted", "applied": 1, "ignored": []}
+    assert reg.wait_idle(path) and pub.wait_idle()
+    pts = by_agenda(boards()[-1], 101)["decisionPoints"]
+    assert pts[1] == {"decisionPointId": 8, "status": "DECIDED", "decisionText": "배포 담당은 인프라 팀으로 확정",
+                      "evidenceSeqs": [3], "edited": True, "needsCheck": False}, pts[1]
+    assert not pts[0]["edited"] and not pts[2]["edited"]
+    n0 = len(boards())
+    r = reg.receive_decision_edits(path, {"meetingId": mid, "edits": [edit]})
+    assert r == {"accepted": True, "result": "stale", "applied": 0, "ignored": [{"decisionPointId": 8, "reason": "stale"}]}, r
+    assert reg.wait_idle(path) and pub.wait_idle() and len(boards()) == n0, "같은 고침을 다시 받아도 보드를 다시 보내지 않는다"
+
+    # 새 줄이 와서 다시 판정해도 고친 글과 근거는 그대로, 고치지 않은 사항은 새 판정으로 바뀐다
+    send([lo_line(4, "배포 일정 이야기 4번"), lo_line(5, "배포 일정은 금요일로 하기로 결정")])
+    pts = by_agenda(boards()[-1], 101)["decisionPoints"]
+    assert pts[1]["decisionText"] == "배포 담당은 인프라 팀으로 확정" and pts[1]["evidenceSeqs"] == [3] and pts[1]["edited"], pts[1]
+    assert pts[0]["evidenceSeqs"] == [5] and pts[0]["edited"] is False and pts[2]["evidenceSeqs"] == [5], pts
+    assert reg.status(path)["agendaStatus"]["decided"] == 3, "상태 조회는 결정된 사항 수"
+
+    # 잘못된 고침은 거절하고, 끝난 회의의 고침은 받지 않는다
+    for bad in (dict(edit, decisionText="  ", rev=2), dict(edit, evidenceSeqs=["3"], rev=2), {k: v for k, v in edit.items() if k != "decisionPointId"}):
+        try:
+            reg.receive_decision_edits(path, {"meetingId": mid, "edits": [bad]})
+            raise SystemExit("잘못된 고침을 못 잡음")
+        except AdapterError:
+            pass
+    try:
+        reg.receive_decision_edits("92", {"meetingId": mid, "edits": [dict(edit, rev=2)]})
+        raise SystemExit("주소와 본문의 meetingId 불일치를 못 잡음")
+    except AdapterError:
+        pass
+    reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": 100000})
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert reg.receive_decision_edits(path, {"meetingId": mid, "edits": [dict(edit, rev=3)]}) == {"accepted": False, "result": "ignored", "reason": "ended"}
+    fin = by_agenda(boards()[-1], 101)
+    assert fin["status"] == "DECIDED" and fin["decisionPoints"][1]["edited"] is True
+
+
+def test_decision_points_examples():
+    """새 모양의 예시(결정할 사항)가 계약과 맞는다: 어댑터가 받고, 보드의 안건 상태와 문구가 사항 상태에서 정한 규칙과 같고, 사항 번호가
+    안건 목록과 같고, 모든 보드 예시에 decisionPoints 가 있다 (문서의 예시가 낡지 않게)"""
+    from input_adapter import adapt_agendas, adapt_decision_edits
+    from agenda_status import derive_status, _reason_text, DECIDED, DECISION_CHECK, NOT_STARTED
+    inp = adapt_agendas(load("agendas-decision-points-put.json"))
+    assert [(a["id"], [p["id"] for p in a["points"]]) for a in inp["agendas"]] == [(101, [7, 8, 9]), (102, [10, 11]), (103, [12])]
+    assert inp["agendas"][0]["decision_point"] == "1차 배포 날짜 확정 / 배포 담당 지정 / 배포 전 점검 항목 확정"
+    old = adapt_agendas(load("agendas-put.json"))
+    assert all("points" not in a for a in old["agendas"]), "옛 모양(decisionPoint 문자열)은 전환 기간에 그대로 받는다"
+    ids = {a["id"]: [p["id"] for p in a["points"]] for a in inp["agendas"]}
+    keys = {"decisionPointId", "status", "decisionText", "evidenceSeqs", "edited", "needsCheck"}
+
+    def check_board(ex, name, same_ids=False):
+        for a in ex["agendas"]:
+            pts = a["decisionPoints"]
+            assert pts and all(set(p) == keys and p["decisionText"] for p in pts), (name, a["agendaId"])
+            assert all(p["evidenceSeqs"] for p in pts if p["status"] in (DECIDED, DECISION_CHECK)), "결정, 결정 확인 필요는 근거가 있다"
+            sts = [p["status"] for p in pts]
+            assert derive_status(sts, a["status"] != NOT_STARTED, a["agendaId"] == ex["currentAgendaId"]) == a["status"], (name, a["agendaId"])
+            if a["status"] == NOT_STARTED:
+                assert a["statusReason"] is None
+            else:
+                assert a["statusReason"]["text"] == _reason_text(sts) and a["statusReason"]["evidenceSeqs"], (name, a["agendaId"])
+            if same_ids:
+                assert [p["decisionPointId"] for p in pts] == ids[a["agendaId"]], "사항 번호는 안건 목록의 번호 그대로"
+    check_board(load("agenda-board-decision-points-put.json"), "decision-points", same_ids=True)
+    for n in ("agenda-board-put.json", "agenda-board-opinions-put.json", "agenda-board-offtopic-put.json",
+              "agenda-board-leftover-put.json", "agenda-board-today-summary-put.json"):
+        check_board(load(n), n)
+    ex = load("agenda-board-decision-points-put.json")
+    e = adapt_decision_edits(load("decision-edits-post.json"))["edits"]
+    assert len(e) == 1 and e[0]["agenda_id"] == 102 and e[0]["point_id"] == 10 and e[0]["rev"] == 2
+    p10 = next(p for a in ex["agendas"] if a["agendaId"] == 102 for p in a["decisionPoints"] if p["decisionPointId"] == 10)
+    assert p10["edited"] is True and p10["decisionText"] == e[0]["text"] and p10["evidenceSeqs"] == e[0]["evidence_seqs"], "고친 결정 내용 예시와 보드 예시가 같다"
+
+
+def test_api_decision_edits():
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        return
+    from . import main
+    c = TestClient(main.app)
+    mid = "93"
+    url = f"/internal/meetings/{mid}/decision-edits"
+    body = dict(load("decision-edits-post.json"), meetingId=mid)
+    r = c.post(url, json=body)
+    assert r.status_code == 200 and r.json() == {"accepted": True, "result": "accepted", "applied": 1, "ignored": []}, r.text
+    r = c.post(url, json=body)
+    assert r.json() == {"accepted": True, "result": "stale", "applied": 0, "ignored": [{"decisionPointId": 10, "reason": "stale"}]}, r.text
+    assert c.put(url, json=body).status_code == 405                                      # 고친 결정 내용은 POST 만
+    r = c.post(url, json={"meetingId": mid, "edits": [{"agendaId": 102, "decisionPointId": 10, "decisionText": " ", "evidenceSeqs": [], "rev": 1}]})
+    assert r.status_code == 400 and r.json()["error"] == "INVALID_INPUT" and "decisionText" in r.json()["detail"], r.text
+    assert c.post(url.replace(mid, "94"), json=body).status_code == 400                  # 주소와 본문의 meetingId 불일치
+    main.registry.shutting_down = True
+    try:
+        assert c.post(url, json=body).status_code == 503
+        assert c.post(url, json=body).json()["error"] == "NOT_READY"
+    finally:
+        main.registry.shutting_down = False
+
+
 def main():
     cap = Capture()
     logging.getLogger("ai-service").addHandler(cap)
@@ -1668,6 +1794,7 @@ def main():
     test_agenda_items_flow(cap)
     test_agenda_items_isolated()
     test_api_item_edits()
+    test_api_decision_edits()
     test_offtopic_cfg()
     test_agenda_offtopic_flow(cap)
     test_agenda_offtopic_isolated()
@@ -1679,6 +1806,8 @@ def main():
     test_agenda_today_summary_flow()
     test_agenda_today_summary_isolated()
     test_today_summary_example()
+    test_decision_points_flow(cap)
+    test_decision_points_examples()
     test_api_end_request()
     test_numeric_meeting_id()
     print("수신 서버 자체 시험 통과 (설정, 묶음 번호 409, 요약 전송·재시도, 503, 잘못된 요청, 처리 실패, 토큰 지표, 로그에 전사 내용 없음, HTTP, "

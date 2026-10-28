@@ -30,6 +30,7 @@ AGENDAS_PATH = "/internal/meetings/{meeting_id}/agendas"                    # �
 CORRECTIONS_PATH = "/internal/meetings/{meeting_id}/agenda-corrections"    # 사람이 고친 분류 (POST)
 SUMMARY_EDITS_PATH = "/internal/meetings/{meeting_id}/agenda-summary-edits"  # 사람이 고친 요약 문장 (POST)
 ITEM_EDITS_PATH = "/internal/meetings/{meeting_id}/agenda-item-edits"        # 사람이 고친 의견·할 일 (POST)
+DECISION_EDITS_PATH = "/internal/meetings/{meeting_id}/decision-edits"        # 사람이 고친 결정 내용 (POST)
 OFFTOPIC_ACTIONS_PATH = "/internal/meetings/{meeting_id}/off-topic-actions"  # 새 안건 제안을 무시했다는 알림 (POST)
 END_REQUESTS_PATH = "/internal/meetings/{meeting_id}/end-requests"           # 종료 버튼·이어서 논의하기 (POST)
 
@@ -147,6 +148,16 @@ def post_corrections(meeting_id: str, msg: dict = Body(...)):
 def post_summary_edits(meeting_id: str, msg: dict = Body(...)):
     try:
         return registry.receive_summary_edits(meeting_id, msg)
+    except NotReady as e:
+        return not_ready(str(e))
+    except AdapterError as e:
+        return invalid(str(e))
+
+
+@app.post(DECISION_EDITS_PATH)
+def post_decision_edits(meeting_id: str, msg: dict = Body(...)):
+    try:
+        return registry.receive_decision_edits(meeting_id, msg)
     except NotReady as e:
         return not_ready(str(e))
     except AdapterError as e:

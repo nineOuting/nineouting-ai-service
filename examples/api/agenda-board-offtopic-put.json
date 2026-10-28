@@ -7,12 +7,25 @@
       "agendaId": 101,
       "status": "DECISION_CHECK",
       "statusReason": {
-        "text": "금요일로 미루자는 의견이 나왔으나 합의 표현은 확인되지 않음",
+        "text": "결정할 사항 1개 중 0개가 결정됨 (결정 확인 필요 1개)",
         "evidenceSeqs": [
           44,
           45
         ]
       },
+      "decisionPoints": [
+        {
+          "decisionPointId": 7,
+          "status": "DECISION_CHECK",
+          "decisionText": "1차 배포는 금요일로 미루는 것으로 보인다",
+          "evidenceSeqs": [
+            44,
+            45
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
       "summary": [
         {
           "id": "k3f9a1-1",
@@ -103,12 +116,25 @@
       "agendaId": 102,
       "status": "DISCUSSING",
       "statusReason": {
-        "text": "연결된 발언 2줄이 이어지는 중",
+        "text": "결정할 사항 1개 중 0개가 결정됨 (미결 1개)",
         "evidenceSeqs": [
           47,
           48
         ]
       },
+      "decisionPoints": [
+        {
+          "decisionPointId": 10,
+          "status": "UNDECIDED",
+          "decisionText": "외부 API 비용 한도는 아직 정해지지 않았다",
+          "evidenceSeqs": [
+            47,
+            48
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
       "summary": [
         {
           "id": "k3f9a1-3",
@@ -168,6 +194,16 @@
       "agendaId": 103,
       "status": "NOT_STARTED",
       "statusReason": null,
+      "decisionPoints": [
+        {
+          "decisionPointId": 12,
+          "status": "NOT_STARTED",
+          "decisionText": "아직 논의되지 않았어요",
+          "evidenceSeqs": [],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
       "summary": [],
       "opinions": [],
       "todos": []

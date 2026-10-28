@@ -259,7 +259,7 @@ AI-02·03·04·05·06의 결과가 모두 안건 보드로 모이도록, 어디�
 
 | 파일 | 내용 |
 |---|---|
-| `examples/api/agenda-board-put.json` | 안건 보드 한 번의 본문 (고친 문장, 확인 필요, 요약이 비어 있는 안건 포함). `decisionPoints`가 없는 옛 모양이며 구현 때 새 모양으로 바꾼다 |
+| `examples/api/agenda-board-put.json` | 안건 보드 한 번의 본문 (고친 문장, 확인 필요, 요약이 비어 있는 안건 포함, 안건마다 `decisionPoints`) |
 | `examples/api/agenda-board-decision-points-put.json` | 안건 보드의 새 모양 (`decisionPoints`, 결정·결정 확인 필요·미결·논의 전 사항과 사람이 고친 결정 내용 포함) |
 | `examples/api/agenda-summary-edits-post.json` | 사람이 고친 요약과 확인 표시 |
 

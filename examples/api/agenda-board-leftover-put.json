@@ -7,12 +7,25 @@
       "agendaId": 101,
       "status": "DECIDED",
       "statusReason": {
-        "text": "다음 주 목요일 배포에 동의하는 말이 이어짐",
+        "text": "결정할 사항 1개가 모두 결정됨",
         "evidenceSeqs": [
           43,
           45
         ]
       },
+      "decisionPoints": [
+        {
+          "decisionPointId": 7,
+          "status": "DECIDED",
+          "decisionText": "1차 배포는 다음 주 목요일로 정한다",
+          "evidenceSeqs": [
+            43,
+            45
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
       "summary": [
         {
           "id": "k3f9a1-1",
@@ -33,11 +46,31 @@
       "agendaId": 102,
       "status": "DISCUSSING",
       "statusReason": {
-        "text": "연결된 발언 4줄이 이어지는 중",
+        "text": "결정할 사항 2개 중 0개가 결정됨 (미결 1개, 논의 전 1개)",
         "evidenceSeqs": [
           51
         ]
       },
+      "decisionPoints": [
+        {
+          "decisionPointId": 10,
+          "status": "UNDECIDED",
+          "decisionText": "외부 API 비용 한도는 사용량을 확인한 뒤 정하자는 의견만 나왔다",
+          "evidenceSeqs": [
+            51
+          ],
+          "edited": false,
+          "needsCheck": false
+        },
+        {
+          "decisionPointId": 11,
+          "status": "NOT_STARTED",
+          "decisionText": "아직 논의되지 않았어요",
+          "evidenceSeqs": [],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
       "summary": [
         {
           "id": "k3f9a1-3",
@@ -66,6 +99,16 @@
       "agendaId": 103,
       "status": "NOT_STARTED",
       "statusReason": null,
+      "decisionPoints": [
+        {
+          "decisionPointId": 12,
+          "status": "NOT_STARTED",
+          "decisionText": "아직 논의되지 않았어요",
+          "evidenceSeqs": [],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
       "summary": [],
       "opinions": [],
       "todos": []
@@ -80,11 +123,31 @@
         "agendaId": 102,
         "status": "UNDECIDED",
         "statusReason": {
-          "text": "종료를 요청한 시점까지 결정 표현을 찾지 못함 (연결된 발언 4줄)",
+          "text": "결정할 사항 2개 중 0개가 결정됨 (미결 1개, 논의 전 1개)",
           "evidenceSeqs": [
             51
           ]
         },
+        "decisionPoints": [
+          {
+            "decisionPointId": 10,
+            "status": "UNDECIDED",
+            "decisionText": "외부 API 비용 한도는 사용량을 확인한 뒤 정하자는 의견만 나왔다",
+            "evidenceSeqs": [
+              51
+            ],
+            "edited": false,
+            "needsCheck": false
+          },
+          {
+            "decisionPointId": 11,
+            "status": "NOT_STARTED",
+            "decisionText": "아직 논의되지 않았어요",
+            "evidenceSeqs": [],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
         "summary": [
           {
             "id": "k3f9a1-3",
@@ -111,6 +174,16 @@
         "agendaId": 103,
         "status": "NOT_STARTED",
         "statusReason": null,
+        "decisionPoints": [
+          {
+            "decisionPointId": 12,
+            "status": "NOT_STARTED",
+            "decisionText": "아직 논의되지 않았어요",
+            "evidenceSeqs": [],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
         "summary": []
       }
     ]

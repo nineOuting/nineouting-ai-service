@@ -199,7 +199,7 @@ POST /internal/meetings/{meetingId}/end-requests
 
 | 파일 | 내용 |
 |---|---|
-| `examples/api/agenda-board-leftover-put.json` | 안건 보드 한 번의 본문 (종료 버튼 요청을 받은 상태. 보드는 논의 중인 안건이 목록에서는 미결로 담겨 있다). `decisionPoints`가 없는 옛 모양이며 구현 때 3장의 새 모양으로 바꾼다 |
+| `examples/api/agenda-board-leftover-put.json` | 안건 보드 한 번의 본문 (종료 버튼 요청을 받은 상태. 보드는 논의 중인 안건이 목록에서는 미결로 담겨 있다. 안건마다 `decisionPoints`) |
 | `examples/api/end-request-post.json` | 종료 버튼 요청 (`request`) |
 | `examples/api/end-request-cancel-post.json` | 이어서 논의하기 (`cancel`) |
 

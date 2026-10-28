@@ -258,6 +258,6 @@ AI 서버가 재시작하면 정리본은 메모리에서 사라진다. `leftove
 
 | 파일 | 내용 |
 |---|---|
-| `examples/api/agenda-board-today-summary-put.json` | 안건 보드 한 번의 본문 (종료 버튼 요청을 받은 상태. 안건 3개: 결정 1, 미결 1, 아직 안 다룸 1, 할 일 2건). `decisionPoints`가 없는 옛 모양이며 구현 때 3장의 새 모양으로 바꾼다 |
+| `examples/api/agenda-board-today-summary-put.json` | 안건 보드 한 번의 본문 (종료 버튼 요청을 받은 상태. 안건 3개: 결정 1, 미결 1, 아직 안 다룸 1, 할 일 2건. 안건마다 `decisionPoints`) |
 
 예시의 내용은 형식을 보여 주기 위해 만든 것이며 실제 회의가 아니다. 예시 파일이 실제 코드의 출력과 같은지는 서버 자체 시험이 확인한다.

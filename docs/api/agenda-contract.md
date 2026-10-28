@@ -253,7 +253,7 @@ ai-service는 회의 상태를 메모리에만 둔다. 재시작하면 안건 �
 
 | 파일 | 내용 |
 |---|---|
-| `examples/api/agendas-put.json` | 안건 목록 (회의 중에 추가한 안건 포함). 옛 `decisionPoint` 모양이며 구현 때 새 모양으로 바꾼다 |
+| `examples/api/agendas-put.json` | 안건 목록 (회의 중에 추가한 안건 포함). 옛 `decisionPoint`(문자열 하나) 모양이다. 전환 기간 호환을 시험하는 데 쓰므로 그대로 둔다 |
 | `examples/api/agendas-decision-points-put.json` | 안건 목록의 새 모양 (`decisionPoints`, 사항이 여러 개인 안건 포함) |
 | `examples/api/agenda-classification-put.json` | 분류 결과 한 번의 본문 (해당 없음 포함) |
 | `examples/api/agenda-corrections-post.json` | 사람이 고친 분류 |

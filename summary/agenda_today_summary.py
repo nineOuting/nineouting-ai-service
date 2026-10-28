@@ -37,6 +37,7 @@ def build_today_summary(meta, ents):
         r = si.get("reason")
         agendas.append({"agendaId": ent["agendaId"], "status": si["status"],
                         "statusReason": {"text": r["text"], "evidenceSeqs": list(r["evidenceSeqs"])} if r else None,
+                        "decisionPoints": copy.deepcopy(ent.get("decisionPoints", [])),
                         "summary": copy.deepcopy(ent["summary"]),
                         "opinions": copy.deepcopy(ent["opinions"]),
                         "todos": copy.deepcopy(ent["todos"])})
@@ -63,8 +64,11 @@ def selftest():
         return {"id": tid, "task": task, "assigneeName": name, "assigneeStatus": status, "assigneeUserId": uid, "dueText": due,
                 "evidenceSeqs": [5], "edited": False, "needsCheck": False, "unclear": False}
 
-    def ent(aid, s=(), o=(), t=()):
-        return {"agendaId": aid, "summary": summ(aid, s), "opinions": op(aid, o), "todos": list(t)}
+    def dp(i, status, text, ev=(), edited=False, need=False):
+        return {"decisionPointId": i, "status": status, "decisionText": text, "evidenceSeqs": list(ev), "edited": edited, "needsCheck": need}
+
+    def ent(aid, s=(), o=(), t=(), d=()):
+        return {"agendaId": aid, "decisionPoints": list(d), "summary": summ(aid, s), "opinions": op(aid, o), "todos": list(t)}
 
     why = lambda t, *s: {"text": t, "evidenceSeqs": list(s)}
     status = {"k1": {"status": "DECIDED", "reason": why("목요일로 확정", 3)},
@@ -72,8 +76,10 @@ def selftest():
               "k3": {"status": "NOT_STARTED", "reason": None},
               "k4": {"status": "DECISION_CHECK", "reason": why("확인", 12, 13)},
               "k5": {"status": "DECIDED", "reason": None}}
-    ents = [("k1", ent(101, ["a", "a2"], ["o1"], [todo("t1", "일정 공유", "철수", "MATCHED", "수요일까지", 7), todo("t2", "표 만들기")])),
-            ("k2", ent(102, ["b"], ["o2"], [todo("t3", "예산안 검토", "민수", "NOT_IN_ROSTER", None)])),
+    ents = [("k1", ent(101, ["a", "a2"], ["o1"], [todo("t1", "일정 공유", "철수", "MATCHED", "수요일까지", 7), todo("t2", "표 만들기")],
+                              [dp(7, "DECIDED", "목요일로 정함", [3, 4]), dp(8, "DECISION_CHECK", "담당 후보", [5], edited=True, need=True)])),
+            ("k2", ent(102, ["b"], ["o2"], [todo("t3", "예산안 검토", "민수", "NOT_IN_ROSTER", None)],
+                       [dp(9, "UNDECIDED", "점검 항목은 정해지지 않음", [])])),
             ("k3", ent(103)),
             ("k4", ent(104, ["d"], [], [todo("t4", "QA 담당 확인", "  ", "UNASSIGNED", "   ")])),
             ("k5", ent(105, ["e"])),
@@ -84,8 +90,8 @@ def selftest():
     # 1) 머리값과 안건별 묶음: 보드 순서, 상태가 있는 안건 모두, 안건마다 같은 여섯 칸
     assert set(out) == {"requestRev", "final", "agendas"} and out["requestRev"] == 4 and out["final"] is False
     assert [a["agendaId"] for a in out["agendas"]] == [101, 102, 103, 104, 105], "보드 순서, 상태 없는 107 은 없다"
-    assert all(set(a) == {"agendaId", "status", "statusReason", "summary", "opinions", "todos"} for a in out["agendas"])
-    assert "decision" not in out["agendas"][0], "결정 문장은 만들지 않는다 (초안이 statusReason 으로 만든다)"
+    assert all(set(a) == {"agendaId", "status", "statusReason", "decisionPoints", "summary", "opinions", "todos"} for a in out["agendas"])
+    assert "decision" not in out["agendas"][0], "안건 단위 결정 문장(decision)은 없다. 결정 문장은 사항별 decisionText 다"
     assert [a["status"] for a in out["agendas"]] == ["DECIDED", "UNDECIDED", "NOT_STARTED", "DECISION_CHECK", "DECIDED"]
     assert out["agendas"][0]["statusReason"] == why("목요일로 확정", 3) and out["agendas"][2]["statusReason"] is None and out["agendas"][4]["statusReason"] is None
     assert out["agendas"][3]["statusReason"] == why("확인", 12, 13)
@@ -99,14 +105,21 @@ def selftest():
         "담당자·기한 미정 표시 칸을 더하지 않는다"
     assert a0["todos"][1]["assigneeName"] is None and a0["todos"][1]["dueText"] is None, "미정은 null 로 안다"
     assert a1["todos"][0]["assigneeName"] == "민수" and a1["todos"][0]["assigneeStatus"] == "NOT_IN_ROSTER", "명단과 못 맞춘 이름도 그대로"
+    # 2-1) 결정할 사항별 결과(AI-04)도 보드 값 그대로: 결정, 결정 확인 필요, 미결, 고친 표시, 근거 줄 (빈 근거도 그대로)
+    assert a0["decisionPoints"] == ents[0][1]["decisionPoints"] and [p["status"] for p in a0["decisionPoints"]] == ["DECIDED", "DECISION_CHECK"]
+    assert a0["decisionPoints"][1]["edited"] is True and a0["decisionPoints"][1]["needsCheck"] is True
+    assert a1["decisionPoints"][0]["evidenceSeqs"] == [] and out["agendas"][2]["decisionPoints"] == []
+    assert set(a0["decisionPoints"][0]) == {"decisionPointId", "status", "decisionText", "evidenceSeqs", "edited", "needsCheck"}
 
     # 3) 복사본: 원본이나 결과를 바꿔도 서로 영향이 없다
     ents[0][1]["summary"][0]["text"] = "바뀜"
     ents[0][1]["opinions"][0]["evidenceSeqs"].append(99)
     ents[0][1]["todos"][0]["task"] = "바뀜"
+    ents[0][1]["decisionPoints"][0]["evidenceSeqs"].append(99)
     status["k1"]["reason"]["evidenceSeqs"].append(99)
     assert a0["summary"][0]["text"] == "a" and a0["opinions"][0]["evidenceSeqs"] == [2]
     assert a0["todos"][0]["task"] == "일정 공유" and a0["statusReason"]["evidenceSeqs"] == [3]
+    assert a0["decisionPoints"][0]["evidenceSeqs"] == [3, 4], "결정할 사항도 복사해 담는다"
     a0["todos"][1]["task"] = "결과를 바꿔 봄"
     assert ents[0][1]["todos"][1]["task"] == "표 만들기", "결과를 바꿔도 원본은 그대로"
 
@@ -114,13 +127,13 @@ def selftest():
     fin = build_today_summary({"requestRev": None, "final": True, "status_info": {"k1": {"status": "UNDECIDED", "reason": why("끝", 7)}}},
                               [("k1", ent(101, ["a"], [], [todo("t1", "x")]))])
     assert fin == {"requestRev": None, "final": True, "agendas": [
-        {"agendaId": 101, "status": "UNDECIDED", "statusReason": why("끝", 7), "summary": summ(101, ["a"]), "opinions": [], "todos": [todo("t1", "x")]}]}, fin
+        {"agendaId": 101, "status": "UNDECIDED", "statusReason": why("끝", 7), "decisionPoints": [], "summary": summ(101, ["a"]), "opinions": [], "todos": [todo("t1", "x")]}]}, fin
     empty = build_today_summary({"requestRev": 1, "final": False, "status_info": {}}, [])
     assert empty == {"requestRev": 1, "final": False, "agendas": []}
     assert counts(out) == {"agendas": 5, "decided": 2, "todos": 4} and counts(None) == {"agendas": 0, "decided": 0, "todos": 0}
     import json
     json.dumps(out)
-    print("AI-08 오늘 회의 요약 정리본 자체 시험 통과 (안건별 묶음, 결정 문장 없음, 복사본, 끝, 빈 결과)")
+    print("AI-08 오늘 회의 요약 정리본 자체 시험 통과 (안건별 묶음, 결정할 사항별 결과, 결정 문장 없음, 복사본, 끝, 빈 결과)")
 
 
 if __name__ == "__main__":

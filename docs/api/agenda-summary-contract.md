@@ -61,6 +61,7 @@ AI-08은 새로 요약하지 않고 이 요약을 모아 배치한다. 그래서
 | `agendaId` | 안건 번호 | 안건 목록의 값 |
 | `status` | 문자열 | 안건 상태 판정(AI-04). 값과 `statusReason`은 `agenda-status-contract.md` |
 | `summary` | 배열 | 그 안건의 요약 문장 전체. 항목은 4.3. 비어 있으면 보여 줄 요약이 없다는 뜻이다 |
+| `decisionPoints` | 배열 | 결정할 사항마다 상태, 결정 내용, 근거(AI-04). 안건 목록의 모든 사항이 들어 있다. 항목은 `agenda-status-contract.md` 3.1. 안건의 `status`는 이 값에서 정한다 |
 | `opinions` | 배열 | 의견·근거(AI-05) 구현 전까지 빈 배열 |
 
 연동 API 초안 3.2의 `summary`는 문자열이었다. 문장마다 근거를 연결하고 사람이 고친 문장을 구분하려고 문장 목록으로 바꾼다 (11장).
@@ -214,7 +215,7 @@ PRD에 없는 기능이라 제안만 하고 구현하지 않는다.
 | 사람이 고친 문장의 잠금 해제, 문장 삭제, 새 문장 추가 | PRD AI-03은 "수정"만 정한다. 필요하면 기획 확인 뒤 `action`을 늘린다 |
 | 고친 뒤 쌓인 발언의 의미가 달라진 것을 감지 | 결정할 수 있는 규칙이 없다. 이번에는 근거가 달라진 경우만 감지한다 (6장 7번) |
 | 현재 안건 별도 요약 | 안건별 요약을 화면에서 강조하는 것으로 대신한다 (1장) |
-| `opinions`, `offTopic` 채우기 | 각각 AI-05(`agenda-opinions-contract.md`), AI-06(`agenda-offtopic-contract.md`)이 채운다. 채울 것이 없으면 빈 배열, `null`로 보낸다. `status`는 AI-04(`agenda-status-contract.md`)가 채운다 |
+| `opinions`, `offTopic` 채우기 | 각각 AI-05(`agenda-opinions-contract.md`), AI-06(`agenda-offtopic-contract.md`)이 채운다. 채울 것이 없으면 빈 배열, `null`로 보낸다. `status`와 `decisionPoints`는 AI-04(`agenda-status-contract.md`)가 채운다 |
 | 사전 자료 반영 | 추후 지원 예정 (`agenda-contract.md` 10장) |
 
 ## 11. 협의 상태
@@ -225,6 +226,7 @@ PRD에 없는 기능이라 제안만 하고 구현하지 않는다.
 | 모든 안건을 각각 요약하고, 현재 안건은 `currentAgendaId`로 강조한다 | AI 제안, 기획·cn 팀 확인 필요 |
 | `summary`를 문자열에서 문장 목록(`id`, `text`, `evidenceSeqs`, `edited`, `needsCheck`)으로 바꾼다 | AI 제안, cn 팀 확인 필요 |
 | 채울 것이 없을 때 `opinions` 빈 배열, `offTopic` `null`로 보낸다 (`status`는 AI-04가 채움) | AI 제안, cn 팀 확인 필요 |
+| 보드 안건마다 `decisionPoints[{decisionPointId, status, decisionText, evidenceSeqs, edited, needsCheck}]`를 담는다 | cn 팀 요청 (확정 모양). 자세한 규칙은 `agenda-status-contract.md` |
 | 줄별 분류 결과(`agenda-classification`)는 별도 주소로 두고, `currentAgendaId`는 두 곳에 같은 값이 간다 | AI 제안, cn 팀 확인 필요 |
 | 안건 보드의 `version`을 시각(밀리초) 기준으로 올린다 | AI 제안, cn 팀 확인 필요 (정수 칸의 크기) |
 | 사람이 고친 요약을 `agenda-summary-edits`로 받는다 (`edit`, `confirm`, `rev`) | AI 제안, cn 팀 확인 필요 |
@@ -244,7 +246,8 @@ AI-02·03·04·05·06의 결과가 모두 안건 보드로 모이도록, 어디�
 | 줄별 분류 (`seq` → `agendaId`) | `agenda-classification` (별도 주소, 줄 단위라 보드에 담지 않는다) | AI-02 |
 | 현재 안건 | 보드 `currentAgendaId` (분류 결과에도 같은 값이 간다. 화면은 보드의 값을 쓴다) | AI-02 |
 | 안건별 요약 | 보드 `agendas[].summary` | AI-03 |
-| 안건 상태와 판정 근거 | 보드 `agendas[].status`, `statusReason` (`agenda-status-contract.md`) | AI-04 |
+| 안건 상태와 판정 근거 | 보드 `agendas[].status`, `statusReason` (`agenda-status-contract.md`). 안건 상태는 사항 상태에서 정한다 | AI-04 |
+| 결정할 사항별 상태·결정 내용·근거 | 보드 `agendas[].decisionPoints` (`agenda-status-contract.md` 3.1) | AI-04 |
 | 의견·근거 | 보드 `agendas[].opinions` | AI-05 |
 | 주제 변경 | 보드 `offTopic` | AI-06 |
 | 미결 안건 목록과 논의 요약 | 보드 `leftover` (`agenda-leftover-contract.md`) | AI-07 |
@@ -256,7 +259,8 @@ AI-02·03·04·05·06의 결과가 모두 안건 보드로 모이도록, 어디�
 
 | 파일 | 내용 |
 |---|---|
-| `examples/api/agenda-board-put.json` | 안건 보드 한 번의 본문 (고친 문장, 확인 필요, 요약이 비어 있는 안건 포함) |
+| `examples/api/agenda-board-put.json` | 안건 보드 한 번의 본문 (고친 문장, 확인 필요, 요약이 비어 있는 안건 포함). `decisionPoints`가 없는 옛 모양이며 구현 때 새 모양으로 바꾼다 |
+| `examples/api/agenda-board-decision-points-put.json` | 안건 보드의 새 모양 (`decisionPoints`, 결정·결정 확인 필요·미결·논의 전 사항과 사람이 고친 결정 내용 포함) |
 | `examples/api/agenda-summary-edits-post.json` | 사람이 고친 요약과 확인 표시 |
 
 예시의 내용은 형식을 보여 주기 위해 만든 것이며 실제 회의가 아니다. 안건 번호는 연동 API 초안의 예시처럼 숫자로 썼다 (`agenda-contract.md`의 예시 파일은 문자열이다).

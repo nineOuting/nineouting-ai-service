@@ -6,6 +6,8 @@
   .venv/bin/python -m minutes.try_draft --real --json            결과 JSON 전체도 출력
   .venv/bin/python -m minutes.try_draft --file minutes/tests/fixtures/relayout_request.json --real
                                                                  양식 변경 시 다시 배치 (합성 예시, 고친 줄·새 줄 포함)
+  .venv/bin/python -m minutes.try_draft --file minutes/tests/fixtures/table_request.json --real
+                                                                 AI 가 채우는 표 필드 (할 일 표, 열 4개)
   .venv/bin/python -m minutes.try_draft --real --relayout-to "결정 사항,할 일,고객 요청"
                                                                  처음 초안 → 그 줄을 새 양식으로 다시 배치 (AI 2번)
 
@@ -100,7 +102,7 @@ def show(result, previous=None, before_items=None):
             print(f"\n■ {s['title']}\n{s['content']}")
             continue
         print(f"■ {s['title']}")
-        print("\n".join(f"- {_mark(line)}{line['sentence']}{where[id(line)]}" for line in s["evidence"])
+        print("\n".join(f"- {_mark(line)}{_text(line)}{where[id(line)]}" for line in s["evidence"])
               or "해당 내용 없음")
     print("\n■ 넣지 못한 재료")
     print("\n".join(f"- 안건 {u['agendaId']} / {u['kind']} / {u['id']}" for u in result["unplaced"]) or "없음")
@@ -108,6 +110,11 @@ def show(result, previous=None, before_items=None):
         print("\n■ 넣지 못한 이전 줄 (이전 칸 → 글)")
         print("\n".join(f"- {_mark(line)}{line['title']} → {line['sentence']}" for line in result["unplacedLines"])
               or "없음")
+
+
+def _text(line) -> str:
+    """줄은 글, 표의 행은 칸을 | 로 이은 글."""
+    return line["sentence"] if "sentence" in line else "| " + " | ".join(line["cells"]) + " |"
 
 
 def _mark(line) -> str:
@@ -122,7 +129,7 @@ def _previous_titles(result, previous) -> dict:
     unused, out = list(previous), {}
     lines = [line for s in result["sections"] for line in s["evidence"]]
     for line in lines:                                    # 글이 같은 줄
-        hit = next((p for p in unused if p["sentence"] == line["sentence"]), None)
+        hit = next((p for p in unused if p["sentence"] == line.get("sentence")), None)
         if hit:
             unused.remove(hit)
             out[id(line)] = f"   ← 이전: {hit['title']}"

@@ -19,7 +19,7 @@ from pathlib import Path
 
 from rag.llm import LLMError, LLMTimeout
 
-from .models import Field, Material, Placement
+from .models import Field, Material, Placement, Table
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 PROMPT_KIND = "placement"
@@ -42,7 +42,7 @@ class Prompt:
 
 @dataclass(frozen=True)
 class Outcome:
-    placement: Placement | None     # 성공이면 배치, 실패면 None
+    placement: Placement | Table | None     # 성공이면 배치(표 채우기는 Table), 실패면 None
     error_code: str | None          # CHECK_FAILED / LLM_TIMEOUT / LLM_FAILED
     attempts: int                   # AI 를 부른 횟수
     input_tokens: int = 0
@@ -156,13 +156,19 @@ def place(items: list[Field | str], materials: list[Material], llm, timeout_s: f
           prompt: Prompt | None = None, call_retries: int = 1) -> Outcome:
     """재료가 1개 이상일 때 부른다. 검사에 걸리면 max_retries 번 다시 시키고,
     호출이 실패하면(시간 초과·오류) 같은 입력으로 call_retries 번 다시 부른다. 두 횟수는 따로 센다."""
-    prompt = prompt or load_prompt()
+    return ask(prompt or load_prompt(), lambda problems: build_user(items, materials, problems),
+               lambda data: check(data, materials, len(items)), llm, timeout_s, max_retries, call_retries)
+
+
+def ask(prompt: Prompt, make_user, check_reply, llm, timeout_s: float, max_retries: int, call_retries: int) -> Outcome:
+    """AI 에 묻고 답을 검사하는 반복. 배치와 표 채우기(table.py)가 같이 쓴다.
+    make_user(문제 목록) → AI 입력, check_reply(읽은 JSON) → (결과, 문제 목록). 결과는 Outcome.placement 에 담긴다."""
     problems, attempts, tokens_in, tokens_out = [], 0, 0, 0
     checks = call_failures = 0
     while checks <= max_retries:
         attempts += 1
         try:
-            reply = llm.generate(prompt.text, build_user(items, materials, problems), timeout_s)
+            reply = llm.generate(prompt.text, make_user(problems), timeout_s)
         except LLMError as e:                                # LLMTimeout 도 여기에 걸린다
             call_failures += 1
             if call_failures > call_retries:
@@ -172,7 +178,7 @@ def place(items: list[Field | str], materials: list[Material], llm, timeout_s: f
         checks += 1
         tokens_in += reply.input_tokens or 0
         tokens_out += reply.output_tokens or 0
-        placement, problems = check(parse_reply(reply.text), materials, len(items))
-        if placement is not None:
-            return Outcome(placement, None, attempts, tokens_in, tokens_out)
+        result, problems = check_reply(parse_reply(reply.text))
+        if result is not None:
+            return Outcome(result, None, attempts, tokens_in, tokens_out)
     return Outcome(None, CHECK_FAILED, attempts, tokens_in, tokens_out)

@@ -34,7 +34,7 @@ if HERE not in sys.path:
 from meeting_summary import (  # noqa: E402
     TranscriptStore, load_jsonl_as_protocol_lines, make_batches, build_input,
     SYSTEM_PROMPT, call_llm, parse_llm_json, validate_items, build_char_stream, unknown_terms,
-    spans_to_evidence, mmss, fmt_t, GENERIC_END, DECISION_END, MAX_ITEM_LINES, MAX_SPAN_LINES,
+    spans_to_evidence, mmss, fmt_t, GENERIC_END, DECISION_END, MAX_ITEM_LINES, MAX_SPAN_LINES, load_dotenv,
 )
 
 GRACE_MS = 3000          # recovered 줄은 말이 끝나고 약 2초 뒤 도착한다 (규격). 여유 1초를 더한 값
@@ -819,6 +819,7 @@ def main():
         selftest()
         return
     if args.cmd == "run":
+        load_dotenv(os.path.join(HERE, "..", ".env"))   # API 키를 .env 에서 읽는다 (값은 출력하지 않는다)
         if args.provider == "anthropic" and not args.model:
             args.model = "claude-sonnet-5-5"
         if args.provider in ("gemini", "openai") and not args.model and not args.plan:

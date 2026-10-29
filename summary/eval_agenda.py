@@ -31,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from meeting_summary import load_jsonl_as_protocol_lines, make_batches  # noqa: E402
+from meeting_summary import load_jsonl_as_protocol_lines, make_batches, load_dotenv  # noqa: E402
 from meeting_live_summary_v2 import PRICES, USD_KRW_ASSUMED  # noqa: E402
 from input_adapter import adapt_agendas  # noqa: E402
 import agenda_classifier as ac  # noqa: E402
@@ -139,6 +139,8 @@ def main():
     a = ap.parse_args()
 
     paid = a.provider != "echo" and not a.dry_run
+    if paid:
+        load_dotenv(os.path.join(HERE, "..", ".env"))   # API 키를 .env 에서 읽는다 (값은 출력하지 않는다)
     if paid and not a.paid_ok:
         sys.exit("유료 호출입니다. 기준과 비용을 확인한 뒤 --paid-ok 를 붙이세요. (--dry-run 으로 추정만 볼 수 있습니다)")
     if paid and not a.model:

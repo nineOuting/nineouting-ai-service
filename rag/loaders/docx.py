@@ -19,7 +19,7 @@ import re
 from ..errors import NO_TEXT, UNSUPPORTED_FORMAT, IngestError
 from ..models import Piece
 from .minutes import LoadResult
-from .text import normalize
+from .text import header_line, normalize, row_line
 
 START_LABEL = "문서 처음"
 _HEADING_STYLE = re.compile(r"^heading (\d)$", re.I)
@@ -106,14 +106,14 @@ def table_lines(table) -> list[str]:
         return []
     header, out = rows[0], []
     if len(rows) == 1:
-        line = " | ".join(v for v in header if v)
+        line = header_line(header)
         return [line] if line else []
     for row in rows[1:]:
-        cells = [f"{header[i]}: {v}" if i < len(header) and header[i] else v for i, v in enumerate(row) if v]
-        if cells:
-            out.append(" | ".join(cells))
+        line = row_line(header, row)
+        if line:
+            out.append(line)
     if not out and any(header):
-        out.append(" | ".join(v for v in header if v))
+        out.append(header_line(header))
     return out
 
 

@@ -22,7 +22,7 @@ from datetime import date, datetime, time
 from ..errors import NO_TEXT, TOO_LARGE, UNSUPPORTED_FORMAT, IngestError
 from ..models import Piece
 from .minutes import LoadResult
-from .text import normalize
+from .text import header_line, normalize, row_line
 
 GROUP_ROWS = 1                   # 조각 하나에 넣는 최대 행 수. 10·5·1 을 비교해 정함 (SCRUM-110)
 MAX_CELLS = 200_000              # 정해 둔 값. SCRUM-110 에서 재서 조정한다
@@ -72,11 +72,10 @@ def _sheet_pieces(ws) -> list[Piece]:
         return []
     (header_row, header), data = rows[0], rows[1:]
     if not data:
-        return [_piece(ws.title, header_row, header_row, [" | ".join(v for v in header if v)])]
+        return [_piece(ws.title, header_row, header_row, [header_line(header)])]
     pieces = []
     for group in even_groups(data, GROUP_ROWS):
-        lines = [" | ".join(f"{header[j]}: {v}" if j < len(header) and header[j] else v
-                            for j, v in enumerate(values) if v) for _, values in group]
+        lines = [row_line(header, values) for _, values in group]
         pieces.append(_piece(ws.title, group[0][0], group[-1][0], lines))
     return pieces
 

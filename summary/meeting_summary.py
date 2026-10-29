@@ -789,9 +789,25 @@ def selftest():
     print("자체 시험 통과 (전송 규격 처리, 한글 숫자 변환, 검증기, 토큰 사용량)")
 
 
+def load_dotenv(path):
+    """저장소 루트의 .env 에서 아직 설정되지 않은 환경변수만 읽어 온다 (값은 출력하지 않는다)."""
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            raw = raw.strip()
+            if not raw or raw.startswith("#") or "=" not in raw:
+                continue
+            k, v = raw.split("=", 1)
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if k and v and k not in os.environ:
+                os.environ[k] = v
+
+
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    load_dotenv(os.path.join(HERE, "..", ".env"))   # API 키를 매번 입력하지 않도록
     ap = argparse.ArgumentParser(description="끝난 회의 요약")
     ap.add_argument("--input", default="meeting1_full_transcript.jsonl", help="STT 전사 jsonl")
     ap.add_argument("--out", default="out", help="결과 폴더")

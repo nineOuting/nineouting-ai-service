@@ -6,9 +6,10 @@
 
 | 단계 | 상태 |
 |---|---|
-| 재료 만들기 (요약 → 줄 재료), 칸 배치(AI), 코드 검사, 줄 글 | 구현. AI 는 칸 고르기와 결정 문장 다듬기만 한다 |
+| 재료 만들기 (요약 → 줄 재료), 칸 배치(AI), 코드 검사, 줄 글 | 구현. AI 는 칸 고르기만 한다. 줄 글은 모두 코드가 정한다 (명세 v0.8: 결정 줄은 요약의 `decisionText` 그대로) |
+| 결정할 사항 단위 (명세 v0.8) | 구현 (SCRUM-123). 결정·미결·결정 확인 필요 줄을 사항마다 만들고 출처에 `decisionPointId`. 전환 기간에는 안건의 `decisionPoint` 글 하나도 받는다. 요약에 사항별 결과(`decisionPoints`)가 없으면 `400` |
 | 접수 주소 `POST /internal/minutes/drafts`, 대기열·작업자, 결과 콜백 | 구현 |
-| 양식 필드 (명세 v0.7: 필드마다 글/표·AI 채움 설정, 머리글·바닥글) | 구현 (SCRUM-113). AI 에는 AI 가 채우는 필드만 칸으로 넘긴다. v0.6 요청(`template.items`)은 결과도 v0.6 모양. AI 가 채우는 표 필드는 SCRUM-114 전까지 `400` |
+| 양식 필드 (명세 v0.7: 필드마다 글/표·AI 채움 설정, 머리글·바닥글. v0.8: 필드 설명) | 구현 (SCRUM-113, 123). AI 에는 AI 가 채우는 필드만 칸으로 넘기고, 설명이 있으면 칸 이름 뒤에 붙인다. v0.6 요청(`template.items`)은 결과도 v0.6 모양. AI 가 채우는 표 필드는 SCRUM-114 전까지 `400` |
 | 양식 변경 시 다시 배치 (`previousLines`) | 구현 (SCRUM-98, `relayout.py`). 고친 줄·새로 쓴 줄은 글 그대로 칸만 다시 고름. 처음 초안과 지시문을 따로 씀 (`prompts/relayout/`) |
 | 근거·맥락 연결 (AI-11) | ai-service API 없음. 결과의 `sources`·`transcriptSeqs` 를 백엔드가 따라간다 |
 
@@ -25,7 +26,7 @@
 | 파일 | 하는 일 |
 |---|---|
 | `request.py` | 요청 형식 검사 (명세 2.1, 7.5 상한) |
-| `materials.py` | 요약 항목 → 재료 (명세 7.1). 요약 문장·의견·할 일은 글을 고정하고, 결정만 AI 가 다듬는다 |
+| `materials.py` | 요약 항목·결정할 사항 → 재료 (명세 7.1). 줄 글을 코드가 정한다 |
 | `placement.py` | AI 에게 칸을 고르게 하고 결과를 코드로 검사, 걸리면 이유를 붙여 다시 시킴 (명세 7.2·7.3) |
 | `lines.py` | 필드별 줄 목록과 `content` 만들기. 사용자가 채우는 필드는 받은 글 그대로 |
 | `draft.py` | 위를 묶어 결과 JSON 하나를 만든다 (`make_draft`) |
@@ -53,7 +54,7 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 | `MINUTES_LLM_PROVIDER`, `MINUTES_LLM_MODEL` | 초안 AI 공급자·모델. 운영 값은 `openai`, `gpt-5.6-luna`. 공급자가 있으면 둘을 한 묶음으로 쓰고, 없으면 RAG 답변 설정(`RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`)을 그대로 쓴다. 모델만 넣으면 설정 오류. 틀리면 서버는 뜨고 초안 주소만 503 (`llm_config.py`) | 없음 (RAG 설정, 그 기본값은 `fake`) |
 | `OPENAI_API_KEY` | OpenAI API 키. RAG 답변과 같이 쓴다. 이미지에 넣지 않고 실행할 때 비밀값으로 넣는다 | 없음 |
 | `MINUTES_LLM_TIMEOUT_S` | AI 응답 시간 제한(초) | 60 |
-| `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION` | 처음 초안·다시 배치 지시문 버전 (예: `v7`, `v1`) | 가장 큰 번호 |
+| `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION` | 처음 초안·다시 배치 지시문 버전 (예: `v8`, `v2`). v7·v1 은 결정 문장을 다듬던 때의 글이라 지금 코드와 맞지 않는다 (답의 글은 버린다) | 가장 큰 번호 |
 | `MINUTES_WORKER_IN_PROCESS` | `0` 이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker` 로 따로) | `1` |
 | `MINUTES_DB_POOL_MAX`, `MINUTES_DB_POOL_TIMEOUT_S` | 접수 주소의 DB 연결 수, 연결을 기다리는 초 | 3, 5 |
 | `MINUTES_DB_STATEMENT_TIMEOUT_MS`, `MINUTES_DB_IDLE_TX_TIMEOUT_MS`, `MINUTES_DB_CONNECT_TIMEOUT_S` | DB 시간 제한 | 30000, 60000, 10 |

@@ -2,12 +2,14 @@
 
 이전 줄 하나가 재료 하나가 된다. 줄마다 재료 번호(m1, m2 …)를 따로 붙이므로 출처가 겹쳐도 검사에 걸리지 않는다.
 
-  고치지 않은 줄 (draftEdited false)   출처로 요약 항목을 찾아 처음 초안과 같은 재료로 다시 만든다 (결정은 AI 가 다시 다듬음)
+  고치지 않은 줄 (draftEdited false)   출처로 요약 항목을 찾아 처음 초안과 같은 재료로 다시 만든다
   작성자가 고친 줄                     글 고정. 근거·표시·출처는 그 줄의 값 그대로
   작성자가 새로 쓴 줄 (출처 없음)      글 고정. 출처 없음
   출처 항목이 요약에 없는 줄           고친 줄처럼 (8.3)
   출처가 겹치는 줄의 두 번째부터       고친 줄처럼 (8.3). 고치지 않은 줄이 있으면 그 줄이 첫 줄
 
+출처는 (안건, 종류, 항목 id, 결정할 사항 번호)로 찾는다. 사항의 상태가 바뀌어 종류가 달라졌거나(결정 확인 필요 → 결정)
+v0.7 결과로 저장해 사항 번호가 없는 상태 줄은 찾지 못하므로, 출처 항목이 요약에 없는 줄로 다룬다 (명세 8.3).
 이전 줄의 글은 이미 "{안건 제목}: " 이 붙은 줄 글이라, 고정한 글에는 제목을 다시 붙이지 않는다 (whole_line).
 이전 초안에 없던 요약 항목(처음에 넣지 못했거나 작성자가 지운 것)은 AI 에 보내지 않고 unplaced 로 돌려준다.
 칸 안의 줄 순서는 이전 초안의 줄 순서를 따른다 (작성자가 바꾼 순서를 지키고, 새로 쓴 줄은 안건이 없어 끼울 자리가 없으므로).
@@ -71,15 +73,15 @@ def _kept(line: dict, ref: str, i: int, original: Material | None, titles: dict)
     sources = line.get("sources") or []
     if sources:
         src = sources[0]
-        agenda_id, kind, item_id = src["agendaId"], src["kind"], src.get("id")
+        agenda_id, kind, item_id, point_id = src["agendaId"], src["kind"], src.get("id"), src.get("decisionPointId")
         title = original.agenda_title if original else titles.get(agenda_id, "")
         label = original.label if original else KIND_LABELS[kind]
     else:
-        agenda_id, kind, item_id, title, label = None, WRITTEN, None, "", WRITTEN_LABEL
+        agenda_id, kind, item_id, point_id, title, label = None, WRITTEN, None, None, "", WRITTEN_LABEL
     return Material(ref=ref, agenda_id=agenda_id, agenda_title=title, kind=kind, item_id=item_id, label=label,
-                    text=text, fixed_text=text, evidence_seqs=tuple(line.get("transcriptSeqs") or ()),
+                    text=text, evidence_seqs=tuple(line.get("transcriptSeqs") or ()),
                     edited=bool(line.get("edited")), needs_check=bool(line.get("needsCheck")), order=(i, 0, 0),
-                    previous=i, draft_edited=line["draftEdited"], whole_line=True, sourced=bool(sources))
+                    decision_point_id=point_id, previous=i, draft_edited=line["draftEdited"], whole_line=True, sourced=bool(sources))
 
 
 def _first_source_key(line: dict):
@@ -88,4 +90,4 @@ def _first_source_key(line: dict):
 
 
 def _key(source: dict) -> tuple:
-    return source["agendaId"], source["kind"], source.get("id")
+    return source["agendaId"], source["kind"], source.get("id"), source.get("decisionPointId")

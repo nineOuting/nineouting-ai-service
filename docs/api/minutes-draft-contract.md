@@ -1,10 +1,21 @@
-# 회의록 초안 API 명세 (AI-10·AI-11) v0.7 초안
+# 회의록 초안 API 명세 (AI-10·AI-11) v0.8 초안
 
 > 회의록 초안을 만드는 API와, 저장된 회의록을 검색 대상으로 넣을 때 바뀌는 RAG API를 다룬다. 백엔드(minutes-service)의 연동 형식 5.1(생성 요청)·5.2(결과 콜백)를 기준으로 하고, 원안에 없던 칸과 규칙은 **[ai-service 제안]**으로 표시한다. 확정되면 이 문서를 최신 전체본 하나로 교체한다.
 > 요청 안의 요약 형식은 회의 끝 요약 명세 `agenda-today-summary-contract.md`(AI-08), 전사 줄(`seq`)의 정의는 `input-contract.md`를 따른다.
 
 - 근거: PRD AI-10 회의록 초안, AI-11 근거·맥락 연결, LLM 공통 규칙(R1~R12), 백엔드 연동 형식 4장·5.1·5.2, RAG 명세
 - 지라: SCRUM-95 (에픽), SCRUM-96 (이 문서), SCRUM-97 (초안 생성), SCRUM-98 (다시 배치), SCRUM-99 (근거·맥락 연결), SCRUM-100 (저장된 회의록 검색 대상 넣기)
+
+## v0.8에서 바뀐 곳
+
+회의 끝 요약의 결정할 사항 단위 판정과 프론트 화면(2026-10-28 반영분)에 맞췄다 (2026-10-29). **[구현 전]** 표시는 명세만 정했고 ai-service 코드에 아직 없는 곳이다. 결정할 사항 단위(1)와 필드 설명은 구현했다 (SCRUM-123). 표의 열 개수는 SCRUM-114에서 구현한다.
+
+| # | 계기 | 바뀐 곳 |
+|---|---|---|
+| 1 | 안건의 결정할 사항이 목록(`decisionPoints`)이 되고, 회의 끝 요약이 결정을 **사항마다** 판정해 결정 내용(`decisionText`)을 담는다 (`agenda-contract.md` v0.2, `agenda-today-summary-contract.md` v0.2). 안건의 `statusReason`은 사항 개수 문장이 되어 내용으로 쓸 수 없다 | 요청 `agendas[].decisionPoint` → `decisionPoints[]` (5.1). 결정·미결·결정 확인 필요 줄을 안건마다가 아니라 **사항마다** 만든다 (7.1). 결정 줄은 `decisionText` 그대로이고 AI가 다듬지 않는다 (7.2). 출처에 `decisionPointId` (5.6). 30일 뒤 결정 맥락은 같은 안건의 요약 문장 (9장) |
+| 2 | 양식 편집 화면에 필드 설명, 기록 방식 4종, 표의 열 개수, 머리글·바닥글 켜기가 있다 | `template.fields[]`에 `description`, 표 필드의 `columns`(열 개수) (5.8). 기록 방식을 `type`으로 바꾸는 규칙 (5.8). 머리글·바닥글을 끄면 `null` (2.1). 표의 열 수는 사용자가 정한 값을 따르고 열 이름은 AI가 정한다 (7.6) |
+| 3 | 회의록에 작성 완료 단계가 있다 (작성 완료 = 바로 확정·공유, 검토 단계 없음). 작성 완료 뒤에도 고칠 수 있고 자동 저장은 없다 | RAG 넣기는 **작성 완료 때 처음**, 그 뒤 저장할 때마다. 작성 중(임시저장)인 회의록은 넣지 않는다 (4.4). v0.7의 "확정 단계가 없다"를 대신한다 |
+| 4 | minutes-service가 양식을 바꿀 때 제목이 같은 칸의 글을 남긴다 (REQ-140) | 8.1 참고, 11장 |
 
 ## v0.7에서 바뀐 곳
 
@@ -25,7 +36,7 @@
 |---|---|---|---|---|---|---|---|
 | 1 | [2장](#2-api-1--초안-생성-요청) | minutes-service → ai-service | `POST` | `/internal/minutes/drafts` | 초안 생성 요청 (양식 변경 시 다시 배치 포함) | `202` / `400` / `503` | **새 API.** 입력의 요약 형식은 AI-08 명세(`agenda-today-summary-contract.md`)를 따른다 |
 | 2 | [3장](#3-api-2--초안-결과-콜백) | ai-service → minutes-service | `POST` | `{callbackUrl}` | 초안 결과 알림 | `2xx` | **새 API.** 줄 목록은 정해도 됨, 글 모양은 화면 대기 |
-| 3 | [4장](#4-api-34--rag-api-수정-scrum-100-ai-service-제안) | minutes-service → ai-service | `POST` | `/internal/rag/documents` | 저장된 회의록을 검색 대상으로 넣기 (저장할 때마다) | `202` / `400` / `409` / `503` | **기존 API 수정**: `minutes` 칸 형식만 바뀜 |
+| 3 | [4장](#4-api-34--rag-api-수정-scrum-100-ai-service-제안) | minutes-service → ai-service | `POST` | `/internal/rag/documents` | 저장된 회의록을 검색 대상으로 넣기 (작성 완료 때와 그 뒤 저장할 때마다) | `202` / `400` / `409` / `503` | **기존 API 수정**: `minutes` 칸 형식만 바뀜 |
 | 4 | [4장](#4-api-34--rag-api-수정-scrum-100-ai-service-제안) | minutes-service → ai-service | `POST` | `/internal/rag/answer` | 회의록 질문 답변 | `200` / `400` / `503` | **기존 API 수정**: 근거 위치 종류 하나 추가 |
 
 - 장 순서는 API 번호와 같다: API 1은 2장, API 2는 3장, API 3·4는 4장. 그 뒤로 공통 객체(5장), 오류 코드(6장), 동작 규칙(7~9장)이 이어진다.
@@ -65,10 +76,10 @@ X-Request-Id: (선택)
 | `attendees` | `{userId: int, name: string}[]` | 아니요 | 참석자. 초안 내용에는 쓰지 않는다 |
 | `template` | `object` | 예 | 회의록 양식 |
 | `template.fields` | [`TemplateField[]`](#58-templatefield) | 예 | 필드 목록. 1~20개, 이름은 서로 겹치지 않는다. 사용자가 만든 양식 그대로 담는다. 결과는 이 순서·이름 그대로 돌려준다 |
-| `template.header` | `string \| null` | 아니요 | 양식의 머리글. 사용자가 쓴 글 그대로. AI는 쓰지 않고 결과에 그대로 돌려준다 |
+| `template.header` | `string \| null` | 아니요 | 양식의 머리글. 사용자가 쓴 글 그대로. AI는 쓰지 않고 결과에 그대로 돌려준다. 양식에서 머리글을 껐거나(`enabled: false`) 글이 비었으면 `null` |
 | `template.footer` | `string \| null` | 아니요 | 양식의 바닥글. `header`와 같음 |
 | `template.items` | `string[]` | 아니요 | v0.6 형식 (필드 이름 목록). **전환 기간**에만 받는다. `fields`가 없으면 이것을 읽어 모든 필드를 `{type: "text", aiFill: true}`로 본다. 이때 **결과도 v0.6 모양**이다 (필드의 `type`·`aiFilled`와 `header`·`footer`가 없음). 둘 다 오면 `fields`를 쓴다 |
-| `agendas` | [`Agenda[]`](#51-agenda) | 예 | 안건 번호·제목·결정할 사항 |
+| `agendas` | [`Agenda[]`](#51-agenda) | 예 | 안건 번호·제목·결정할 사항 목록. 백엔드의 안건 목록 그대로 |
 | `summary` | [`MeetingSummary`](#52-meetingsummary) | 예 | 점검을 마친 회의 끝 요약. ai-service가 안건 보드의 `todaySummary` 칸으로 보낸 값(`final: true`)에 사용자가 고친 내용을 반영한 것 (5.2) |
 | `previousLines` | [`PreviousLine[]`](#57-previousline) | 아니요 | 양식을 바꿔 다시 배치할 때 지금 초안의 줄 전부 (8장). 없거나 빈 목록이면 처음 만들기 [ai-service 제안] |
 | `transcripts` | `array` | 아니요 | 백엔드 원안에 있으나 쓰지 않는다. 초안은 요약에서만 만든다. 보내면 무시한다 [ai-service 제안] |
@@ -88,23 +99,26 @@ X-Request-Id: (선택)
     "header": "고객성공팀 주간 회의",
     "footer": "사내 공유용",
     "fields": [
-      {"title": "안건별 논의", "type": "text", "aiFill": true},
-      {"title": "결정 사항", "type": "text", "aiFill": true},
-      {"title": "미결 안건", "type": "text", "aiFill": true},
-      {"title": "할 일", "type": "table", "aiFill": true},
-      {"title": "참석자 메모", "type": "text", "aiFill": false, "content": "다음 회의는 장소를 2층 회의실로 옮김"}
+      {"title": "안건별 논의", "description": "안건마다 나온 이야기", "type": "text", "aiFill": true},
+      {"title": "결정 사항", "description": "", "type": "text", "aiFill": true},
+      {"title": "미결 안건", "description": "정하지 못해 다음에 다룰 것", "type": "text", "aiFill": true},
+      {"title": "할 일", "description": "", "type": "table", "columns": 4, "aiFill": true},
+      {"title": "참석자 메모", "description": "", "type": "text", "aiFill": false, "content": "다음 회의는 장소를 2층 회의실로 옮김"}
     ]
   },
   "agendas": [
-    {"agendaId": 101, "title": "배포 일정", "decisionPoint": "배포 날짜 확정"},
-    {"agendaId": 102, "title": "예산", "decisionPoint": "광고 예산 승인"}
+    {"agendaId": 101, "title": "배포 일정", "decisionPoints": [{"decisionPointId": 7, "position": 1, "text": "배포 날짜 확정"}]},
+    {"agendaId": 102, "title": "예산", "decisionPoints": [{"decisionPointId": 9, "position": 1, "text": "광고 예산 승인"}]}
   ],
   "summary": {
     "agendas": [
       {
         "agendaId": 101,
         "status": "DECIDED",
-        "statusReason": {"text": "1차 배포를 10월 30일(목)로 정하고 참석자가 동의함", "evidenceSeqs": [40, 42]},
+        "statusReason": {"text": "결정할 사항 1개 중 1개가 결정됨", "evidenceSeqs": [40, 42]},
+        "decisionPoints": [
+          {"decisionPointId": 7, "status": "DECIDED", "decisionText": "1차 배포를 10월 30일(목)로 정함", "evidenceSeqs": [40, 42], "edited": false, "needsCheck": false}
+        ],
         "summary": [
           {"id": "k3f9a1-1", "text": "1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴", "evidenceSeqs": [38, 39], "edited": false, "needsCheck": false}
         ],
@@ -118,7 +132,10 @@ X-Request-Id: (선택)
       {
         "agendaId": 102,
         "status": "UNDECIDED",
-        "statusReason": {"text": "광고 예산 승인 여부를 정하지 못함", "evidenceSeqs": [88]},
+        "statusReason": {"text": "결정할 사항 1개 중 0개가 결정됨 (미결 1개)", "evidenceSeqs": [88]},
+        "decisionPoints": [
+          {"decisionPointId": 9, "status": "UNDECIDED", "decisionText": "월 사용량을 확인하기 전이라 승인 여부를 정하지 못함", "evidenceSeqs": [88], "edited": false, "needsCheck": false}
+        ],
         "summary": [
           {"id": "k3f9a1-3", "text": "광고 예산은 월 사용량을 확인한 뒤 정하기로 함", "evidenceSeqs": [86, 87], "edited": true, "needsCheck": false}
         ],
@@ -209,18 +226,18 @@ X-Request-Id: (요청에서 받았으면 그대로)
       "aiFilled": true,
       "content": "- 배포 일정: 1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴\n- 배포 일정: 목요일은 QA 일정과 겹쳐 부담이 된다는 우려\n- 예산: 광고 예산은 월 사용량을 확인한 뒤 정하기로 함",
       "evidence": [
-        {"sentence": "배포 일정: 1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴", "transcriptSeqs": [38, 39], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "summary", "id": "k3f9a1-1"}]},
-        {"sentence": "배포 일정: 목요일은 QA 일정과 겹쳐 부담이 된다는 우려", "transcriptSeqs": [41], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "opinion", "id": "k3f9a1-7"}]},
-        {"sentence": "예산: 광고 예산은 월 사용량을 확인한 뒤 정하기로 함", "transcriptSeqs": [86, 87], "edited": true, "needsCheck": false, "sources": [{"agendaId": 102, "kind": "summary", "id": "k3f9a1-3"}]}
+        {"sentence": "배포 일정: 1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴", "transcriptSeqs": [38, 39], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "summary", "id": "k3f9a1-1", "decisionPointId": null}]},
+        {"sentence": "배포 일정: 목요일은 QA 일정과 겹쳐 부담이 된다는 우려", "transcriptSeqs": [41], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "opinion", "id": "k3f9a1-7", "decisionPointId": null}]},
+        {"sentence": "예산: 광고 예산은 월 사용량을 확인한 뒤 정하기로 함", "transcriptSeqs": [86, 87], "edited": true, "needsCheck": false, "sources": [{"agendaId": 102, "kind": "summary", "id": "k3f9a1-3", "decisionPointId": null}]}
       ]
     },
     {
       "title": "결정 사항",
       "type": "text",
       "aiFilled": true,
-      "content": "- 배포 일정: 1차 배포를 10월 30일(목)로 정했다.",
+      "content": "- 배포 일정: 1차 배포를 10월 30일(목)로 정함",
       "evidence": [
-        {"sentence": "배포 일정: 1차 배포를 10월 30일(목)로 정했다.", "transcriptSeqs": [40, 42], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "decision", "id": null}]}
+        {"sentence": "배포 일정: 1차 배포를 10월 30일(목)로 정함", "transcriptSeqs": [40, 42], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "decision", "id": null, "decisionPointId": 7}]}
       ]
     },
     {
@@ -229,7 +246,7 @@ X-Request-Id: (요청에서 받았으면 그대로)
       "aiFilled": true,
       "content": "- 예산: 광고 예산 승인",
       "evidence": [
-        {"sentence": "예산: 광고 예산 승인", "transcriptSeqs": [88], "edited": false, "needsCheck": false, "sources": [{"agendaId": 102, "kind": "undecided", "id": null}]}
+        {"sentence": "예산: 광고 예산 승인", "transcriptSeqs": [88], "edited": false, "needsCheck": false, "sources": [{"agendaId": 102, "kind": "undecided", "id": null, "decisionPointId": 9}]}
       ]
     },
     {
@@ -239,8 +256,8 @@ X-Request-Id: (요청에서 받았으면 그대로)
       "columns": ["안건", "할 일", "담당", "기한"],
       "content": "| 안건 | 할 일 | 담당 | 기한 |\n|---|---|---|---|\n| 배포 일정 | QA 일정표 공유 | 김철수 | 수요일까지 |\n| 예산 | 회의실 예약 | 이영희 |  |",
       "evidence": [
-        {"cells": ["배포 일정", "QA 일정표 공유", "김철수", "수요일까지"], "transcriptSeqs": [43], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "todo", "id": "k3f9a1-10"}]},
-        {"cells": ["예산", "회의실 예약", "이영희", ""], "transcriptSeqs": [], "edited": true, "needsCheck": false, "sources": [{"agendaId": 102, "kind": "todo", "id": "u-1"}]}
+        {"cells": ["배포 일정", "QA 일정표 공유", "김철수", "수요일까지"], "transcriptSeqs": [43], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "todo", "id": "k3f9a1-10", "decisionPointId": null}]},
+        {"cells": ["예산", "회의실 예약", "이영희", ""], "transcriptSeqs": [], "edited": true, "needsCheck": false, "sources": [{"agendaId": 102, "kind": "todo", "id": "u-1", "decisionPointId": null}]}
       ]
     },
     {
@@ -291,7 +308,7 @@ ai-service는 이 장의 세 가지(회의록 형식 받기, 필드 이름 근�
 |---|---|---|---|---|
 | 3. `POST /internal/rag/documents` (`sourceType=minutes`) | `minutes` 칸에 회의록 형식(4.1)도 받는다 | 회의 중 요약 결과(임시 형식 `schema_version` 0.1)만 받음 | RAG 명세를 만들 때 회의록 형식이 없어 임시 형식을 두었다. 챗봇은 사용자가 저장한 회의록을 찾아야 하고, 회의록은 필드(이름 + 글) 모양이라 임시 형식으로 넣을 수 없다 | **필요.** 없으면 저장된 회의록을 검색할 수 없다 |
 | 4. `POST /internal/rag/answer` 응답 | `citations[].location`에 필드 이름 종류(4.2)를 더한다 | 녹음 시간(`type: time`)만 | 회의록 필드에는 녹음 시간이 없어 지금 방식으로는 위치를 보여 줄 수 없다. 줄마다 근거 시간을 담아 보내는 방법도 있으나, 백엔드의 줄 단위 저장이 필요하고 고친 줄은 근거가 맞지 않을 수 있다 (줄 단위 저장이 생기면 다시 검토) | **필요.** 없으면 저장된 회의록 답변에 근거 위치를 보여 줄 수 없다 |
-| 3. 같은 API의 버전 규칙 | 회의록은 정수 버전을 비교해, 저장된 것보다 낮은 버전은 무시 | 마지막에 받은 버전이 현재 버전 (순서 비교 없음) | 저장한 뒤에도 계속 고칠 수 있어 같은 회의록이 여러 번 들어온다 (4.4). 재시도로 옛 버전이 늦게 도착하면 옛 내용으로 덮어쓴다 | 선택. 백엔드가 순서를 지켜 보내면 빼도 된다 |
+| 3. 같은 API의 버전 규칙 | 회의록은 정수 버전을 비교해, 저장된 것보다 낮은 버전은 무시 | 마지막에 받은 버전이 현재 버전 (순서 비교 없음) | 작성 완료 뒤에도 저장할 때마다 같은 회의록이 다시 들어온다 (4.4). 재시도로 옛 버전이 늦게 도착하면 옛 내용으로 덮어쓴다 | 선택. 백엔드가 순서를 지켜 보내면 빼도 된다 |
 
 응답 코드와 나머지 칸은 RAG 명세 그대로다 (넣기 `202` `{docId, docVersion, status: "accepted"}` 후 완료 콜백, 답변 `200` `{status, answer, citations, errorCode}`).
 
@@ -321,7 +338,7 @@ ai-service는 이 장의 세 가지(회의록 형식 받기, 필드 이름 근�
     "header": "고객성공팀 주간 회의",
     "footer": "사내 공유용",
     "sections": [
-      {"title": "결정 사항", "content": "- 배포 일정: 1차 배포를 10월 30일(목)로 정했다."},
+      {"title": "결정 사항", "content": "- 배포 일정: 1차 배포를 10월 30일(목)로 정함"},
       {"title": "할 일", "content": "| 안건 | 할 일 | 담당 | 기한 |\n|---|---|---|---|\n| 배포 일정 | QA 일정표 공유 | 김철수 | 수요일까지 |\n| 예산 | 회의실 예약 | 이영희 |  |"},
       {"title": "참석자 메모", "content": "다음 회의는 장소를 2층 회의실로 옮김"}
     ]
@@ -352,20 +369,20 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 
 ### 4.3 호환 규칙
 
-지금 RAG API를 부르는 곳은 infra 통합 시험(`nineouting-infra/integration/e2e.py` 6단계)과 ai-service의 시험·손 시험 도구·데모 파일이다. 백엔드는 아직 부르지 않는다 (2026-10-23 확인). 모두 임시 형식을 보낸다.
+지금 RAG API를 부르는 곳은 infra 통합 시험(`nineouting-infra/integration/e2e.py` 6단계)과 ai-service의 시험·손 시험 도구·데모 파일이다. 백엔드는 아직 부르지 않는다 (2026-10-29 확인). 모두 임시 형식을 보낸다.
 
 | 변경 | 규칙 | 기존 호출에 미치는 영향 |
 |---|---|---|
 | `minutes` 형식 | **전환 기간에는 두 형식을 모두 받는다.** `minutes.formatVersion`이 `"1.0"`이면 회의록 형식, `minutes.schema_version`이 `"0.1"`이면 임시 형식으로 읽는다. 둘 다 아니면 `400` | 없음 |
-| 임시 형식 없애기 | 백엔드가 회의록 형식으로 부르기 시작한 뒤, infra 통합 시험과 ai-service 시험·데모를 새 형식으로 바꾸고 나서 없앤다. 없애는 시점은 CN팀과 맞춘다 | 없앨 때 위 호출을 같이 바꾼다 |
+| 임시 형식 없애기 | 백엔드는 RAG를 아직 부르지 않으므로(2026-10-29 확인) 처음부터 회의록 형식으로 부른다. infra 통합 시험 6단계와 `rag-demo/minutes_demo.json`, ai-service 시험·데모를 회의록 형식으로 바꾸고 나서 없앤다. 없애는 시점은 CN팀과 맞춘다 | 없앨 때 위 호출을 같이 바꾼다 |
 | 이미 넣은 회의록 | 다시 넣지 않아도 그대로 검색된다. 근거 위치는 예전처럼 `type: time`으로 나온다 | 없음 |
 | 근거 위치 종류 | 한 답변 안에 `type: time`(임시 형식으로 넣은 회의록)과 `type: section`(회의록 형식)이 섞여 나올 수 있다. 화면은 `label`을 보여 주면 두 종류를 같은 방식으로 처리할 수 있다 | 없음 (통합 시험은 이 칸을 보지 않음) |
 | 정수 버전 비교 | 저장된 버전과 새 버전이 **모두 정수 모양 문자열**(예: `"5"`)일 때만 비교한다. 하나라도 아니면 지금처럼 마지막에 받은 것이 현재 버전이다. 업로드 문서(`sourceType=upload`, 파일 해시)는 대상이 아니다 | 없음 (통합 시험은 `"1"`) |
 | 낮은 버전 요청 | 처리하지 않고 바로 `202` + `{docId, docVersion, status: "ignored"}`로 답한다. 완료 콜백은 보내지 않는다 [ai-service 제안] | 해당 없음 (지금은 낮은 버전을 보내는 곳이 없음) |
 
-### 4.4 저장할 때마다 넣기 [ai-service 제안]
+### 4.4 작성 완료 뒤 넣기 [ai-service 제안]
 
-회의록은 확정 단계 없이 저장한 뒤에도 고칠 수 있다. 그래서 **저장할 때마다** 같은 `docId`에 새 `docVersion`으로 넣기 API를 부른다. ai-service는 회의록마다 최신 버전 하나만 검색 대상으로 둔다 (지금 구현 그대로).
+회의록은 작성 중(`WRITING`)에 임시저장을 하고, 작성 완료(`CONFIRMED`) 때 확정·공유한다. 작성 완료 뒤에도 고쳐서 저장할 수 있다. 자동 저장은 없고, 사용자가 저장할 때만 저장된다. **작성 완료 때 처음 넣고, 그 뒤에 저장하면 그때마다** 같은 `docId`에 새 `docVersion`으로 넣기 API를 부른다. 작성 중인 회의록은 넣지 않는다. 쓰다 만 내용이 챗봇 답에 나오지 않게 하기 위해서다. ai-service는 회의록마다 최신 버전 하나만 검색 대상으로 둔다 (지금 구현 그대로).
 
 | 경우 | 처리 |
 |---|---|
@@ -374,9 +391,8 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 | 옛 버전이 늦게 도착 (8 다음에 7) | 무시하고 `202` + `status: "ignored"`로 답한다 (4.3) |
 | 회의록 삭제 | `DELETE /internal/rag/documents/{docId}` (RAG 명세) |
 
-- `docVersion`은 **저장할 때마다 커지는 정수**로 보낸다 (저장 횟수나 저장 시각 밀리초). 정수가 아니면 순서를 비교하지 못하고 마지막에 받은 것이 현재 버전이 된다.
-- 자동 저장(몇 초마다)이 있으면, 사용자가 저장을 눌렀을 때나 마지막 수정 뒤 몇 초 동안 수정이 없을 때만 부르기를 권한다. 매번 불러도 처리는 되지만 요청과 임베딩이 늘어난다.
-- 초안(API 2 결과)은 사용자가 처음 저장하기 전까지 넣지 않는다.
+- `docVersion`은 **저장할 때마다 커지는 정수**로 보낸다 (회의록의 `version`, 저장 횟수나 저장 시각 밀리초). 정수가 아니면 순서를 비교하지 못하고 마지막에 받은 것이 현재 버전이 된다. 작성 중의 임시저장으로 커진 번호를 그대로 써도 된다 (건너뛴 번호는 상관없다).
+- 초안(API 2 결과)과 작성 중의 임시저장 내용은 넣지 않는다. 작성 완료 전까지 챗봇은 그 회의록을 찾지 못한다.
 
 ## 5. 공통 객체
 
@@ -386,7 +402,8 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 |---|---|---|---|
 | `agendaId` | `int` | 예 | 안건 번호 |
 | `title` | `string` | 예 | 안건 제목. 줄 앞에 붙인다 (7.2) |
-| `decisionPoint` | `string \| null` | 아니요 | 결정할 사항. 미결·결정 확인 필요 줄의 글이 된다. 없으면 그 자리를 비운다 (7.2) |
+| `decisionPoints` | `{decisionPointId: int \| string, position: int, text: string}[]` | 예 (전환 기간 예외는 `decisionPoint` 줄) | 결정할 사항 목록. 1개 이상. 백엔드 안건 목록의 모양 그대로다 (`agenda-contract.md` 4.2.1). `text`는 미결·결정 확인 필요 줄의 글이 된다 (7.2). 회의 끝 요약의 사항과 `decisionPointId`로 짝을 맞춘다 |
+| `decisionPoint` | `string \| null` | 아니요 | v0.7까지의 형식 (결정할 사항 하나). **전환 기간**에만 받는다. `decisionPoints`가 없고 이것이 있으면 번호 없는 사항 1개(`decisionPointId: null`)로 본다 (`agenda-contract.md`와 같은 규칙). 둘 다 오면 `decisionPoints`를 쓴다. 둘 다 없으면 사항 문구 없이 받는다 (v0.7에서 `decisionPoint`가 선택이었으므로). 이때 미결·결정 확인 필요 줄은 `decisionText`로 만든다 (7.2) |
 
 백엔드 원안의 `status`는 `summary` 안에 있으므로 보내도 쓰지 않는다.
 
@@ -409,10 +426,23 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 |---|---|---|---|
 | `agendaId` | `int` | 예 | 안건 번호 |
 | `status` | `string` | 예 | `NOT_STARTED`, `DECIDED`, `UNDECIDED`, `DECISION_CHECK` (`agenda-status-contract.md`). 회의 종료 뒤에는 `DISCUSSING`이 나오지 않는다 (받아도 상태 줄을 만들지 않는다) |
-| `statusReason` | `object \| null` | 예 | `{text: string, evidenceSeqs: int[]}`. `NOT_STARTED`이면 `null`. `DECIDED`이면 결정 줄의 재료 (7.1) |
+| `statusReason` | `object \| null` | 아니요 | **읽지 않는다.** 요약 쪽 코드가 만든 사항 개수 문장이다 (AI-08 명세 3.2). v0.7까지는 결정 줄의 재료였다 |
+| `decisionPoints` | `DecisionPointResult[]` | 예 | 결정할 사항마다 판정 결과. 결정·미결·결정 확인 필요 줄의 재료 (7.1). 없으면 `400` (v0.7까지의 요약은 결정 줄을 만들 수 없다) |
 | `summary` | `SummaryItem[]` | 예 | 안건 보드 요약 문장. 없으면 빈 목록 |
 | `opinions` | `Opinion[]` | 예 | 안건 보드 의견. 없으면 빈 목록 |
 | `todos` | `Todo[]` | 예 | 안건 보드 할 일. 없으면 빈 목록 |
+
+- 안건의 `status`도 줄을 만들 때 보지 않는다. 사항마다의 `status`를 본다 (7.1). 안건이 미결이어도 그 안에 결정된 사항이 있을 수 있다.
+
+`DecisionPointResult` (정의는 `agenda-status-contract.md` 3.1. 초안이 읽는 칸만 적는다):
+
+| 칸 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| `decisionPointId` | `int \| string \| null` | 예 | 결정할 사항 번호. 요청 `agendas[].decisionPoints[]`의 번호와 같다 |
+| `status` | `string` | 예 | `NOT_STARTED`, `UNDECIDED`, `DECIDED`, `DECISION_CHECK` |
+| `decisionText` | `string` | 예 | `DECIDED`면 결정 내용, `DECISION_CHECK`면 결정 후보, `UNDECIDED`면 아직 정해지지 않은 내용. 사람이 고쳤으면 고친 글 |
+| `evidenceSeqs` | `int[]` | 예 | 근거 전사 줄 |
+| `edited`, `needsCheck` | `boolean` | 예 | 요약 항목과 같은 뜻 |
 
 요약 항목 공통 칸 (`SummaryItem`, `Opinion`, `Todo` 모두):
 
@@ -465,7 +495,8 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 |---|---|---|---|
 | `agendaId` | `int` | 예 | 안건 번호 |
 | `kind` | `string` | 예 | `decision`, `undecided`, `decisionCheck`, `summary`, `opinion`, `todo` (7.1) |
-| `id` | `string \| null` | 예 | 요약 항목 번호. 안건 상태에서 나온 줄(`decision`, `undecided`, `decisionCheck`)은 `null` |
+| `id` | `string \| null` | 예 | 요약 항목 번호. 결정할 사항에서 나온 줄(`decision`, `undecided`, `decisionCheck`)은 `null` |
+| `decisionPointId` | `int \| string \| null` | 예 | 결정할 사항에서 나온 줄의 사항 번호. 그 밖의 줄은 `null`. 전환 기간에 번호 없는 사항(5.1)에서 나온 줄도 `null` |
 
 ### 5.7 PreviousLine
 
@@ -481,7 +512,9 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 | 칸 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `title` | `string` | 예 | 필드 이름. 1~100자, 양식 안에서 겹치지 않는다 |
-| `type` | `string` | 예 | `"text"`(글) 또는 `"table"`(표). 표의 열은 보내지 않는다. AI가 채울 때 정한다 (7.6). AI가 채우는 표 필드(`type: "table"`, `aiFill: true`)는 7.6을 구현하기 전까지 `400`으로 거절한다 |
+| `description` | `string` | 아니요 | 양식 편집 화면의 필드 설명. AI가 필드를 고를 때 이름과 함께 본다 (7.2). 표 필드는 열 이름을 정할 때도 본다 (7.6) [구현 전]. 없거나 빈 글이면 이름만 본다. 2,000자 이하 |
+| `type` | `string` | 예 | `"text"`(글) 또는 `"table"`(표). 양식의 기록 방식이 `TABLE`이면 `"table"`, `FREE`(자유 입력형)·`LIST`(목록형)·`CHECKLIST`(체크리스트형)이면 `"text"`로 보낸다. 글 필드는 기록 방식과 상관없이 같은 줄 목록으로 채운다. AI가 채우는 표 필드(`type: "table"`, `aiFill: true`)는 7.6을 구현하기 전까지 `400`으로 거절한다 |
+| `columns` | `int` | 아니요 | 양식에서 사용자가 정한 표의 열 개수. 1~6. 표 필드는 보내야 한다. AI는 이 개수대로 열 이름을 정한다 (7.6). v0.7 요청처럼 없으면 AI가 1~6개 안에서 열 수도 정한다. 행 개수는 보내지 않는다 (놓인 항목 수로 정해진다). 글 필드에서는 읽지 않는다 [구현 전] |
 | `aiFill` | `boolean` | 예 | `true`면 AI가 요약에서 채운다. `false`면 사용자가 채우는 필드로 보고 AI가 쓰지 않는다 |
 | `content` | `string` | 아니요 | 사용자가 채우는 필드(`aiFill: false`)에 이미 써 둔 글. 표는 마크다운 표. 결과에 그대로 돌려준다. `aiFill: true` 필드에서는 읽지 않는다 |
 
@@ -508,7 +541,7 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 
 ## 7. 동작 규칙 — 초안 만들기 (API 1·2)
 
-**초안의 내용은 점검을 마친 요약(`summary`)에서만 만든다.** 요약에 없는 내용은 만들지 않고, 맞는 내용이 없는 필드는 "해당 내용 없음"으로 둔다 (PRD AI-10). AI(LLM)는 필드 고르기, 결정 문장 다듬기, 표의 열 정하기와 칸 값 뽑기(7.6)에만 쓰고, 나머지는 코드가 채운다. **사용자가 채우는 필드(`aiFill: false`)는 AI가 쓰지 않고 받은 글 그대로 돌려준다.**
+**초안의 내용은 점검을 마친 요약(`summary`)에서만 만든다.** 요약에 없는 내용은 만들지 않고, 맞는 내용이 없는 필드는 "해당 내용 없음"으로 둔다 (PRD AI-10). AI(LLM)는 필드 고르기, 표의 열 이름 정하기와 칸 값 뽑기(7.6)에만 쓰고, 나머지는 코드가 채운다. **사용자가 채우는 필드(`aiFill: false`)는 AI가 쓰지 않고 받은 글 그대로 돌려준다.**
 
 ### 7.1 재료
 
@@ -516,38 +549,38 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 
 | 재료 (`kind`) | 어디서 | 줄의 근거 |
 |---|---|---|
-| `decision` | `status`가 `DECIDED`인 안건의 판정 이유(`statusReason`) | `statusReason.evidenceSeqs` |
-| `undecided` | `status`가 `UNDECIDED`인 안건 | `statusReason.evidenceSeqs`. 미결의 증거가 아니라 그 안건에 연결된 마지막 발언 줄이다 (AI-08 명세 3.2). 판정 이유 글은 코드가 쓴 문구라 줄 글에 쓰지 않는다 |
-| `decisionCheck` | `status`가 `DECISION_CHECK`인 안건 | `statusReason.evidenceSeqs` |
+| `decision` | `status`가 `DECIDED`인 **결정할 사항** 하나 (`decisionPoints[]`) | 그 사항의 `evidenceSeqs` |
+| `undecided` | `status`가 `UNDECIDED`인 결정할 사항 하나 | 그 사항의 `evidenceSeqs` |
+| `decisionCheck` | `status`가 `DECISION_CHECK`인 결정할 사항 하나 | 그 사항의 `evidenceSeqs` |
 | `summary` | 안건의 `summary[]` 문장 하나 | 그 문장의 `evidenceSeqs` |
 | `opinion` | 안건의 `opinions[]` 하나 | 그 항목의 `evidenceSeqs` |
 | `todo` | 안건의 `todos[]` 하나 | 그 항목의 `evidenceSeqs` |
 
-- `NOT_STARTED`, `DISCUSSING`인 안건은 상태 줄을 만들지 않는다. 그 안건의 요약 문장·의견·할 일은 재료가 된다.
-- 회의 끝 요약(AI-08)은 결정 문장을 따로 만들지 않는다 (PRD AI-08: 모아 배치만 한다). 결정 줄은 판정 이유를 다듬어 만든다. 판정 이유가 없는 `DECIDED` 안건은 결정 줄이 없다.
+- 결정·미결·결정 확인 필요 줄은 **안건마다가 아니라 결정할 사항마다** 만든다 (v0.8). 회의 끝 요약이 결정을 사항마다 판정하기 때문이다. 한 안건 안에 결정된 사항과 미결 사항이 섞일 수 있고, 근거와 고친 표시도 사항마다 다르다. 사항 줄의 `edited`·`needsCheck`는 그 사항의 값 그대로다.
+- `NOT_STARTED`인 사항은 줄을 만들지 않는다. 안건의 상태(`status`)는 보지 않는다. 요약 문장·의견·할 일은 안건 상태와 상관없이 재료가 된다.
+- 결정 내용은 요약 쪽이 사항마다 쓴 `decisionText`다 (AI-08 명세 3.2). 초안은 새로 쓰거나 다듬지 않는다.
 - 뜻이 비슷한 항목이 따로 있으면(예: 결정과 그 결정에 이른 요약 문장) 각각 줄이 된다. 초안 단계에서 뜻이 겹치는지는 판단하지 않는다.
 
 ### 7.2 배치와 줄의 글
 
-1. 재료 항목마다 가장 맞는 필드 **하나**를 고른다 (AI). 고를 수 있는 필드는 `aiFill: true`인 필드뿐이다 (글·표 모두). 필드 이름의 뜻만 보고 고르며, 같은 항목을 두 필드에 넣지 않는다
+1. 재료 항목마다 가장 맞는 필드 **하나**를 고른다 (AI). 고를 수 있는 필드는 `aiFill: true`인 필드뿐이다 (글·표 모두). 필드 이름과 설명(`description`)의 뜻만 보고 고르며, 같은 항목을 두 필드에 넣지 않는다
 2. 항목 하나가 줄 하나가 된다. 합치거나 나누지 않는다
 3. 어느 필드에도 맞지 않는 항목은 `unplaced`로 돌려준다. 버리지 않는다. AI가 채우는 필드가 하나도 없으면 AI를 부르지 않고 모든 항목을 `unplaced`로 돌려준다
-4. `decisionCheck`(결정인지 확신하지 못한 안건)는 결정 성격의 칸에 넣지 않는다. 사람이 확인하지 않은 결정을 회의록에 결정으로 적지 않기 위해서다. 미결 성격의 칸이 있으면 그곳에 넣는다
+4. `decisionCheck`(결정인지 확신하지 못한 결정할 사항)는 결정 성격의 칸에 넣지 않는다. 사람이 확인하지 않은 결정을 회의록에 결정으로 적지 않기 위해서다. 미결 성격의 칸이 있으면 그곳에 넣는다
 5. 요약 글 안에 지시처럼 보이는 글이 있어도 따르지 않고 자료로만 본다
 
 | 재료 | 글 | 예 |
 |---|---|---|
-| `decision` | **AI가 판정 이유를 결정 문장으로 다듬는다.** 여러 재료를 합치지 않고, 판정 이유에 없는 내용을 더하지 않는다 | 판정 이유 `1차 배포를 10월 30일(목)로 정하고 참석자가 동의함` → `1차 배포를 10월 30일(목)로 정했다.` |
-| `undecided` | 코드: `{결정할 사항}`. 결정할 사항이 없으면 글이 비어 줄에는 안건 제목만 남는다 | `예산: 광고 예산 승인`, 결정할 사항이 없으면 `예산` |
-| `decisionCheck` | 코드: `{결정할 사항} (결정 확인 필요: {statusReason})`. 결정할 사항이 없으면 `(결정 확인 필요: …)`만 | `회식 장소: (결정 확인 필요: 강남역 근처로 하자는 말은 있으나 합의 표현이 없음)` |
+| `decision` | 코드: **`decisionText` 그대로.** 요약 쪽이 검증까지 마친 결정 한 줄이라 다시 다듬지 않는다 | `1차 배포를 10월 30일(목)로 정함` |
+| `undecided` | 코드: `{사항 문구}` (요청 `agendas[].decisionPoints[].text`). 사용자가 회의 전에 쓴 "정해야 할 것"을 그대로 남긴다. 짝이 맞는 문구가 없으면 `decisionText` | `예산: 광고 예산 승인` |
+| `decisionCheck` | 코드: `{사항 문구} (결정 확인 필요: {decisionText})`. 짝이 맞는 문구가 없으면 `(결정 확인 필요: {decisionText})`만 | `회식 장소: 장소 확정 (결정 확인 필요: 강남역 근처로 정함)` |
 | `todo` | 코드: `{할 일} ({담당자 또는 "담당자 미정"}, {기한 또는 "기한 미정"})`. 할 일인지 분명하지 않으면(`unclear`) 괄호 안 끝에 `, 할 일 확인 필요`. 기한은 말한 그대로이며 날짜로 바꾸지 않는다 | `QA 일정표 공유 (김철수, 수요일까지)`, `식당 후보 알아보기 (담당자 미정, 기한 미정, 할 일 확인 필요)` |
 | `summary`, `opinion` | **원래 글 그대로** (코드). 요약 단계에서 이미 정리된 글이라 다시 다듬지 않고 칸만 고른다. 실제 회의 요약으로 시험했을 때 다듬기가 얻는 것은 말끝 정도였고, STT 불확실 표시 삭제·내용 누락·겹문장("이야기가 나왔다는 의견이 나옴")이 생겼다 | `1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴` |
-| 사람이 고친 항목 (`edited: true`) | 종류와 상관없이 고친 글 그대로 (코드) | |
-| 판정 이유에 STT 불확실 표시가 있는 `decision` (`「`, `STT 불확실`, `로 읽힘` 중 하나라도 있음) | **다듬지 않고 원래 글 그대로** (코드). 요약 단계가 남긴 불확실 표시를 AI가 지우거나 한쪽으로 해석해 확정하지 않게 하기 위해서다 | `「목요일」(STT 불확실) 배포로 정하고 동의함` 그대로 |
+| 사람이 고친 항목 (`edited: true`) | 종류와 상관없이 고친 글 그대로 (코드). 사람이 고친 결정 내용은 `decisionText`에 이미 들어 있다 | |
 
 - 위 표는 글 필드의 줄이다. 표 필드에 놓인 항목은 7.6으로 행을 만든다
 - 코드가 줄 앞에 안건 제목을 붙인다: `{안건 제목}: {글}` [화면 대기]
-- 칸 안의 줄 순서: 안건 순서 → 같은 안건 안에서 `decision`·상태 → `summary` → `opinion` → `todo` → 같은 종류 안에서는 요약의 순서
+- 칸 안의 줄 순서: 안건 순서 → 같은 안건 안에서 결정할 사항 줄(`decision`·`undecided`·`decisionCheck`, 사항의 `position` 순) → `summary` → `opinion` → `todo` → 같은 종류 안에서는 요약의 순서
 
 ### 7.3 코드 검사
 
@@ -559,7 +592,6 @@ AI의 결과를 검사하고, 걸리면 걸린 이유를 붙여 다시 시킨다
 | 항목 | 요약에 없는 항목을 가리킴 |
 | 한 번만 | 같은 항목이 두 번 이상 쓰임 |
 | 빠짐 | 어느 칸에도, `unplaced`에도 없는 항목이 있음 |
-| 숫자·날짜 | AI가 다듬은 글에 재료에 없는 숫자나 날짜가 있음 |
 | 빈 줄 | 글이 비었거나 줄바꿈이 들어 있음 |
 | 표 | 7.6의 검사 [구현 전] |
 
@@ -581,7 +613,9 @@ AI의 결과를 검사하고, 걸리면 걸린 이유를 붙여 다시 시킨다
 | `template.fields` 수 | 20 | `400` |
 | 필드 이름 길이 | 100자 (minutes-service 칸 이름 길이와 같음) | `400` |
 | 사용자가 채우는 필드의 `content`, 머리글·바닥글 길이 | 20,000자 | `400` |
-| 표의 열 수 | 1~6개, 열 이름 30자 (7.6) [구현 전] | 검사 실패로 다시 시킴 |
+| 필드 설명(`description`) 길이 | 2,000자 | `400` |
+| 표의 열 수 (`columns`) | 1~6 (5.8) [구현 전] | `400` |
+| 표의 열 이름 길이 | 30자 (7.6) [구현 전] | 검사 실패로 다시 시킴 |
 | AI에 넘기는 항목 수 | 300. 처음 초안은 요약 항목 수, 다시 배치는 `previousLines` 줄 수 (이전 초안에 없던 요약 항목은 AI에 넘기지 않으므로 세지 않음) | `INPUT_TOO_LONG` |
 | `previousLines` 수 | 600 | `400` |
 | `previousLines` 줄 글 길이 | 2,000자 | `400` |
@@ -602,10 +636,10 @@ AI의 결과를 검사하고, 걸리면 걸린 이유를 붙여 다시 시킨다
 
 ### 7.6 표 필드 채우기 [ai-service 제안, 구현 전]
 
-AI가 채우는 표 필드(`type: "table"`, `aiFill: true`)는 열을 사용자가 정하지 않는다. 배치(7.2)가 끝난 뒤, 표 필드마다 AI를 한 번 더 불러 열과 칸 값을 정한다. 배치와 한 번에 하지 않는 것은, 실제 요약으로 맞춰 둔 배치 품질을 흔들지 않기 위해서다.
+AI가 채우는 표 필드(`type: "table"`, `aiFill: true`)는 열의 **개수**만 사용자가 정하고(`columns`) 열 이름은 정하지 않는다. 배치(7.2)가 끝난 뒤, 표 필드마다 AI를 한 번 더 불러 열 이름과 칸 값을 정한다. 배치와 한 번에 하지 않는 것은, 실제 요약으로 맞춰 둔 배치 품질을 흔들지 않기 위해서다.
 
-1. 그 표 필드에 놓인 재료 항목들을 보고 **열 이름을 정한다** (AI). 1~6개. 예: 할 일 항목이면 `안건`, `할 일`, `담당`, `기한`
-2. **항목 하나가 행 하나**가 된다. 행의 칸 값은 그 항목의 재료 글(요약 문장, 할 일, 담당자, 기한, 안건 제목, 결정할 사항)에서 **뽑기만 한다** (AI). 맞는 값이 없으면 빈 칸으로 둔다
+1. 그 표 필드의 이름·설명(`description`)과 놓인 재료 항목들을 보고 **열 이름을 정한다** (AI). 개수는 `columns` 그대로다. `columns`가 없으면 AI가 1~6개로 정한다. 예: 할 일 항목이고 `columns`가 4면 `안건`, `할 일`, `담당`, `기한`
+2. **항목 하나가 행 하나**가 된다. 양식에서 정한 행 개수는 따르지 않는다. 행 수를 맞추려면 항목을 버리거나 빈 행을 넣어야 하기 때문이다. 행의 칸 값은 그 항목의 재료 글(요약 문장, 할 일, 담당자, 기한, 안건 제목, 결정할 사항 문구, 결정 내용)에서 **뽑기만 한다** (AI). 맞는 값이 없으면 빈 칸으로 둔다
 3. 근거·표시·출처는 코드가 항목에서 옮긴다 (줄과 같음)
 4. 놓인 항목이 없는 표 필드는 AI를 부르지 않고 `content: "해당 내용 없음"`, `columns: []`, `evidence: []`로 둔다
 5. 행 순서는 7.2의 줄 순서와 같다
@@ -614,7 +648,7 @@ AI가 채우는 표 필드(`type: "table"`, `aiFill: true`)는 열을 사용자�
 
 | 검사 | 걸리는 경우 |
 |---|---|
-| 열 | 0개이거나 6개 초과, 이름이 비었거나 겹침, 30자 초과 |
+| 열 | 열 수가 `columns`와 다름 (`columns`가 없으면 1~6개가 아님), 이름이 비었거나 겹침, 30자 초과 |
 | 행 | 그 필드에 놓인 항목마다 정확히 한 행이 아님 (빠짐·중복·없는 항목) |
 | 칸 수 | 행의 칸 수가 열 수와 다름 |
 | 칸 값 | 재료 글에 없는 글. 띄어쓰기 차이는 허용하지만, 재료에 없는 숫자·날짜·이름은 안 된다 |
@@ -633,7 +667,7 @@ ai-service는 이 장의 규칙대로 구현했다 (SCRUM-98). 실제로 쓰려�
 
 양식이 바뀌면 칸의 이름뿐 아니라 뜻이 바뀔 수 있다 (예: "결정 사항" → "확정 일정"과 "예산"으로 나눔). 이름이 같은 칸끼리 글을 옮기면 뜻이 바뀐 칸을 알아채지 못한다. 그래서 **기존 초안의 모든 줄을 새 양식의 칸 뜻에 맞게 다시 고른다.** 작성자가 고친 글은 그대로 두고 들어갈 칸만 새로 정한다.
 
-참고: 지금 minutes-service(dev)는 양식을 고르면 기존 칸을 모두 지우고 새 양식대로 빈 칸을 만든다.
+참고: 지금 minutes-service는 양식을 바꾸면 제목이 같은 칸의 글을 남긴다 (REQ-140, 2026-10-28 프론트 기준). 8.4의 임시 처리와 같은 방식이라, 이름은 같고 뜻이 바뀐 칸이나 이름이 바뀐 칸은 다루지 못한다.
 
 ### 8.2 요청
 
@@ -641,8 +675,8 @@ API 1에 새 `requestId`, 새 `template.fields`, **처음과 같은 `summary`**�
 
 ```json
 "previousLines": [
-  {"title": "결정 사항", "sentence": "배포 일정: 1차 배포를 10월 30일(목) 오후로 정했다.", "transcriptSeqs": [40, 42], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "decision", "id": null}], "draftEdited": true},
-  {"title": "할 일", "sentence": "배포 일정: QA 일정표 공유 (김철수, 수요일까지)", "transcriptSeqs": [43], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "todo", "id": "k3f9a1-10"}], "draftEdited": false},
+  {"title": "결정 사항", "sentence": "배포 일정: 1차 배포를 10월 30일(목) 오후로 정함", "transcriptSeqs": [40, 42], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "decision", "id": null, "decisionPointId": 7}], "draftEdited": true},
+  {"title": "할 일", "sentence": "배포 일정: QA 일정표 공유 (김철수, 수요일까지)", "transcriptSeqs": [43], "edited": false, "needsCheck": false, "sources": [{"agendaId": 101, "kind": "todo", "id": "k3f9a1-10", "decisionPointId": null}], "draftEdited": false},
   {"title": "고객 요청", "sentence": "고객사 로고는 행사 전날까지 받기", "transcriptSeqs": [], "edited": false, "needsCheck": false, "sources": [], "draftEdited": true}
 ]
 ```
@@ -653,15 +687,18 @@ API 1에 새 `requestId`, 새 `template.fields`, **처음과 같은 `summary`**�
 |---|---|---|
 | 작성자가 고친 줄 (`draftEdited: true`, `sources` 있음) | **그대로** | 그 줄의 재료 항목을 보고 새 양식에서 다시 고름 |
 | 작성자가 새로 쓴 줄 (`draftEdited: true`, `sources` 없음) | **그대로** | 줄의 글을 보고 새 양식에서 다시 고름 |
-| 고치지 않은 줄 (`draftEdited: false`) | 7.2의 규칙으로 다시 만듦 (AI가 다듬는 줄은 문구가 달라질 수 있음) | 재료 항목을 보고 새 양식에서 다시 고름 |
+| 고치지 않은 줄 (`draftEdited: false`) | 7.2의 규칙으로 다시 만듦 (요약을 점검에서 고쳤으면 고친 글이 된다) | 재료 항목을 보고 새 양식에서 다시 고름 |
 | 어느 칸에도 맞지 않는 줄 | 그대로 | `unplacedLines`로 돌려줌 |
 | `previousLines` 어디에도 없는 재료 항목 (처음에 넣지 못했거나 작성자가 지운 것) | — | 다시 넣지 않고 `unplaced`로 돌려줌. 작성자가 지운 것을 되살리지 않기 위해서다 |
 
 - 줄의 근거, 표시, 출처와 고친 글은 AI가 쓰지 않고 코드가 그대로 옮긴다.
+- 결정할 사항에서 나온 줄은 `agendaId`, `kind`, `decisionPointId`로 재료 항목을 찾는다. 사항 번호가 같아도 요약에서 상태가 바뀌었으면(예: `decisionCheck` → `decision`) 출처가 가리키는 항목이 없는 경우로 다룬다.
+- v0.7 결과로 저장한 줄(`decisionPointId`가 없는 상태 줄)은 출처가 가리키는 항목이 없는 경우로 다룬다.
 - 7.3의 검사에 더해, `previousLines`의 모든 줄이 한 칸이나 `unplacedLines` 중 정확히 한 곳에 있는지 검사한다.
 - 결과의 줄에는 `draftEdited`가 더해진다 (들어온 값 그대로. 다시 배치가 값을 바꾸지 않는다).
 - 고정한 글에 줄바꿈이 있으면 공백으로 바꾼다 (7.3 빈 줄 검사).
 - 칸 안의 줄 순서는 이전 초안의 줄 순서를 따른다. 작성자가 바꾼 순서를 지키고, 작성자가 새로 쓴 줄은 안건이 없어 7.2의 순서에 끼울 자리가 없기 때문이다.
+- 이전 초안의 **표 행**(`Row`)을 `previousLines`로 보내는 모양은 아직 정하지 않았다 (`PreviousLine`은 줄 글 `sentence`만 받는다). 화면에서 표 행을 고칠 수 있는지가 정해지면 정한다 [화면 대기]. 이전 글 줄이 새 양식의 AI가 채우는 표 필드로 가는 경우는 7.6으로 행을 만든다.
 
 명세대로 오지 않은 줄도 작성자가 보던 줄을 잃지 않게 처리한다. 요청 전체를 거절하지 않는다.
 
@@ -688,7 +725,7 @@ ai-service API가 없다. API 2 결과의 줄(`Line`)에 붙은 정보를 백엔
 | "수정됨" | `edited`가 `true`이면 (요약 점검에서 고침) |
 | "확인 필요" | `needsCheck`가 `true`이면 |
 | "전사 수정됨" | `transcriptSeqs` 중 사람이 고친 전사 줄이 있으면. 백엔드가 자기 전사 수정 기록과 대조한다 (ai-service는 전사 수정 기록이 없음) |
-| 30일 뒤 전사 삭제 | `sources`의 `kind`가 `decision`이면 저장된 요약에서 그 안건(`agendaId`)의 판정 이유(`statusReason.text`)를 결정의 맥락으로 보여 준다. 결정이 아닌 줄은 11장 |
+| 30일 뒤 전사 삭제 | `sources`의 `kind`가 `decision`이면 저장된 요약에서 그 안건(`agendaId`)의 요약 문장(`summary[].text`)을 결정의 맥락으로 보여 준다. 화면에는 "이 안건의 논의 요약"처럼 안건 단위라는 것을 밝힌다 (안건에 결정할 사항이 여럿이면 그 사항만의 맥락이 아니다). 요약 문장이 없으면 맥락 없이 보관 기간이 지났다고만 알린다. v0.7의 판정 이유(`statusReason.text`)는 이제 사항 개수 문장이라 쓰지 않는다. 결정이 아닌 줄은 11장 |
 
 ## 10. 백엔드 원안과 다른 곳
 
@@ -696,8 +733,8 @@ ai-service API가 없다. API 2 결과의 줄(`Line`)에 붙은 정보를 백엔
 |---|---|---|---|
 | 1 | 주소 `/drafts` | `/internal/minutes/drafts` | 내부 API 주소 규칙 |
 | 2 | `transcripts` 필수, 관련 발언 고르기는 AI가 판단 | 쓰지 않음 | 초안은 점검을 마친 요약에서만 만든다 |
-| 3 | `summary` = 4장 형식 (`decisions`, `undecidedAgendaIds`, `uncertain`, `todos`) | 안건 보드 `todaySummary` (AI-08, 안건별 형식) | 안건별 논의를 채울 재료, 항목 번호, 수정 표시. AI-08 명세에 반영됨 |
-| 4 | `agendas[].status` | `summary` 안의 상태를 씀 | 같은 정보가 두 곳에 있지 않게 |
+| 3 | `summary` = 4장 형식 (`decisions`, `undecidedAgendaIds`, `uncertain`, `todos`) | 안건 보드 `todaySummary` (AI-08, 안건별 형식). 결정은 사항별 `decisionPoints[].decisionText` | 안건별 논의를 채울 재료, 항목 번호, 수정 표시. AI-08 명세에 반영됨 |
+| 4 | `agendas[].status`, `agendas[].decisionPoint` (문자열 하나) | 상태는 `summary` 안의 사항별 상태를 씀. 결정할 사항은 `decisionPoints[]` (백엔드 안건 목록의 새 모양) | 같은 정보가 두 곳에 있지 않게. 사항이 여러 개인 안건 |
 | 5 | 다시 만들기 입력 없음 | `previousLines` | 양식 변경 시 고친 줄 유지 |
 | 6 | 접수 응답 `202`만 | `202` 본문(`ACCEPTED`/`DUPLICATE`), `400`, `503` | 잘못된 요청을 바로 알림 |
 | 7 | 예시의 "안건별 논의"에 전사에서 뽑은 내용 | 요약 문장·의견으로 채움 | 요약에서만 만든다 |
@@ -708,7 +745,7 @@ ai-service API가 없다. API 2 결과의 줄(`Line`)에 붙은 정보를 백엔
 | 12 | 넣지 못한 내용 알림 없음 | `unplaced`, `unplacedLines` | 내용이 조용히 사라지지 않게 |
 | 13 | 오류 코드 `TRANSCRIPT_TOO_LONG` | `INPUT_TOO_LONG`, `LLM_TIMEOUT`, `LLM_FAILED`, `CHECK_FAILED`, `INTERNAL_ERROR` | 전사를 안 쓰고, 실패 이유를 나눔 |
 | 14 | 콜백 재전송 "몇 번" | 3회, 1·2·4초, `408`·`429`·`5xx`만 | RAG 콜백과 같은 규칙 |
-| 15 | `template.items` 이름 목록 | `template.fields` (종류, AI 채움 설정, 사용자 글), `header`·`footer` | 기획: 필드마다 AI 채움 설정, 표 필드, 머리글·바닥글 (v0.7) |
+| 15 | `template.items` 이름 목록 | `template.fields` (설명, 종류, 표 열 개수, AI 채움 설정, 사용자 글), `header`·`footer` | 기획: 필드마다 AI 채움 설정, 표 필드, 머리글·바닥글 (v0.7). 양식 편집 화면의 설명·열 개수 (v0.8) |
 
 ## 11. 확인할 것
 
@@ -717,18 +754,17 @@ ai-service API가 없다. API 2 결과의 줄(`Line`)에 붙은 정보를 백엔
 | 항목 | 내용 |
 |---|---|
 | **초안 줄 저장** | API 2의 줄마다 근거·표시·출처·초안에서 고쳤는지를 저장할 곳. 지금 minutes-service의 칸은 이름과 글만 저장한다. 이것이 없으면 근거 보여 주기(9장)와 다시 배치(8장)를 할 수 없다 |
-| 요약 돌려보내기 | 안건 보드의 `todaySummary`(`final: true`)를 저장했다가, 사용자가 점검에서 고친 내용을 반영해 같은 형식으로 `summary`에 담을 수 있는지. 고친 항목은 `edited`를 켜고, 새로 넣은 항목은 근거 줄을 비우고 `u-` 같은 접두어로 `id`를 붙임 (5.3) |
-| 쓰는 요약 값 | `summary`는 안건 보드 `todaySummary`의 `final: true` 값 그대로인지. `requestRev`·`final`을 빼거나 `meetingId`를 붙이지 않아도 됨 (5.2) |
-| 점검 수정의 저장 위치 | 점검은 회의 종료 뒤의 일이고 ai-service는 회의 상태를 메모리에만 두어 재시작 때 잃을 수 있으므로, 수정은 백엔드 복사본에 저장하는 쪽이 안전하다 (요약 담당과 함께 정함) |
+| 회의 끝 요약을 초안 요청에 다시 담기 | 회의가 끝나면 ai-service가 안건 보드로 보내는 `todaySummary`(`final: true`)를 백엔드가 저장하고, 사용자가 점검에서 고친 내용도 그 복사본에 반영한다. 초안을 요청할 때 그 값을 같은 모양 그대로 `summary`에 담는다 (`requestRev`·`final`을 빼거나 `meetingId`를 붙이지 않아도 됨, 5.2). 고친 항목은 `edited`를 켜고, 새로 넣은 항목은 근거 줄을 비우고 `u-` 같은 접두어로 `id`를 붙인다 (5.3). ai-service는 회의 상태를 메모리에만 두어 재시작하면 잃으므로, 회의가 끝난 뒤의 요약과 수정은 백엔드만 가지고 있다. 이렇게 할 수 있는지 |
 | "전사 수정됨" 표시 | 백엔드의 전사 수정 기록으로 표시할 수 있는지 (9장) |
 | 원안과 다른 곳 | 10장의 표 |
-| 양식 변경 처리 | 지금은 양식을 고르면 칸 내용을 모두 지운다. 8장의 다시 배치로 바꿀 수 있는지, 그 전까지의 임시 처리(8.4) |
+| 양식 변경 처리 | 지금은 제목이 같은 칸의 글만 남긴다 (8.4 방식). 뜻이 바뀐 칸까지 다루려면 8장의 다시 배치와 초안 줄 저장이 필요하다. 바꿀 수 있는지 |
 | 콜백 호스트 | 운영 환경에서 콜백을 받는 서버의 호스트와 포트 (3.3) |
-| 저장할 때마다 넣기 | 회의록을 저장할 때마다 RAG 넣기를 부를 수 있는지. `docVersion`이 저장할 때마다 커지는 정수인지. 자동 저장이 있으면 언제 부를지 (4.4) |
+| 작성 완료 뒤 넣기 | 작성 완료 때와 그 뒤 저장할 때마다 RAG 넣기를 부를 수 있는지. `docVersion`으로 회의록의 `version`을 쓸 수 있는지 (4.4) |
 | 회의록 버전 | 낮은 버전을 무시하고 `"ignored"`로 답하는 규칙(4.3)을 넣어도 되는지 |
-| 임시 형식 없애는 시점 | 백엔드가 회의록 형식으로 RAG를 부르기 시작하는 시점, infra 통합 시험(`e2e.py` 6단계)을 새 형식으로 바꿀 시점 (4.3) |
+| 임시 형식 없애는 시점 | infra 통합 시험(`e2e.py` 6단계)과 데모 파일(`rag-demo/minutes_demo.json`)을 회의록 형식으로 바꿀 시점. 백엔드는 처음부터 회의록 형식으로 부르면 된다 (4.3) |
 | 볼 수 있는 회의록 수 | 답변 요청의 `docIds`는 최대 1,000개. 한 사용자가 볼 수 있는 회의록이 이보다 많을 수 있는지 |
-| 양식 필드 (v0.7) | 양식을 `template.fields`(5.8)로 보낼 수 있는지. 표 필드의 저장 형식과 마크다운 표 변환. 머리글·바닥글 저장 |
+| 양식 필드 (v0.7, v0.8) | 양식을 `template.fields`(5.8)로 보낼 수 있는지: 필드 설명, 기록 방식 → `type`, 표의 열 개수 → `columns`, 필드마다 AI 채움 설정. 표 필드의 저장 형식과 마크다운 표 변환. 머리글·바닥글 저장 (껐으면 `null`) |
+| 결정할 사항 (v0.8) | 초안 요청의 `agendas`에 안건 목록의 `decisionPoints[]`를 그대로 담을 수 있는지 (5.1) |
 | 원문 문서 | 코드 주석이 가리키는 `docs/services/minutes-service.md`의 위치. 이 명세는 전달받은 4장·5장·6장을 기준으로 썼다 |
 
 **CN팀 (배포)**

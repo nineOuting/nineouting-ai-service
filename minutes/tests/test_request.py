@@ -42,6 +42,26 @@ def test_이전_줄은_명세_8_3의_경우를_거절하지_않는다():
         validate_request(body)
 
 
+def test_안건의_statusReason과_모르는_사항_상태는_보지_않는다():
+    body = load_request()
+    agenda(body)["statusReason"] = "결정할 사항 1개가 모두 결정됨"
+    agenda(body, 1).pop("statusReason")
+    agenda(body)["decisionPoints"][0]["status"] = "DISCUSSING"
+    validate_request(body)
+
+
+def test_결정할_사항_전환_기간_모양도_받는다():
+    """decisionPoints 대신 decisionPoint 글 하나, 둘 다 없음, 요약 쪽 사항 번호 null (명세 5.1·5.2)"""
+    body = load_request()
+    body["agendas"][0]["decisionPoint"] = body["agendas"][0].pop("decisionPoints")[0]["text"]
+    del body["agendas"][1]["decisionPoints"]
+    agenda(body)["decisionPoints"][0]["decisionPointId"] = None
+    agenda(body, 1)["decisionPoints"][0]["decisionPointId"] = None
+    body["agendas"][2]["decisionPoints"][0]["decisionPointId"] = "dp-12"           # 문자열 번호
+    agenda(body, 2)["decisionPoints"][0]["decisionPointId"] = "dp-12"
+    validate_request(body)
+
+
 def test_빠진_목록과_표시는_너그럽게_본다():
     body = load_request()
     del agenda(body)["opinions"]
@@ -69,8 +89,26 @@ def test_빠진_목록과_표시는_너그럽게_본다():
     (lambda b: agenda(b).update(agendaId=999), "summary.agendas[0].agendaId가 agendas에 없음"),
     (lambda b: agenda(b, 1).update(agendaId=101), "summary.agendas[1].agendaId가 앞의 안건과 겹침"),
     (lambda b: agenda(b).update(status="DONE"), "summary.agendas[0].status는"),
-    (lambda b: agenda(b).update(statusReason="동의함"), "statusReason이 객체가 아님"),
-    (lambda b: agenda(b)["statusReason"].update(evidenceSeqs=["40"]), "statusReason.evidenceSeqs는 0 이상 정수"),
+    (lambda b: b["agendas"][0].update(decisionPoints=[]), "agendas[0].decisionPoints는 1개 이상의 목록"),
+    (lambda b: b["agendas"][0].update(decisionPoints="배포 날짜"), "agendas[0].decisionPoints는 1개 이상의 목록"),
+    (lambda b: b["agendas"][0]["decisionPoints"][0].update(decisionPointId=True),
+     "agendas[0].decisionPoints[0].decisionPointId는 양의 정수나 문자열"),
+    (lambda b: b["agendas"][0]["decisionPoints"][0].update(decisionPointId=None),
+     "agendas[0].decisionPoints[0].decisionPointId는 양의 정수나 문자열"),
+    (lambda b: b["agendas"][1]["decisionPoints"][0].update(decisionPointId=7),
+     "agendas[1].decisionPoints[0].decisionPointId가 앞의 사항과 겹침"),
+    (lambda b: b["agendas"][0]["decisionPoints"][0].update(position="1"), "agendas[0].decisionPoints[0].position이 정수"),
+    (lambda b: b["agendas"][0]["decisionPoints"][0].update(text=" "), "agendas[0].decisionPoints[0].text가 비었거나"),
+    (lambda b: agenda(b).pop("decisionPoints"), "summary.agendas[0].decisionPoints가 목록이 아님"),
+    (lambda b: agenda(b)["decisionPoints"][0].update(decisionText=""),
+     "summary.agendas[0].decisionPoints[0].decisionText가 비었거나"),
+    (lambda b: agenda(b)["decisionPoints"][0].update(status=None), "summary.agendas[0].decisionPoints[0].status"),
+    (lambda b: agenda(b)["decisionPoints"][0].update(evidenceSeqs=None),
+     "summary.agendas[0].decisionPoints[0].evidenceSeqs는 0 이상 정수"),
+    (lambda b: agenda(b)["decisionPoints"][0].update(edited="no"),
+     "summary.agendas[0].decisionPoints[0].edited가 true/false가 아님"),
+    (lambda b: agenda(b, 1)["decisionPoints"][0].update(decisionPointId=7),
+     "summary.agendas[1].decisionPoints[0].decisionPointId가 앞의 사항과 겹침"),
     (lambda b: agenda(b).update(todos="없음"), "summary.agendas[0].todos가 목록이 아님"),
     (lambda b: agenda(b)["todos"][0].update(task=""), "summary.agendas[0].todos[0].task가 비었거나"),
     (lambda b: agenda(b)["summary"][0].update(id=None), "summary.agendas[0].summary[0].id"),
@@ -95,6 +133,9 @@ def test_빠진_목록과_표시는_너그럽게_본다():
      "previousLines[0].sources[0].kind는"),
     (lambda b: b.update(previousLines=[dict(LINE, sources=[{"agendaId": 101, "kind": "todo", "id": 3}])]),
      "previousLines[0].sources[0].id는 문자열이나 null"),
+    (lambda b: b.update(previousLines=[dict(LINE, sources=[{"agendaId": 101, "kind": "decision", "id": None,
+                                                            "decisionPointId": 0}])]),
+     "previousLines[0].sources[0].decisionPointId는 양의 정수나 문자열"),
 ])
 def test_틀린_요청은_칸_위치를_담은_오류(change, expected):
     with pytest.raises(InvalidInput) as e:

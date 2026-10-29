@@ -3,35 +3,30 @@
 요약 형식에 기대는 곳은 이 파일뿐이다. 형식(안건 보드 todaySummary, docs/api/agenda-today-summary-contract.md)이 바뀌면 여기만 고친다.
 입력은 요청 검사(request.py)를 통과한 값이라고 본다.
 
-  decision        DECIDED 안건의 판정 이유      AI 가 결정 문장으로 다듬는다. 회의 끝 요약은 결정 문장을 따로 만들지 않는다
-  undecided       UNDECIDED 안건                글: {결정할 사항}
-  decisionCheck   DECISION_CHECK 안건           글: {결정할 사항} (결정 확인 필요: {판정 이유})
-  summary         요약 문장 하나                원래 글 그대로
-  opinion         의견 하나                     원래 글 그대로
-  todo            할 일 하나                    글: {할 일} ({담당자}, {기한}[, 할 일 확인 필요])
+  decision        DECIDED 인 결정할 사항 하나          글: {decisionText}
+  undecided       UNDECIDED 인 결정할 사항 하나        글: {사항 문구}. 짝이 맞는 문구가 없으면 {decisionText}
+  decisionCheck   DECISION_CHECK 인 결정할 사항 하나   글: {사항 문구} (결정 확인 필요: {decisionText})
+  summary         요약 문장 하나                       원래 글 그대로
+  opinion         의견 하나                            원래 글 그대로
+  todo            할 일 하나                           글: {할 일} ({담당자}, {기한}[, 할 일 확인 필요])
 
-AI 가 글을 다듬는 재료는 결정(판정 이유 → 결정 문장) 하나뿐이다. 요약 문장과 의견은 요약 단계에서 이미 정리된 글이라
-다시 다듬지 않고 칸만 고른다. 다듬게 했을 때 얻는 것은 말끝 정도였고, 잃는 것이 더 많았다
+결정·미결 줄은 안건마다가 아니라 결정할 사항마다 만든다 (명세 v0.8). 회의 끝 요약이 결정을 사항마다 판정하고,
+한 안건 안에 결정된 사항과 미결 사항이 섞일 수 있기 때문이다. 안건의 status·statusReason 은 보지 않는다
+(statusReason 은 "3개 중 1개가 결정됨" 같은 개수 문장이다).
+
+모든 글은 코드가 정하고 AI 는 칸만 고른다. 결정 내용(decisionText)은 요약 쪽이 검증까지 마친 한 줄이고,
+요약 문장과 의견도 요약 단계에서 정리된 글이라 다시 다듬지 않는다. 다듬게 했을 때 얻는 것은 말끝 정도였고 잃는 것이 더 많았다
 (실제 회의 요약 시험, 2026-10-23: STT 불확실 표시 삭제 「세개」(3개로 읽힘) → "3개", 내용 누락 「일본」(STT 불확실) 대신 → 빠짐,
 "이야기가 나옴" → "이야기가 나왔다는 의견이 나옴" 같은 겹문장).
-판정 이유에 STT 불확실 표시(「」 인용, "STT 불확실", "…로 읽힘")가 있으면 결정도 다듬지 않고 원래 글 그대로 쓴다.
 """
 from .models import KIND_RANK, Material
 
 OPINION_LABELS = {"OPINION": "의견", "EVIDENCE": "근거", "CONCERN": "우려", "QUESTION": "질문"}
+POINT_KINDS = {"DECIDED": ("decision", "결정"), "UNDECIDED": ("undecided", "미결"),
+               "DECISION_CHECK": ("decisionCheck", "결정 확인 필요")}
 NO_ASSIGNEE = "담당자 미정"
 NO_DUE = "기한 미정"
 TODO_UNCLEAR = "할 일 확인 필요"
-STT_MARKS = ("「", "STT 불확실", "로 읽힘")
-
-
-def has_stt_mark(text: str) -> bool:
-    return any(mark in text for mark in STT_MARKS)
-
-
-def _keep_if_marked(item: dict, text: str) -> str | None:
-    """사람이 고쳤거나 STT 불확실 표시가 있으면 원래 글 그대로(고정), 아니면 None(AI 가 다듬음)."""
-    return text if item.get("edited") or has_stt_mark(text) else None
 
 
 def build_materials(agendas: list[dict], summary: dict) -> list[Material]:
@@ -40,15 +35,13 @@ def build_materials(agendas: list[dict], summary: dict) -> list[Material]:
     drafts = []                                     # (order, 번호 없는 재료 칸들)
     for ai, agenda in enumerate(summary.get("agendas") or []):
         info = titles[agenda["agendaId"]]
-        drafts += _status_items(ai, agenda, info)
+        drafts += _point_items(ai, agenda, info)
         for i, item in enumerate(agenda.get("summary") or []):
-            drafts.append(_item(ai, "summary", i, item, "요약", item["text"], fixed=item["text"]))
+            drafts.append(_item(ai, "summary", i, item, "요약", item["text"]))
         for i, item in enumerate(agenda.get("opinions") or []):
-            drafts.append(_item(ai, "opinion", i, item, OPINION_LABELS.get(item.get("kind"), "의견"), item["text"],
-                                fixed=item["text"]))
+            drafts.append(_item(ai, "opinion", i, item, OPINION_LABELS.get(item.get("kind"), "의견"), item["text"]))
         for i, item in enumerate(agenda.get("todos") or []):
-            text = todo_text(item)
-            drafts.append(_item(ai, "todo", i, item, "할 일", text, fixed=text))
+            drafts.append(_item(ai, "todo", i, item, "할 일", todo_text(item)))
 
     materials = []
     for n, (ai, fields) in enumerate(sorted(drafts, key=lambda d: d[1]["order"]), 1):
@@ -65,37 +58,52 @@ def todo_text(todo: dict) -> str:
     return f"{todo['task']} ({assignee}, {due}{unclear})"
 
 
-def _status_items(ai, agenda, info):
-    """안건 상태에서 나오는 줄: 결정, 미결, 결정 확인 필요. 그 밖의 상태는 줄이 없다.
-    상태 줄은 요약 항목이 아니라 id 가 없고, 근거는 판정 이유의 줄이다."""
-    status = agenda.get("status")
-    reason = agenda.get("statusReason") or {}
-    why = (reason.get("text") or "").strip()
-    status_line = {"id": None, "evidenceSeqs": reason.get("evidenceSeqs") or [], "edited": False, "needsCheck": False}
-    if status == "DECIDED":
-        return [_item(ai, "decision", 0, status_line, "결정", why, fixed=_keep_if_marked({}, why))] if why else []
-    if status not in ("UNDECIDED", "DECISION_CHECK"):
-        return []
-    # 결정할 사항이 없으면 글을 비워, 줄에는 안건 제목만 남게 한다 (lines.line_text). 제목이 두 번 나오지 않게
-    point = (info.get("decisionPoint") or "").strip()
-    if status == "UNDECIDED":
-        kind, label, text = "undecided", "미결", point
-    else:
-        kind, label = "decisionCheck", "결정 확인 필요"
-        mark = f"(결정 확인 필요: {why})" if why else "(결정 확인 필요)"
-        text = f"{point} {mark}" if point else mark
-    return [_item(ai, kind, 0, status_line, label, text, fixed=text)]
+def agenda_points(agenda: dict) -> list[dict]:
+    """요청 agendas[] 하나의 결정할 사항 목록 (position 순).
+    전환 기간: decisionPoints 가 없고 decisionPoint 글이 있으면 번호 없는 사항 1개로 본다 (명세 5.1). 둘 다 없으면 빈 목록."""
+    if "decisionPoints" in agenda:
+        return sorted(agenda["decisionPoints"], key=lambda p: p["position"])
+    text = (agenda.get("decisionPoint") or "").strip()
+    return [{"decisionPointId": None, "position": 1, "text": text}] if text else []
 
 
-def _item(ai, kind, index, item, label, text, fixed):
+def _point_items(ai, agenda, info):
+    """결정할 사항마다 줄 하나: 결정, 미결, 결정 확인 필요. 그 밖의 상태(NOT_STARTED 등)는 줄이 없다.
+    줄 순서는 안건 목록의 사항 순서(position)이고, 안건 목록과 짝이 맞지 않는 사항은 그 뒤에 요약의 순서로 둔다."""
+    points = agenda_points(info)
+    rank = {p["decisionPointId"]: i for i, p in enumerate(points)}
+    texts = {p["decisionPointId"]: p["text"].strip() for p in points}
+    out = []
+    for j, result in enumerate(agenda.get("decisionPoints") or []):
+        if result.get("status") not in POINT_KINDS:
+            continue
+        kind, label = POINT_KINDS[result["status"]]
+        pid = result.get("decisionPointId")
+        decided = result["decisionText"].strip()
+        # 번호가 없는 사항(전환 기간)은 안건 목록에도 번호 없는 사항이 하나뿐일 때만 짝으로 본다
+        paired = pid in texts and (pid is not None or len(points) == 1)
+        point = texts[pid] if paired else ""
+        if kind == "decision":
+            text = decided
+        elif kind == "undecided":
+            text = point or decided
+        else:
+            mark = f"(결정 확인 필요: {decided})"
+            text = f"{point} {mark}" if point else mark
+        index = rank[pid] if paired else len(points) + j
+        out.append(_item(ai, kind, index, result, label, text, decision_point_id=pid))   # 사항 결과에는 id 가 없다
+    return out
+
+
+def _item(ai, kind, index, item, label, text, decision_point_id=None):
     return ai, {
         "kind": kind,
         "item_id": item.get("id"),
         "label": label,
-        "text": fixed if fixed is not None else text,
-        "fixed_text": fixed,
+        "text": text,
         "evidence_seqs": tuple(item.get("evidenceSeqs") or ()),
         "edited": bool(item.get("edited")),
         "needs_check": bool(item.get("needsCheck")),
         "order": (ai, KIND_RANK[kind], index),
+        "decision_point_id": decision_point_id,
     }

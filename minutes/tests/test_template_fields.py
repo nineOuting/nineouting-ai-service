@@ -101,9 +101,9 @@ def test_AI가_사용자_필드_번호를_고르면_검사에_걸려_다시_시�
     """AI 는 AI 필드 2개만 본다. 3번(없는 칸)을 고르면 다시 시킨다."""
     body = v07(load_request(), [ai("논의"), user("메모"), ai("기타")])
     refs = [f"m{i}" for i in range(1, 11)]
-    bad = {"placements": [{"m": r, "section": 3, **({"text": "1차 배포를 10월 30일(목)로 정했다."} if r == "m1" else {})}
+    bad = {"placements": [{"m": r, "section": 3}
                           for r in refs], "unplaced": []}
-    good = {"placements": [{"m": r, "section": 1, **({"text": "1차 배포를 10월 30일(목)로 정했다."} if r == "m1" else {})}
+    good = {"placements": [{"m": r, "section": 1}
                            for r in refs], "unplaced": []}
     llm = ScriptLLM(bad, good)
     result = make_draft(body, llm)
@@ -121,6 +121,8 @@ def test_AI가_사용자_필드_번호를_고르면_검사에_걸려_다시_시�
     ([{"title": "할 일", "type": "text", "aiFill": "yes"}], "template.fields[0].aiFill이 true/false"),
     ([{"title": "할 일", "type": "text"}], "template.fields[0].aiFill이 true/false"),
     ([{"title": "할 일", "type": "table", "aiFill": True}], "AI가 채우는 표 필드는 아직 지원하지 않음"),
+    ([{**ai("할 일"), "description": 3}], "template.fields[0].description는 문자열이나 null"),
+    ([{**ai("할 일"), "description": "가" * 2001}], "template.fields[0].description은 2000자"),
     ([user("메모", 3)], "template.fields[0].content는 문자열이나 null"),
     ([user("메모", "가" * 20_001)], "template.fields[0].content는 20000자"),
 ])
@@ -141,9 +143,19 @@ def test_머리글_바닥글_검사(key, value, message):
         validate_request(body)
 
 
+def test_필드_설명은_AI가_보는_칸_이름_뒤에_붙고_결과에는_나오지_않는다():
+    fields = [{**ai("결정 사항"), "description": "확정된 것만"}, {**user("메모"), "description": "사용자 메모"},
+              {**ai("할 일"), "description": ""}]
+    llm = ScriptLLM({"placements": [{"m": f"m{i}", "section": 1} for i in range(1, 11)], "unplaced": []})
+    result = make_draft(v07(load_request(), fields), llm)
+    assert "<칸>\n1. 결정 사항 (설명: 확정된 것만)\n2. 할 일\n</칸>" in llm.calls[0][1]
+    assert "사용자 메모" not in llm.calls[0][1]
+    assert all("description" not in s for s in result["sections"])
+
+
 def test_fields가_있으면_items는_보지_않는다():
     body = v07(load_request(), [ai("결정 사항")])
     body["template"]["items"] = []                                              # v0.6 칸이 틀려도 fields 를 쓴다
     validate_request(body)
-    result = make_draft(body, ScriptLLM({"placements": [{"m": f"m{i}", "section": 1, **({"text": "1차 배포를 10월 30일(목)로 정했다."} if i == 1 else {})} for i in range(1, 11)], "unplaced": []}))
+    result = make_draft(body, ScriptLLM({"placements": [{"m": f"m{i}", "section": 1} for i in range(1, 11)], "unplaced": []}))
     assert [s["title"] for s in result["sections"]] == ["결정 사항"]

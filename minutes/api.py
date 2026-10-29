@@ -29,13 +29,17 @@ MAX_TRACE_ID = 200
 EXAMPLE = {
     "requestId": "6f1c2a9e-1b7d-4c55-9d1a-3a8e0f4b2c10", "minutesId": 41, "meetingId": 31,
     "template": {"header": "고객성공팀 주간 회의", "footer": None, "fields": [
-        {"title": "안건별 논의", "type": "text", "aiFill": True}, {"title": "결정 사항", "type": "text", "aiFill": True},
-        {"title": "할 일", "type": "text", "aiFill": True},
-        {"title": "참석자 메모", "type": "text", "aiFill": False, "content": "다음 회의는 2층 회의실"}]},
-    "agendas": [{"agendaId": 101, "title": "배포 일정", "decisionPoint": "배포 날짜 확정"}],
+        {"title": "안건별 논의", "description": "안건마다 나온 이야기", "type": "text", "aiFill": True},
+        {"title": "결정 사항", "description": "", "type": "text", "aiFill": True},
+        {"title": "할 일", "description": "", "type": "text", "aiFill": True},
+        {"title": "참석자 메모", "description": "", "type": "text", "aiFill": False, "content": "다음 회의는 2층 회의실"}]},
+    "agendas": [{"agendaId": 101, "title": "배포 일정",
+                 "decisionPoints": [{"decisionPointId": 7, "position": 1, "text": "배포 날짜 확정"}]}],
     "summary": {"requestRev": 3, "final": True, "agendas": [{
         "agendaId": 101, "status": "DECIDED",
-        "statusReason": {"text": "1차 배포를 10월 30일(목)로 정하고 참석자가 동의함", "evidenceSeqs": [40, 42]},
+        "statusReason": {"text": "결정할 사항 1개가 모두 결정됨", "evidenceSeqs": [40, 42]},
+        "decisionPoints": [{"decisionPointId": 7, "status": "DECIDED", "decisionText": "1차 배포를 10월 30일(목)로 정함",
+                            "evidenceSeqs": [40, 42], "edited": False, "needsCheck": False}],
         "summary": [{"id": "k3f9a1-1", "text": "1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴",
                      "evidenceSeqs": [38, 39], "edited": False, "needsCheck": False}],
         "opinions": [], "todos": []}]},

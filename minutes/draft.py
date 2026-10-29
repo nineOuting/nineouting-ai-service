@@ -46,7 +46,7 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
     request_id, template = body["requestId"], body["template"]
     fields, v07 = template_fields(template)
     ai_fields = [i for i, f in enumerate(fields) if f.ai_fill]        # AI 가 보는 칸 번호 → 양식 필드 위치
-    items = [fields[i].title for i in ai_fields]
+    items = [fields[i] for i in ai_fields]                             # 이름과 설명을 AI 에 넘긴다
     extra = {"header": template.get("header"), "footer": template.get("footer")} if v07 else None
     previous = body.get("previousLines") or []
     if previous:
@@ -64,7 +64,7 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
 
     if not materials or not items:
         # 재료가 없거나 AI 가 채울 필드가 없으면 AI 를 부르지 않는다. 재료는 모두 넣지 못한 것으로 돌려준다
-        nothing = Placement(sections={}, texts={}, unplaced=tuple(m.ref for m in materials))
+        nothing = Placement(sections={}, unplaced=tuple(m.ref for m in materials))
         sections, unplaced = build_sections(fields, materials, nothing, v07)
         log.info("초안 완료 %s attempts=0 ms=%d", tag, _ms(t0))
         return succeeded(request_id, sections, not_sent + unplaced, unplaced_lines(materials, nothing, previous), extra)
@@ -82,7 +82,7 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
 
     placement = outcome.placement
     placement = Placement(sections={ref: ai_fields[i] for ref, i in placement.sections.items()},
-                          texts=placement.texts, unplaced=placement.unplaced)
+                          unplaced=placement.unplaced)
     sections, unplaced = build_sections(fields, materials, placement, v07)
     unplaced = not_sent + unplaced
     lost_lines = unplaced_lines(materials, placement, previous)

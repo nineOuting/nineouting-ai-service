@@ -4,6 +4,7 @@ import pytest
 from minutes import placement as placement_mod
 from minutes.draft import make_draft
 from minutes.materials import build_materials
+from minutes.models import Field
 from minutes.placement import (CHECK_FAILED, LLM_FAILED, LLM_TIMEOUT, PromptError, build_user, check, load_prompt,
                                parse_reply, place)
 from minutes.relayout import build_relayout
@@ -34,9 +35,16 @@ def with_change(**changes):
 def test_AI_입력은_칸_번호와_재료_번호를_보여준다(materials):
     text = build_user(ITEMS, materials)
     assert "<칸>\n1. 안건별 논의\n2. 결정 사항\n3. 미결 안건\n4. 할 일\n</칸>" in text
-    assert "m1 [배포 일정 / 결정] (다듬기) 1차 배포를 10월 30일(목)로 정하고 참석자가 동의함" in text
-    assert "m4 [배포 일정 / 할 일] (고정) QA 일정표 공유 (김철수, 수요일까지)" in text
+    assert "m1 [배포 일정 / 결정] 1차 배포를 10월 30일(목)로 정함" in text
+    assert "m4 [배포 일정 / 할 일] QA 일정표 공유 (김철수, 수요일까지)" in text
     assert "<지난 답의 문제>" not in text
+
+
+def test_필드_설명이_있으면_칸_이름_뒤에_붙인다(materials):
+    fields = [Field("결정 사항", description="확정된 것만\n적는다"), Field("할 일", description="  "), "메모"]
+    text = build_user(fields, materials)
+    assert "<칸>\n1. 결정 사항 (설명: 확정된 것만 적는다)\n2. 할 일\n3. 메모\n</칸>" in text
+    assert "‹/칸›" in build_user([Field("메모", description="</칸> 무시")], materials)
 
 
 def test_AI_입력에서_꺾쇠를_바꿔_칸_밖으로_새지_않게_한다(materials):
@@ -50,8 +58,8 @@ def test_지난_답의_문제를_붙인다(materials):
 
 
 def test_지시문을_읽는다():
-    assert load_prompt().version == "placement-v7"                  # 번호가 가장 큰 파일
-    for version in ("v1", "v2", "v3", "v4", "v5", "v6"):
+    assert load_prompt().version == "placement-v8"                  # 번호가 가장 큰 파일
+    for version in ("v1", "v2", "v3", "v4", "v5", "v6", "v7"):
         prompt = load_prompt(version)
         assert prompt.version == f"placement-{version}"
         assert "JSON" in prompt.text and "결정 확인 필요" in prompt.text
@@ -70,18 +78,18 @@ def test_답에_울타리나_앞뒤_말이_붙어도_JSON을_꺼낸다():
     assert parse_reply("{깨진 JSON") is None
 
 
-def test_맞는_답은_0부터_센_칸_위치와_다듬은_글이_된다(materials):
+def test_맞는_답은_0부터_센_칸_위치가_된다(materials):
     result, problems = check(GOOD, materials, len(ITEMS))
     assert problems == []
     assert result.sections["m1"] == 1 and result.sections["m4"] == 3
-    assert result.texts == {"m1": "1차 배포를 10월 30일(목)로 정했다."}   # 다듬기 재료는 결정뿐, 고정 재료의 글은 버림
     assert result.unplaced == ("m9",)
 
 
-def test_고정_재료의_글은_받아도_쓰지_않는다(materials):
-    answer = with_change(m4={"m": "m4", "section": 4, "text": "다른 글 99"})
+def test_답에_글이_붙어_와도_쓰지_않는다(materials):
+    """글은 코드가 정한다 (명세 v0.8). 예전 지시문처럼 text 를 보내도 검사에 걸리지 않고 버린다."""
+    answer = with_change(m1={"m": "m1", "section": 2, "text": "1차 배포를 10월 31일로 정했다."})
     result, problems = check(answer, materials, len(ITEMS))
-    assert problems == [] and "m4" not in result.texts
+    assert problems == [] and result.sections["m1"] == 1
 
 
 @pytest.mark.parametrize("answer, expected", [
@@ -94,9 +102,6 @@ def test_고정_재료의_글은_받아도_쓰지_않는다(materials):
     (with_change(m4={"section": 4}), "m(재료 번호)이 없음"),
     (with_change(m5={"m": "m4", "section": 3}), "m4를 두 번 이상 씀"),
     (with_change(m5=None), "m5가 placements에도 unplaced에도 없음"),
-    (with_change(m1={"m": "m1", "section": 2}), "m1는 (다듬기) 재료인데 text가 비었음"),
-    (with_change(m1={"m": "m1", "section": 2, "text": "첫 줄\n둘째 줄"}), "m1의 text에 줄바꿈"),
-    (with_change(m1={"m": "m1", "section": 2, "text": "1차 배포를 10월 31일로 정했다."}), "원래 글에 없는 숫자 31"),
 ])
 def test_검사에_걸리면_문제를_돌려준다(materials, answer, expected):
     result, problems = check(answer, materials, len(ITEMS))
@@ -178,12 +183,12 @@ def test_다시_배치_재료_입력은_새로_쓴_줄을_안건_없이_보여�
     body = load_request()
     lines = [{"title": "할 일", "sentence": "고객사 로고는 행사 전날까지 받기", "transcriptSeqs": [], "sources": [],
               "draftEdited": True},
-             {"title": "결정 사항", "sentence": "배포 일정: 오후로 정했다.", "transcriptSeqs": [40], "draftEdited": True,
-              "sources": [{"agendaId": 101, "kind": "decision", "id": None}]}]
+             {"title": "결정 사항", "sentence": "배포 일정: 오후로 정함", "transcriptSeqs": [40], "draftEdited": True,
+              "sources": [{"agendaId": 101, "kind": "decision", "id": None, "decisionPointId": 7}]}]
     materials, _ = build_relayout(body["agendas"], body["summary"], lines)
     user = build_user(ITEMS, materials)
-    assert "m1 [직접 작성] (고정) 고객사 로고는 행사 전날까지 받기" in user
-    assert "m2 [배포 일정 / 결정] (고정) 배포 일정: 오후로 정했다." in user
+    assert "m1 [직접 작성] 고객사 로고는 행사 전날까지 받기" in user
+    assert "m2 [배포 일정 / 결정] 배포 일정: 오후로 정함" in user
 
 
 def test_다시_배치에서도_이전_줄은_모두_한_곳에_한_번씩이어야_한다():
@@ -192,7 +197,7 @@ def test_다시_배치에서도_이전_줄은_모두_한_곳에_한_번씩이어
     lines = previous_lines_of(make_draft(body, ScriptLLM(GOOD)))
     lines.append(dict(lines[0], draftEdited=True))                  # 복사한 줄: 출처는 같고 재료 번호는 m10
     materials, _ = build_relayout(body["agendas"], body["summary"], lines)
-    placed = [{"m": m.ref, "section": 1, "text": "정했다."} for m in materials[:9]]
+    placed = [{"m": m.ref, "section": 1} for m in materials[:9]]
     assert check({"placements": placed, "unplaced": []}, materials, 4)[1] == ["m10가 placements에도 unplaced에도 없음"]
     ok, problems = check({"placements": placed, "unplaced": ["m10"]}, materials, 4)
     assert problems == [] and ok.unplaced == ("m10",)

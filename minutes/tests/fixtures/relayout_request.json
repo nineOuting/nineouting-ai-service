@@ -25,22 +25,46 @@
     {
       "agendaId": 101,
       "title": "배포 일정",
-      "decisionPoint": "배포 날짜 확정"
+      "decisionPoints": [
+        {
+          "decisionPointId": 7,
+          "position": 1,
+          "text": "배포 날짜 확정"
+        }
+      ]
     },
     {
       "agendaId": 102,
       "title": "예산",
-      "decisionPoint": "광고 예산 승인"
+      "decisionPoints": [
+        {
+          "decisionPointId": 9,
+          "position": 1,
+          "text": "광고 예산 승인"
+        }
+      ]
     },
     {
       "agendaId": 103,
       "title": "회식 장소",
-      "decisionPoint": null
+      "decisionPoints": [
+        {
+          "decisionPointId": 12,
+          "position": 1,
+          "text": "회식 장소 확정"
+        }
+      ]
     },
     {
       "agendaId": 104,
       "title": "채용 일정",
-      "decisionPoint": "서류 마감일"
+      "decisionPoints": [
+        {
+          "decisionPointId": 14,
+          "position": 1,
+          "text": "서류 마감일"
+        }
+      ]
     }
   ],
   "summary": {
@@ -50,12 +74,25 @@
         "agendaId": 101,
         "status": "DECIDED",
         "statusReason": {
-          "text": "1차 배포를 10월 30일(목)로 정하고 참석자가 동의함",
+          "text": "결정할 사항 1개가 모두 결정됨",
           "evidenceSeqs": [
             40,
             42
           ]
         },
+        "decisionPoints": [
+          {
+            "decisionPointId": 7,
+            "status": "DECIDED",
+            "decisionText": "1차 배포를 10월 30일(목)로 정함",
+            "evidenceSeqs": [
+              40,
+              42
+            ],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
         "summary": [
           {
             "id": "k3f9a1-1",
@@ -101,11 +138,23 @@
         "agendaId": 102,
         "status": "UNDECIDED",
         "statusReason": {
-          "text": "광고 예산 승인 여부를 정하지 못함",
+          "text": "결정할 사항 1개 중 0개가 결정됨 (미결 1개)",
           "evidenceSeqs": [
             88
           ]
         },
+        "decisionPoints": [
+          {
+            "decisionPointId": 9,
+            "status": "UNDECIDED",
+            "decisionText": "월 사용량을 확인하기 전이라 승인 여부를 정하지 못함",
+            "evidenceSeqs": [
+              88
+            ],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
         "summary": [
           {
             "id": "k3f9a1-3",
@@ -138,12 +187,25 @@
         "agendaId": 103,
         "status": "DECISION_CHECK",
         "statusReason": {
-          "text": "강남역 근처로 하자는 말은 있으나 합의 표현이 없음",
+          "text": "결정할 사항 1개 중 0개가 결정됨 (결정 확인 필요 1개)",
           "evidenceSeqs": [
             101,
             102
           ]
         },
+        "decisionPoints": [
+          {
+            "decisionPointId": 12,
+            "status": "DECISION_CHECK",
+            "decisionText": "강남역 근처로 정함",
+            "evidenceSeqs": [
+              101,
+              102
+            ],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
         "summary": [],
         "opinions": [
           {
@@ -178,6 +240,16 @@
         "agendaId": 104,
         "status": "NOT_STARTED",
         "statusReason": null,
+        "decisionPoints": [
+          {
+            "decisionPointId": 14,
+            "status": "NOT_STARTED",
+            "decisionText": "아직 논의되지 않았어요",
+            "evidenceSeqs": [],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
         "summary": [],
         "opinions": [],
         "todos": []
@@ -198,7 +270,8 @@
         {
           "agendaId": 101,
           "kind": "summary",
-          "id": "k3f9a1-1"
+          "id": "k3f9a1-1",
+          "decisionPointId": null
         }
       ],
       "draftEdited": false
@@ -215,7 +288,8 @@
         {
           "agendaId": 101,
           "kind": "opinion",
-          "id": "k3f9a1-7"
+          "id": "k3f9a1-7",
+          "decisionPointId": null
         }
       ],
       "draftEdited": false
@@ -233,14 +307,15 @@
         {
           "agendaId": 102,
           "kind": "summary",
-          "id": "k3f9a1-3"
+          "id": "k3f9a1-3",
+          "decisionPointId": null
         }
       ],
       "draftEdited": false
     },
     {
       "title": "결정 사항",
-      "sentence": "배포 일정: 1차 배포를 10월 30일(목) 오후 2시로 정했다.",
+      "sentence": "배포 일정: 1차 배포를 10월 30일(목) 오후 2시로 정함",
       "transcriptSeqs": [
         40,
         42
@@ -251,7 +326,8 @@
         {
           "agendaId": 101,
           "kind": "decision",
-          "id": null
+          "id": null,
+          "decisionPointId": 7
         }
       ],
       "draftEdited": true
@@ -268,14 +344,15 @@
         {
           "agendaId": 102,
           "kind": "undecided",
-          "id": null
+          "id": null,
+          "decisionPointId": 9
         }
       ],
       "draftEdited": false
     },
     {
       "title": "미결 안건",
-      "sentence": "회식 장소: (결정 확인 필요: 강남역 근처로 하자는 말은 있으나 합의 표현이 없음)",
+      "sentence": "회식 장소: 회식 장소 확정 (결정 확인 필요: 강남역 근처로 정함)",
       "transcriptSeqs": [
         101,
         102
@@ -286,7 +363,8 @@
         {
           "agendaId": 103,
           "kind": "decisionCheck",
-          "id": null
+          "id": null,
+          "decisionPointId": 12
         }
       ],
       "draftEdited": false
@@ -303,7 +381,8 @@
         {
           "agendaId": 101,
           "kind": "todo",
-          "id": "k3f9a1-10"
+          "id": "k3f9a1-10",
+          "decisionPointId": null
         }
       ],
       "draftEdited": false
@@ -320,7 +399,8 @@
         {
           "agendaId": 103,
           "kind": "todo",
-          "id": "k3f9a1-21"
+          "id": "k3f9a1-21",
+          "decisionPointId": null
         }
       ],
       "draftEdited": false

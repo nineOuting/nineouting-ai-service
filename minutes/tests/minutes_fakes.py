@@ -9,10 +9,10 @@ from rag.llm import Reply
 FIXTURE = Path(__file__).parent / "fixtures" / "draft_request.json"
 ITEMS = ["안건별 논의", "결정 사항", "미결 안건", "할 일"]
 
-# 합성 요청에 대한 맞는 답. 다듬기 재료는 m1(결정)뿐이고 나머지는 고정이라 text 를 쓰지 않는다
+# 합성 요청에 대한 맞는 답. AI 는 칸만 고른다 (글은 코드가 정함)
 GOOD = {
     "placements": [
-        {"m": "m1", "section": 2, "text": "1차 배포를 10월 30일(목)로 정했다."},
+        {"m": "m1", "section": 2},
         {"m": "m2", "section": 1}, {"m": "m3", "section": 1},
         {"m": "m4", "section": 4}, {"m": "m5", "section": 3}, {"m": "m6", "section": 1},
         {"m": "m7", "section": 4}, {"m": "m8", "section": 3}, {"m": "m10", "section": 4},

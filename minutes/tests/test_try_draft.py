@@ -14,16 +14,18 @@ ARGS = SimpleNamespace(timeout=60.0, retries=2, show_io=False, json=False)
 
 def test_다시_배치는_바꾸기_전_초안과_줄마다_이전_칸을_보여준다(capsys):
     body = load_request()
-    lines = previous_lines_of(make_draft(body, ScriptLLM(GOOD)))       # 결정 줄: "…로 정했다."
+    lines = previous_lines_of(make_draft(body, ScriptLLM(GOOD)))
     lines.append({"title": "할 일", "sentence": "고객사 로고는 행사 전날까지 받기", "transcriptSeqs": [],
                   "edited": False, "needsCheck": False, "sources": [], "draftEdited": True})
     second = dict(body, template={"items": ["결정", "기타"]}, previousLines=lines)
+    point = second["summary"]["agendas"][0]["decisionPoints"][0]     # 초안 뒤 점검에서 결정 내용을 고침
+    point.update(decisionText="1차 배포를 10월 30일(목)로 확정함", edited=True)
     answer = {"placements": [{"m": f"m{i}", "section": 2} for i in range(1, 11) if i != 4]
-              + [{"m": "m4", "section": 1, "text": "1차 배포를 10월 30일(목)로 확정했다."}], "unplaced": []}
+              + [{"m": "m4", "section": 1}], "unplaced": []}
     try_draft.run(second, try_draft.Recorder(ScriptLLM(answer)), ARGS, lines, body["template"]["items"])
     out = capsys.readouterr().out
     assert "바꾸기 전 초안 (안건별 논의 / 결정 사항 / 미결 안건 / 할 일)" in out and "바꾼 뒤 (결정 / 기타)" in out
-    assert "- 배포 일정: 1차 배포를 10월 30일(목)로 확정했다.   ← 이전: 결정 사항 (다시 다듬음)" in out
+    assert "- 배포 일정: 1차 배포를 10월 30일(목)로 확정함   ← 이전: 결정 사항 (요약에서 다시 만듦)" in out
     assert "- [새 줄] 고객사 로고는 행사 전날까지 받기   ← 이전: 할 일" in out
     assert "넣지 못한 이전 줄 (이전 칸 → 글)\n없음" in out
 

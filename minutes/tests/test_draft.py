@@ -22,11 +22,13 @@ def test_정상이면_양식_칸마다_줄과_글이_나온다(body):
     assert result["requestId"] == body["requestId"] and result["status"] == SUCCEEDED
     assert [s["title"] for s in result["sections"]] == body["template"]["items"]
     by_title = {s["title"]: s for s in result["sections"]}
-    assert by_title["결정 사항"]["content"] == "- 배포 일정: 1차 배포를 10월 30일(목)로 정했다."
+    assert by_title["결정 사항"]["content"] == "- 배포 일정: 1차 배포를 10월 30일(목)로 정함"
     assert by_title["미결 안건"]["content"] == (
         "- 예산: 광고 예산 승인\n"
-        "- 회식 장소: (결정 확인 필요: 강남역 근처로 하자는 말은 있으나 합의 표현이 없음)")
-    assert result["unplaced"] == [{"agendaId": 103, "kind": "opinion", "id": "k3f9a1-20"}]
+        "- 회식 장소: 회식 장소 확정 (결정 확인 필요: 강남역 근처로 정함)")
+    assert by_title["결정 사항"]["evidence"][0]["sources"] == [
+        {"agendaId": 101, "kind": "decision", "id": None, "decisionPointId": 7}]
+    assert result["unplaced"] == [{"agendaId": 103, "kind": "opinion", "id": "k3f9a1-20", "decisionPointId": None}]
     assert result["unplacedLines"] == []
     assert len(llm.calls) == 1
     json.dumps(result, ensure_ascii=False)
@@ -96,10 +98,9 @@ def relayout_body(body, lines):
 
 
 def answer(extra=(), unplaced=("m6",)):
-    """이전 줄 9개(+더한 줄)의 새 양식 배치. 4번째 줄(m4)이 다시 다듬는 결정, m6(결정 확인 필요)은 넣지 못함"""
+    """이전 줄 9개(+더한 줄)의 새 양식 배치. 4번째 줄(m4)이 결정, m6(결정 확인 필요)은 넣지 못함"""
     placements = [{"m": f"m{i}", "section": 1} for i in (1, 2, 3, 5)]
-    placements += [{"m": "m4", "section": 2, "text": "1차 배포를 10월 30일(목)로 정했다."}]
-    placements += [{"m": f"m{i}", "section": 2} for i in (7, 8, 9)] + list(extra)
+    placements += [{"m": f"m{i}", "section": 2} for i in (4, 7, 8, 9)] + list(extra)
     return {"placements": placements, "unplaced": list(unplaced)}
 
 
@@ -110,25 +111,26 @@ def test_다시_배치는_이전_줄을_새_칸에_옮기고_draftEdited를_붙�
     assert result["status"] == SUCCEEDED and [s["title"] for s in result["sections"]] == NEW_ITEMS
     talk, decided = result["sections"]
     assert [l["sentence"] for l in talk["evidence"]] == [lines[i]["sentence"] for i in (0, 1, 2, 4)]
-    assert decided["evidence"][0]["sentence"] == "배포 일정: 1차 배포를 10월 30일(목)로 정했다."
+    assert decided["evidence"][0]["sentence"] == "배포 일정: 1차 배포를 10월 30일(목)로 정함"
     assert all(l["draftEdited"] is False for s in result["sections"] for l in s["evidence"])
     assert result["unplacedLines"] == [lines[5]]                                  # 받은 줄 그대로
-    assert result["unplaced"] == [{"agendaId": 103, "kind": "opinion", "id": "k3f9a1-20"}]   # 처음에도 못 넣은 의견
+    assert result["unplaced"] == [{"agendaId": 103, "kind": "opinion", "id": "k3f9a1-20",
+                                   "decisionPointId": None}]                     # 처음에도 못 넣은 의견
 
 
 def test_고친_줄과_새로_쓴_줄은_글이_그대로_남는다(body):
     lines = previous_lines_of(make_draft(body, ScriptLLM(GOOD)))
-    lines[3].update(sentence="배포 일정: 1차 배포를 10월 30일(목) 오후로 정했다.", draftEdited=True)
+    lines[3].update(sentence="배포 일정: 1차 배포를 10월 30일(목) 오후로 정함", draftEdited=True)
     lines.append({"title": "할 일", "sentence": "고객사 로고는 행사 전날까지 받기", "transcriptSeqs": [],
                   "edited": False, "needsCheck": False, "sources": [], "draftEdited": True})
     llm = ScriptLLM(answer(extra=[{"m": "m10", "section": 2}]))
     result = make_draft(relayout_body(body, lines), llm)
     decided = result["sections"][1]["evidence"]
-    assert decided[0]["sentence"] == "배포 일정: 1차 배포를 10월 30일(목) 오후로 정했다."   # 제목이 두 번 붙지 않음
+    assert decided[0]["sentence"] == "배포 일정: 1차 배포를 10월 30일(목) 오후로 정함"   # 제목이 두 번 붙지 않음
     assert decided[0]["draftEdited"] is True and decided[0]["sources"] == lines[3]["sources"]
     assert decided[-1] == {"sentence": "고객사 로고는 행사 전날까지 받기", "transcriptSeqs": [], "edited": False,
                            "needsCheck": False, "sources": [], "draftEdited": True}
-    assert "m4 [배포 일정 / 결정] (고정)" in llm.calls[0][1] and "m10 [직접 작성] (고정)" in llm.calls[0][1]
+    assert "m4 [배포 일정 / 결정] 배포 일정:" in llm.calls[0][1] and "m10 [직접 작성] 고객사" in llm.calls[0][1]
 
 
 def test_다시_배치의_상한은_이전_줄_수로_센다(body):
@@ -150,4 +152,4 @@ def test_다시_배치는_다시_배치_지시문을_쓰고_처음_초안은_칸
     make_draft(relayout_body(body, lines), llm)
     make_draft(body, llm)
     assert llm.calls[0][0] == load_prompt(kind=RELAYOUT_KIND).text and llm.calls[1][0] == load_prompt().text
-    assert load_prompt(kind=RELAYOUT_KIND).version == "relayout-v1"
+    assert load_prompt(kind=RELAYOUT_KIND).version == "relayout-v2"

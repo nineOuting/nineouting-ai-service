@@ -9,7 +9,7 @@
   .venv/bin/python -m minutes.try_draft --real --relayout-to "결정 사항,할 일,고객 요청"
                                                                  처음 초안 → 그 줄을 새 양식으로 다시 배치 (AI 2번)
 
-가짜 AI 는 모든 재료를 첫 칸에 넣고 글을 원래 글 그대로 돌려준다. 흐름이 도는지만 본다.
+가짜 AI 는 모든 재료를 첫 칸에 넣는다. 흐름이 도는지만 본다.
 실제 AI 는 RAG 답변과 같은 설정으로 연결한다 (환경변수가 있으면 그것, 없으면 rag/.env). 키 값은 출력하지 않는다.
 실제 회의 데이터는 레포 밖에 두고 --file 로 경로만 넘긴다.
 """
@@ -31,21 +31,16 @@ from .request import InvalidInput, validate_request
 
 SAMPLE = Path(__file__).parent / "tests" / "fixtures" / "draft_request.json"
 ENV_FILE = Path(__file__).resolve().parent.parent / "rag" / ".env"
-_MATERIAL = re.compile(r"^(m\d+) \[.*?\] \((다듬기|고정)\) (.*)$", re.M)
+_MATERIAL = re.compile(r"^(m\d+) \[", re.M)
 
 
 class PlaceAllFakeLLM:
-    """시험용. 모든 재료를 1번 칸에 넣고, 다듬기 재료의 글은 원래 글 그대로 돌려준다."""
+    """시험용. 모든 재료를 1번 칸에 넣는다."""
     name = "fake"
     model = "place-all"
 
     def generate(self, system, user, timeout_s):
-        placements = []
-        for ref, how, text in _MATERIAL.findall(user):
-            p = {"m": ref, "section": 1}
-            if how == "다듬기":
-                p["text"] = text
-            placements.append(p)
+        placements = [{"m": ref, "section": 1} for ref in _MATERIAL.findall(user)]
         return Reply(json.dumps({"placements": placements, "unplaced": []}, ensure_ascii=False), None, None)
 
 
@@ -123,7 +118,7 @@ def _mark(line) -> str:
 
 def _previous_titles(result, previous) -> dict:
     """바꾼 뒤의 줄 → "   ← 이전: {칸}". 글이 같은 이전 줄을 먼저 찾고, 없으면 출처가 같은 줄
-    (고치지 않은 결정 줄은 AI 가 다시 다듬어 글이 바뀔 수 있다)."""
+    (고치지 않은 줄은 요약에서 다시 만들므로, 요약을 점검에서 고쳤으면 글이 바뀔 수 있다)."""
     unused, out = list(previous), {}
     lines = [line for s in result["sections"] for line in s["evidence"]]
     for line in lines:                                    # 글이 같은 줄
@@ -137,7 +132,7 @@ def _previous_titles(result, previous) -> dict:
         hit = next((p for p in unused if line["sources"] and p["sources"][:1] == line["sources"]), None)
         if hit:
             unused.remove(hit)
-        out[id(line)] = f"   ← 이전: {hit['title']} (다시 다듬음)" if hit else ""
+        out[id(line)] = f"   ← 이전: {hit['title']} (요약에서 다시 만듦)" if hit else ""
     return out
 
 

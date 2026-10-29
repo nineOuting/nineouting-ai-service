@@ -6,5 +6,6 @@ opentelemetry-exporter-otlp-proto-http==1.45.1
 # 시험(server/selftest.py)의 HTTP 부분에만 필요
 httpx==0.28.1
 # LLM SDK. 요약(LLM_PROVIDER=gemini)과 RAG 답변(RAG_LLM_PROVIDER=gemini)이 같이 쓴다.
-# openai 는 운영 모델을 정할 때 넣는다
+# 요약(LLM_PROVIDER=openai)의 운영 모델이 쓴다 (gpt-6-luna)
+openai==3.41.0
 google-genai==2.32.0

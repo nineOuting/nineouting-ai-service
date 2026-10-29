@@ -120,7 +120,6 @@ def test_AI가_사용자_필드_번호를_고르면_검사에_걸려_다시_시�
     ([{"title": "할 일", "type": "list", "aiFill": True}], "template.fields[0].type은 text, table"),
     ([{"title": "할 일", "type": "text", "aiFill": "yes"}], "template.fields[0].aiFill이 true/false"),
     ([{"title": "할 일", "type": "text"}], "template.fields[0].aiFill이 true/false"),
-    ([{"title": "할 일", "type": "table", "aiFill": True}], "AI가 채우는 표 필드는 아직 지원하지 않음"),
     ([{**ai("할 일"), "description": 3}], "template.fields[0].description는 문자열이나 null"),
     ([{**ai("할 일"), "description": "가" * 2001}], "template.fields[0].description은 2000자"),
     ([user("메모", 3)], "template.fields[0].content는 문자열이나 null"),

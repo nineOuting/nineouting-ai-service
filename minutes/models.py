@@ -23,6 +23,8 @@ class Material:
     needs_check: bool
     order: tuple[int, int, int]     # (안건 순서, 종류 순서, 같은 종류 안 순서). 칸 안 줄 순서에 쓴다
     decision_point_id: int | str | None = None      # 결정할 사항에서 나온 줄의 사항 번호 (명세 5.6)
+    # 표 필드의 칸 값이 될 수 있는 글 (명세 7.6). (이름, 글) 목록. 값이 없는 조각은 넣지 않는다
+    parts: tuple[tuple[str, str], ...] = ()
     # 다시 배치 (명세 8장, relayout.py). 처음 초안에서는 기본값 그대로다
     previous: int | None = None     # 이 재료가 된 previousLines 의 위치
     draft_edited: bool = False      # 그 줄의 draftEdited 그대로
@@ -49,6 +51,14 @@ class Field:
     ai_fill: bool = True
     content: str = ""               # 사용자가 채우는 필드에 이미 써 둔 글. 결과에 그대로 돌려준다
     description: str = ""           # 양식 편집 화면의 필드 설명. AI 가 칸을 고를 때 이름과 함께 본다 (명세 7.2)
+    columns: int | None = None      # 표 필드의 열 개수 (명세 5.8). 없으면 AI 가 1~6개로 정한다
+
+
+@dataclass(frozen=True)
+class Table:
+    """검사를 통과한 표 채우기 결과 (명세 7.6). 놓인 재료마다 행이 하나씩 있다."""
+    columns: tuple[str, ...]
+    rows: dict[str, tuple[str, ...]]  # 재료 번호 → 칸 글 (columns 와 같은 순서·개수)
 
 
 @dataclass(frozen=True)

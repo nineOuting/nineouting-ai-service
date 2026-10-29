@@ -18,12 +18,21 @@
 요약 문장과 의견도 요약 단계에서 정리된 글이라 다시 다듬지 않는다. 다듬게 했을 때 얻는 것은 말끝 정도였고 잃는 것이 더 많았다
 (실제 회의 요약 시험, 2026-10-23: STT 불확실 표시 삭제 「세개」(3개로 읽힘) → "3개", 내용 누락 「일본」(STT 불확실) 대신 → 빠짐,
 "이야기가 나옴" → "이야기가 나왔다는 의견이 나옴" 같은 겹문장).
+
+재료마다 이름 붙은 조각(parts)도 만든다. AI 가 채우는 표 필드의 칸 값은 이 조각에서만 뽑는다 (명세 7.6, table.py).
+  모든 재료       안건, 종류
+  결정            결정할 사항(짝이 맞는 문구가 있을 때), 결정 내용
+  미결            결정할 사항(같음), 미결 내용
+  결정 확인 필요  결정할 사항(같음), 결정 후보
+  할 일           할 일, 담당자, 기한, 표시(할 일 확인 필요). 값이 없는 조각은 넣지 않는다 ("담당자 미정" 을 칸에 쓰지 않게)
+  요약·의견       문장
 """
 from .models import KIND_RANK, Material
 
 OPINION_LABELS = {"OPINION": "의견", "EVIDENCE": "근거", "CONCERN": "우려", "QUESTION": "질문"}
 POINT_KINDS = {"DECIDED": ("decision", "결정"), "UNDECIDED": ("undecided", "미결"),
                "DECISION_CHECK": ("decisionCheck", "결정 확인 필요")}
+POINT_TEXT_NAMES = {"decision": "결정 내용", "undecided": "미결 내용", "decisionCheck": "결정 후보"}   # 표의 조각 이름
 NO_ASSIGNEE = "담당자 미정"
 NO_DUE = "기한 미정"
 TODO_UNCLEAR = "할 일 확인 필요"
@@ -37,17 +46,19 @@ def build_materials(agendas: list[dict], summary: dict) -> list[Material]:
         info = titles[agenda["agendaId"]]
         drafts += _point_items(ai, agenda, info)
         for i, item in enumerate(agenda.get("summary") or []):
-            drafts.append(_item(ai, "summary", i, item, "요약", item["text"]))
+            drafts.append(_item(ai, "summary", i, item, "요약", item["text"], (("문장", item["text"]),)))
         for i, item in enumerate(agenda.get("opinions") or []):
-            drafts.append(_item(ai, "opinion", i, item, OPINION_LABELS.get(item.get("kind"), "의견"), item["text"]))
+            drafts.append(_item(ai, "opinion", i, item, OPINION_LABELS.get(item.get("kind"), "의견"), item["text"],
+                                (("문장", item["text"]),)))
         for i, item in enumerate(agenda.get("todos") or []):
-            drafts.append(_item(ai, "todo", i, item, "할 일", todo_text(item)))
+            drafts.append(_item(ai, "todo", i, item, "할 일", todo_text(item), todo_parts(item)))
 
     materials = []
     for n, (ai, fields) in enumerate(sorted(drafts, key=lambda d: d[1]["order"]), 1):
         agenda_id = summary["agendas"][ai]["agendaId"]
-        materials.append(Material(ref=f"m{n}", agenda_id=agenda_id, agenda_title=titles[agenda_id]["title"],
-                                  **fields))
+        title = titles[agenda_id]["title"]
+        parts = (("안건", title), ("종류", fields["label"]), *fields.pop("parts"))
+        materials.append(Material(ref=f"m{n}", agenda_id=agenda_id, agenda_title=title, parts=parts, **fields))
     return materials
 
 
@@ -56,6 +67,17 @@ def todo_text(todo: dict) -> str:
     due = (todo.get("dueText") or "").strip() or NO_DUE
     unclear = f", {TODO_UNCLEAR}" if todo.get("unclear") else ""
     return f"{todo['task']} ({assignee}, {due}{unclear})"
+
+
+def todo_parts(todo: dict) -> tuple:
+    parts = [("할 일", todo["task"].strip())]
+    for name, key in (("담당자", "assigneeName"), ("기한", "dueText")):
+        value = (todo.get(key) or "").strip()
+        if value:
+            parts.append((name, value))
+    if todo.get("unclear"):
+        parts.append(("표시", TODO_UNCLEAR))
+    return tuple(parts)
 
 
 def agenda_points(agenda: dict) -> list[dict]:
@@ -91,11 +113,12 @@ def _point_items(ai, agenda, info):
             mark = f"(결정 확인 필요: {decided})"
             text = f"{point} {mark}" if point else mark
         index = rank[pid] if paired else len(points) + j
-        out.append(_item(ai, kind, index, result, label, text, decision_point_id=pid))   # 사항 결과에는 id 가 없다
+        parts = ((("결정할 사항", point),) if point else ()) + ((POINT_TEXT_NAMES[kind], decided),)
+        out.append(_item(ai, kind, index, result, label, text, parts, decision_point_id=pid))   # 사항 결과에는 id 가 없다
     return out
 
 
-def _item(ai, kind, index, item, label, text, decision_point_id=None):
+def _item(ai, kind, index, item, label, text, parts, decision_point_id=None):
     return ai, {
         "kind": kind,
         "item_id": item.get("id"),
@@ -106,4 +129,5 @@ def _item(ai, kind, index, item, label, text, decision_point_id=None):
         "needs_check": bool(item.get("needsCheck")),
         "order": (ai, KIND_RANK[kind], index),
         "decision_point_id": decision_point_id,
+        "parts": parts,
     }

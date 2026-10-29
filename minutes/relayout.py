@@ -3,7 +3,7 @@
 이전 줄 하나가 재료 하나가 된다. 줄마다 재료 번호(m1, m2 …)를 따로 붙이므로 출처가 겹쳐도 검사에 걸리지 않는다.
 
   고치지 않은 줄 (draftEdited false)   출처로 요약 항목을 찾아 처음 초안과 같은 재료로 다시 만든다
-  작성자가 고친 줄                     글 고정. 근거·표시·출처는 그 줄의 값 그대로
+  작성자가 고친 줄                     글 고정. 근거·표시·출처는 그 줄의 값 그대로. 표 칸 값의 조각은 안건·종류·줄 글
   작성자가 새로 쓴 줄 (출처 없음)      글 고정. 출처 없음
   출처 항목이 요약에 없는 줄           고친 줄처럼 (8.3)
   출처가 겹치는 줄의 두 번째부터       고친 줄처럼 (8.3). 고치지 않은 줄이 있으면 그 줄이 첫 줄
@@ -78,8 +78,9 @@ def _kept(line: dict, ref: str, i: int, original: Material | None, titles: dict)
         label = original.label if original else KIND_LABELS[kind]
     else:
         agenda_id, kind, item_id, point_id, title, label = None, WRITTEN, None, None, "", WRITTEN_LABEL
+    parts = ((("안건", title),) if title else ()) + (("종류", label), ("줄 글", text))     # 표 칸 값 (명세 7.6)
     return Material(ref=ref, agenda_id=agenda_id, agenda_title=title, kind=kind, item_id=item_id, label=label,
-                    text=text, evidence_seqs=tuple(line.get("transcriptSeqs") or ()),
+                    text=text, parts=parts, evidence_seqs=tuple(line.get("transcriptSeqs") or ()),
                     edited=bool(line.get("edited")), needs_check=bool(line.get("needsCheck")), order=(i, 0, 0),
                     decision_point_id=point_id, previous=i, draft_edited=line["draftEdited"], whole_line=True, sourced=bool(sources))
 

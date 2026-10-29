@@ -8,6 +8,8 @@
   AI 채움 필드 0개  AI 를 부르지 않고 모든 재료를 unplaced(이전 줄은 unplacedLines)로
 양식 필드 (명세 v0.7): AI 에는 AI 가 채우는 필드만 칸 목록으로 넘기고, 돌아온 칸 번호를 양식 필드 위치로 되돌린다.
 사용자가 채우는 필드·머리글·바닥글은 받은 그대로 돌려준다. v0.6 요청(template.items)은 결과도 v0.6 모양이다.
+AI 가 채우는 표 필드 (명세 7.6): 배치 뒤 재료가 놓인 표 필드마다 AI 를 한 번 더 불러 열과 칸을 정한다 (table.py).
+  표 하나라도 실패하면 초안 전체가 실패한다 (그 표만 비워 보내면 사용자가 모르고 빈 표를 받으므로)
   재료가 상한 초과  AI 를 부르지 않고 FAILED / INPUT_TOO_LONG (AI 에 넘길 재료 수. 다시 배치는 이전 줄 수)
   AI 실패           FAILED / LLM_TIMEOUT · LLM_FAILED · CHECK_FAILED
 
@@ -17,12 +19,13 @@
 import logging
 import time
 
-from .lines import build_sections, unplaced_lines
+from .lines import build_sections, group, unplaced_lines
 from .materials import build_materials
-from .models import Placement
+from .models import TABLE, Placement
 from .placement import RELAYOUT_KIND, Prompt, load_prompt, place
 from .relayout import build_relayout
 from .request import template_fields
+from .table import TABLE_KIND, fill
 
 log = logging.getLogger("minutes.draft")
 
@@ -40,8 +43,9 @@ MESSAGES = {                                    # 실패 설명. 요약·초안 
 
 
 def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, prompt: Prompt | None = None,
-               call_retries: int = 1, relayout_prompt: Prompt | None = None) -> dict:
-    """결과 콜백 본문(명세 3.1·3.2)을 돌려준다. 다시 배치에는 relayout_prompt(없으면 relayout 의 가장 큰 번호)를 쓴다."""
+               call_retries: int = 1, relayout_prompt: Prompt | None = None, table_prompt: Prompt | None = None) -> dict:
+    """결과 콜백 본문(명세 3.1·3.2)을 돌려준다. 다시 배치에는 relayout_prompt, 표 채우기에는 table_prompt 를 쓴다
+    (없으면 각 종류의 가장 큰 번호)."""
     t0 = time.monotonic()
     request_id, template = body["requestId"], body["template"]
     fields, v07 = template_fields(template)
@@ -83,7 +87,23 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
     placement = outcome.placement
     placement = Placement(sections={ref: ai_fields[i] for ref, i in placement.sections.items()},
                           unplaced=placement.unplaced)
-    sections, unplaced = build_sections(fields, materials, placement, v07)
+    table_prompt = table_prompt or load_prompt(kind=TABLE_KIND)
+    tables, calls, tokens_in, tokens_out = {}, 0, 0, 0
+    for i, ms in enumerate(group(len(fields), materials, placement)):
+        if not (ms and fields[i].type == TABLE):            # 놓인 재료가 없는 표는 AI 를 부르지 않는다
+            continue
+        filled = fill(fields[i], ms, llm, timeout_s, max_retries, table_prompt, call_retries)
+        calls, tokens_in, tokens_out = (calls + filled.attempts, tokens_in + filled.input_tokens,
+                                        tokens_out + filled.output_tokens)
+        if filled.placement is None:
+            tag += f" table_prompt={table_prompt.version} table_attempts={calls}"
+            log.warning("초안 실패 %s error=%s at=table ms=%d", tag, filled.error_code, _ms(t0))
+            return failed(request_id, filled.error_code, MESSAGES[filled.error_code])
+        tables[i] = filled.placement
+    if tables:
+        tag += (f" tables={len(tables)} table_prompt={table_prompt.version} table_attempts={calls}"
+                f" table_in_tokens={tokens_in} table_out_tokens={tokens_out}")
+    sections, unplaced = build_sections(fields, materials, placement, v07, tables)
     unplaced = not_sent + unplaced
     lost_lines = unplaced_lines(materials, placement, previous)
     lines = sum(len(s["evidence"]) for s in sections)

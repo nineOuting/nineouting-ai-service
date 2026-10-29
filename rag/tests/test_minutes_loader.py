@@ -123,6 +123,9 @@ def test_형식_이름을_돌려준다(confirmed, minutes):
     (lambda m: m.update(meetingId="31"), "meetingId"),
     (lambda m: m.update(meetingStartAt=""), "meetingStartAt"),
     (lambda m: m.update(confirmedAt=20261021), "confirmedAt"),
+    (lambda m: m.update(savedAt=20261021), "savedAt"),
+    (lambda m: m.update(header=["머리글"]), "header 가 문자열"),
+    (lambda m: m.update(footer=1), "footer 가 문자열"),
     (lambda m: m.update(sections={"title": "x"}), "sections 가 배열"),
     (lambda m: m["sections"].append("결정 사항"), "sections[5] 가 객체"),
     (lambda m: m["sections"][1].update(title=" "), "sections[1].title"),
@@ -134,3 +137,52 @@ def test_확정_회의록_형식이_틀리면_칸_위치를_담은_internal_erro
         check_format(confirmed)
     assert e.value.code == INTERNAL_ERROR and word in str(e.value)
     assert "배포" not in str(e.value)                                         # 회의록 글은 오류에 안 남음
+
+
+# 표·머리글·바닥글이 있는 확정 회의록 (명세 4.1, SCRUM-100). AI 가 채운 표("할 일")와 사용자가 만든 표("예산표")
+TABLED = json.loads((Path(__file__).parent / "fixtures" / "minutes_confirmed_table.json").read_text(encoding="utf-8"))
+
+
+def test_표는_행마다_조각_하나이고_열_이름을_붙이며_빈_칸은_뺀다():
+    pieces = load_minutes(copy.deepcopy(TABLED)).pieces
+    todo = [p.content for p in pieces if p.context == "할 일"]
+    assert todo == [
+        "안건: 배포 일정 | 할 일: QA 일정표 공유 | 담당자: 김철수 | 기한: 수요일까지",
+        "안건: 예산 | 할 일: 회의실 예약 | 담당자: 이영희",
+        "안건: 회식 장소 | 할 일: 식당 후보 알아보기",
+    ]
+    assert all(p.location == {"type": "section", "heading": "할 일", "label": "할 일"} for p in pieces if p.context == "할 일")
+
+
+def test_표_앞뒤의_글은_줄마다_조각이고_칸_안의_막대는_칸을_나누지_않는다():
+    budget = [p.content for p in load_minutes(copy.deepcopy(TABLED)).pieces if p.context == "예산표"]
+    assert budget == ["아래는 사용자가 직접 만든 표",
+                      "항목: 홍보 | 금액: 2,000,000원 | 비고: 온라인 광고 | 전단",      # 정렬 표시 :--- 도 구분 줄
+                      "항목: 다과 | 금액: 300,000원"]
+
+
+def test_머리글과_바닥글은_각각_조각_하나이고_위치는_머리글_바닥글():
+    pieces = load_minutes(copy.deepcopy(TABLED)).pieces
+    assert (pieces[0].content, pieces[0].context) == ("고객성공팀 주간 회의 2026년 10월 셋째 주", "머리글")   # 여러 줄은 이음
+    assert pieces[0].location == {"type": "section", "heading": "머리글", "label": "머리글"}
+    assert (pieces[-1].content, pieces[-1].location["heading"]) == ("사내 공유용 (외부 전달 금지)", "바닥글")
+    assert len(pieces) == 1 + 1 + 3 + 3 + 1 + 1                               # 머리글, 결정, 할 일 3행, 예산표 3줄, 메모, 바닥글
+
+
+@pytest.mark.parametrize("header, footer", [(None, None), ("", "  \n "), (None, "사내 공유용")])
+def test_머리글_바닥글이_없거나_비면_넣지_않는다(header, footer):
+    m = dict(copy.deepcopy(TABLED), header=header, footer=footer)
+    headings = [p.location["heading"] for p in load_minutes(m).pieces]
+    assert "머리글" not in headings and headings.count("바닥글") == (1 if footer and footer.strip() else 0)
+
+
+@pytest.mark.parametrize("content, lines", [
+    ("| 항목 | 금액 |\n|---|---|", ["항목 | 금액"]),                                        # 몸통 행 없음
+    ("| 항목 | 금액 |\n|---|---|\n|  |  |", ["항목 | 금액"]),                              # 빈 행뿐
+    ("| 막대로 시작하지만 표가 아닌 줄\n둘째 줄", ["| 막대로 시작하지만 표가 아닌 줄", "둘째 줄"]),
+    ("항목 | 금액\n---|---\n홍보 | 2만 원", ["항목 | 금액", "---|---", "홍보 | 2만 원"]),     # 막대로 시작하지 않으면 표로 보지 않음
+    ("| a | b |\n|---|---|\n| 1 | 2 | 3 |", ["a: 1 | b: 2 | 3"]),                          # 머리 행보다 칸이 많음
+])
+def test_표_경계(content, lines):
+    m = dict(copy.deepcopy(TABLED), header=None, footer=None, sections=[{"title": "표", "content": content}])
+    assert [p.content for p in load_minutes(m).pieces] == lines

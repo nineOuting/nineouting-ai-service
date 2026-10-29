@@ -21,3 +21,14 @@ def normalize(text: str) -> str:
     text = _CONTROL.sub("", _INVISIBLE.sub("", text))
     lines = (_SPACES.sub(" ", line).strip() for line in text.split("\n"))
     return "\n".join(line for line in lines if line)
+
+
+def row_line(header: list[str], values: list[str]) -> str:
+    """표의 행 하나 -> 한 줄. "항목: 마케팅 | 금액: 12,000,000원" 처럼 머리 행 이름을 붙이고 빈 칸은 뺀다.
+    머리 행보다 칸이 많거나 머리 행 이름이 비면 값만 쓴다. 워드·엑셀·회의록 표가 같이 쓴다."""
+    return " | ".join(f"{header[i]}: {v}" if i < len(header) and header[i] else v for i, v in enumerate(values) if v)
+
+
+def header_line(header: list[str]) -> str:
+    """몸통 행이 없는 표는 머리 행 이름들을 한 줄로."""
+    return " | ".join(v for v in header if v)

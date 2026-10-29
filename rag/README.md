@@ -6,7 +6,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 
 | 단계 | 상태 |
 |---|---|
-| 회의록 로더, 256토큰 나누기, 임베딩 | 구현. 확정 회의록(`formatVersion` 1.0, 칸의 줄 하나가 조각 하나)과 임시 형식(`schema_version` 0.1)을 받음 |
+| 회의록 로더, 256토큰 나누기, 임베딩 | 구현. 확정 회의록(`formatVersion` 1.0, 칸의 줄 하나·표의 행 하나·머리글·바닥글이 각각 조각 하나)과 임시 형식(`schema_version` 0.1)을 받음 |
 | 저장(pgvector, 버전 교체), 검색(workspaceId + docIds) | 구현 |
 | 대기열·작업자, 완료 콜백 | 구현 |
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
@@ -122,7 +122,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
   - 시험 샘플(합성): `rag/tests/fixtures/upload_*.pdf` (짧은 보고서, 상세 운영계획서 `upload_plan.pdf`, 글 없는 PDF, 암호 PDF), 만드는 스크립트 `make_upload_samples.py` (fpdf2, Noto Sans CJK KR, 운영계획서 내용은 `plan_content.py`)
   - `fileUrl` 에는 접근 서명이 들어 있어 로그·오류 글에 남기지 않는다
 - `minutes` 형식 (회의록 초안 명세 `docs/api/minutes-draft-contract.md` 4장)
-  - 확정 회의록 `formatVersion: "1.0"`: `meetingId`, `meetingStartAt`, `confirmedAt`(선택), `sections[{title, content}]`. `content` 의 줄 하나가 조각 하나이고 줄 앞 `- `·`* `·`• ` 는 뗀다. 빈 줄과 "해당 내용 없음" 은 넣지 않는다. 칸 이름을 맥락으로 붙여 검색하고, 근거 위치는 `{type: "section", heading, label}` (칸 이름. 워드 문서의 제목 위치와 같은 모양)
+  - 확정 회의록 `formatVersion: "1.0"`: `meetingId`, `meetingStartAt`, `savedAt`(선택), `header`·`footer`(선택), `sections[{title, content}]`. `content` 의 줄 하나가 조각 하나이고 줄 앞 `- `·`* `·`• ` 는 뗀다. 빈 줄과 "해당 내용 없음" 은 넣지 않는다. `content` 안의 마크다운 표(`|` 로 시작하고 둘째 줄이 `|---|`)는 행마다 조각 하나로, 워드 표처럼 "머리 행 이름: 값 | …" (빈 칸은 뺌, 칸 안의 `\|` 는 구분이 아님). 칸 이름을 맥락으로 붙여 검색하고, 근거 위치는 `{type: "section", heading, label}` (칸 이름. 워드 문서의 제목 위치와 같은 모양). 머리글·바닥글은 글이 있으면 각각 조각 하나이고 heading 은 "머리글"·"바닥글"
   - 임시 형식 `schema_version: "0.1"` (summary.json): 전환 기간에만. 근거 위치는 녹음 시간 `{type: "time", startMs, endMs, label}`
   - 둘 다 아니거나 확정 회의록 모양이 틀리면 400 (어느 칸이 틀렸는지 알려 줌)
 - 회의록 버전이 저장된 것과 새 것 모두 정수 모양(`"5"`)이면 숫자로 비교해 낮은 버전은 무시한다. 재시도로 옛 확정본이 늦게 와서 새 확정본을 덮어쓰지 않게 하려는 것. 정수 모양이 아니면 마지막에 받은 것을 쓴다

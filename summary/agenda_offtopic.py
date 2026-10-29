@@ -81,7 +81,7 @@ class OffTopicCfg:
         self.provider = "echo"
         self.model = None
         self.threshold_sec = 60           # 해당 없음이 이만큼 이어지면 새 안건 제안 (명세서 REQ-091 1분, 2026-10-28 변경. 이전 값은 PRD 3분)
-        self.long_sec = 180               # 제안을 무시한 뒤 이만큼 더 이어지면 "지금 다른 이야기" 알림 (REQ-081)
+        self.long_sec = 180               # 제안을 무시한 뒤 이만큼 더 이어지면 "지금 다른 이야기" 알림 (명세서 REQ-092)
         self.max_calls = 20               # 회의당 제목 호출 상한
         self.max_lines = 40               # 제목을 만들 때 모델에 주는 줄 수 (구간이 길면 가장 최근 줄)
         self.title_max_chars = 30         # 제안 제목의 최대 글자 수

@@ -3,7 +3,7 @@
 > 등록된 안건과 관계없는 이야기가 오래 이어질 때 새 안건 등록을 제안하는 방식을 다룬다. 안건 보드(연동 API 초안 3.2)의 `offTopic` 칸을 채우고, 제안을 무시했다는 알림을 받는다. 아직 cn 팀과 확인하기 전의 AI 쪽 제안이다. 확정되면 이 문서를 최신 전체본 하나로 교체한다.
 > 안건 목록과 줄별 분류는 `agenda-contract.md`, 보드 전체 모양은 `agenda-summary-contract.md`에 있다.
 
-- 근거: PRD v0.1 AI-06, 요구사항 REQ-080·081, 연동 API 초안 3.2 (안건 보드 결과의 `offTopic`)
+- 근거: PRD v0.1 AI-06, 요구사항 REQ-091·092, 연동 API 초안 3.2 (안건 보드 결과의 `offTopic`)
 - 설계 결정: `ai06-design-decisions-v1.md` (프로젝트 문서)
 - 예시 파일: `examples/api/agenda-board-offtopic-put.json`, `off-topic-action-post.json`, `off-topic-action-replay-post.json`
 - 평가: 평가 도구는 `summary/eval_agenda_offtopic.py`, 결과는 평가 뒤 `docs/eval/`에 둔다

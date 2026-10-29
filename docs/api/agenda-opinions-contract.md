@@ -3,7 +3,7 @@
 > 안건별 의견·근거와 할 일(AI-05)을 안건 보드(연동 API 초안 3.2)에 담아 보내는 방식, 사람이 고친 의견·할 일과 참석자 명단을 받는 방식을 다룬다. 아직 cn 팀과 확인하기 전의 AI 쪽 제안이다. 확정되면 이 문서를 최신 전체본 하나로 교체한다.
 > 안건 목록과 줄별 분류는 `agenda-contract.md`, 안건 보드 전체 모양과 요약은 `agenda-summary-contract.md`, 안건 상태는 `agenda-status-contract.md`에 있다.
 
-- 근거: PRD v0.1 AI-05, 요구사항 REQ-077, 연동 API 초안 3.2 (`opinions`)와 4장 (`todos`)
+- 근거: PRD v0.1 AI-05, 요구사항 REQ-087, 연동 API 초안 3.2 (`opinions`)와 4장 (`todos`)
 - 예시 파일: `examples/api/` (아래 14장)
 
 ## 1. 목적과 범위

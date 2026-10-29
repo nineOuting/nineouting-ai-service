@@ -8,7 +8,7 @@
 
 ## v0.8에서 바뀐 곳
 
-회의 끝 요약의 결정할 사항 단위 판정과 프론트 화면(2026-10-28 반영분)에 맞췄다 (2026-10-29). **[구현 전]** 표시는 명세만 정했고 ai-service 코드에 아직 없는 곳이다.
+회의 끝 요약의 결정할 사항 단위 판정과 프론트 화면(2026-10-28 반영분)에 맞췄다 (2026-10-29). **[구현 전]** 표시는 명세만 정했고 ai-service 코드에 아직 없는 곳이다. 결정할 사항 단위(1)와 필드 설명은 구현했다 (SCRUM-123). 표의 열 개수는 SCRUM-114에서 구현한다.
 
 | # | 계기 | 바뀐 곳 |
 |---|---|---|
@@ -402,7 +402,7 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 |---|---|---|---|
 | `agendaId` | `int` | 예 | 안건 번호 |
 | `title` | `string` | 예 | 안건 제목. 줄 앞에 붙인다 (7.2) |
-| `decisionPoints` | `{decisionPointId: int \| string, position: int, text: string}[]` | 예 (전환 기간 예외는 `decisionPoint` 줄) | 결정할 사항 목록. 1개 이상. 백엔드 안건 목록의 모양 그대로다 (`agenda-contract.md` 4.2.1). `text`는 미결·결정 확인 필요 줄의 글이 된다 (7.2). 회의 끝 요약의 사항과 `decisionPointId`로 짝을 맞춘다 [구현 전] |
+| `decisionPoints` | `{decisionPointId: int \| string, position: int, text: string}[]` | 예 (전환 기간 예외는 `decisionPoint` 줄) | 결정할 사항 목록. 1개 이상. 백엔드 안건 목록의 모양 그대로다 (`agenda-contract.md` 4.2.1). `text`는 미결·결정 확인 필요 줄의 글이 된다 (7.2). 회의 끝 요약의 사항과 `decisionPointId`로 짝을 맞춘다 |
 | `decisionPoint` | `string \| null` | 아니요 | v0.7까지의 형식 (결정할 사항 하나). **전환 기간**에만 받는다. `decisionPoints`가 없고 이것이 있으면 번호 없는 사항 1개(`decisionPointId: null`)로 본다 (`agenda-contract.md`와 같은 규칙). 둘 다 오면 `decisionPoints`를 쓴다. 둘 다 없으면 사항 문구 없이 받는다 (v0.7에서 `decisionPoint`가 선택이었으므로). 이때 미결·결정 확인 필요 줄은 `decisionText`로 만든다 (7.2) |
 
 백엔드 원안의 `status`는 `summary` 안에 있으므로 보내도 쓰지 않는다.
@@ -427,7 +427,7 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 | `agendaId` | `int` | 예 | 안건 번호 |
 | `status` | `string` | 예 | `NOT_STARTED`, `DECIDED`, `UNDECIDED`, `DECISION_CHECK` (`agenda-status-contract.md`). 회의 종료 뒤에는 `DISCUSSING`이 나오지 않는다 (받아도 상태 줄을 만들지 않는다) |
 | `statusReason` | `object \| null` | 아니요 | **읽지 않는다.** 요약 쪽 코드가 만든 사항 개수 문장이다 (AI-08 명세 3.2). v0.7까지는 결정 줄의 재료였다 |
-| `decisionPoints` | `DecisionPointResult[]` | 예 | 결정할 사항마다 판정 결과. 결정·미결·결정 확인 필요 줄의 재료 (7.1) [구현 전] |
+| `decisionPoints` | `DecisionPointResult[]` | 예 | 결정할 사항마다 판정 결과. 결정·미결·결정 확인 필요 줄의 재료 (7.1). 없으면 `400` (v0.7까지의 요약은 결정 줄을 만들 수 없다) |
 | `summary` | `SummaryItem[]` | 예 | 안건 보드 요약 문장. 없으면 빈 목록 |
 | `opinions` | `Opinion[]` | 예 | 안건 보드 의견. 없으면 빈 목록 |
 | `todos` | `Todo[]` | 예 | 안건 보드 할 일. 없으면 빈 목록 |
@@ -496,7 +496,7 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 | `agendaId` | `int` | 예 | 안건 번호 |
 | `kind` | `string` | 예 | `decision`, `undecided`, `decisionCheck`, `summary`, `opinion`, `todo` (7.1) |
 | `id` | `string \| null` | 예 | 요약 항목 번호. 결정할 사항에서 나온 줄(`decision`, `undecided`, `decisionCheck`)은 `null` |
-| `decisionPointId` | `int \| string \| null` | 예 | 결정할 사항에서 나온 줄의 사항 번호. 그 밖의 줄은 `null`. 전환 기간에 번호 없는 사항(5.1)에서 나온 줄도 `null` [구현 전] |
+| `decisionPointId` | `int \| string \| null` | 예 | 결정할 사항에서 나온 줄의 사항 번호. 그 밖의 줄은 `null`. 전환 기간에 번호 없는 사항(5.1)에서 나온 줄도 `null` |
 
 ### 5.7 PreviousLine
 
@@ -512,7 +512,7 @@ RAG 명세의 워드 문서 근거 위치(`{type: "section", heading: "2. 예산
 | 칸 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `title` | `string` | 예 | 필드 이름. 1~100자, 양식 안에서 겹치지 않는다 |
-| `description` | `string` | 아니요 | 양식 편집 화면의 필드 설명. AI가 필드를 고를 때 이름과 함께 본다 (7.2). 표 필드는 열 이름을 정할 때도 본다 (7.6). 없거나 빈 글이면 이름만 본다 [구현 전] |
+| `description` | `string` | 아니요 | 양식 편집 화면의 필드 설명. AI가 필드를 고를 때 이름과 함께 본다 (7.2). 표 필드는 열 이름을 정할 때도 본다 (7.6) [구현 전]. 없거나 빈 글이면 이름만 본다. 2,000자 이하 |
 | `type` | `string` | 예 | `"text"`(글) 또는 `"table"`(표). 양식의 기록 방식이 `TABLE`이면 `"table"`, `FREE`(자유 입력형)·`LIST`(목록형)·`CHECKLIST`(체크리스트형)이면 `"text"`로 보낸다. 글 필드는 기록 방식과 상관없이 같은 줄 목록으로 채운다. AI가 채우는 표 필드(`type: "table"`, `aiFill: true`)는 7.6을 구현하기 전까지 `400`으로 거절한다 |
 | `columns` | `int` | 아니요 | 양식에서 사용자가 정한 표의 열 개수. 1~6. 표 필드는 보내야 한다. AI는 이 개수대로 열 이름을 정한다 (7.6). v0.7 요청처럼 없으면 AI가 1~6개 안에서 열 수도 정한다. 행 개수는 보내지 않는다 (놓인 항목 수로 정해진다). 글 필드에서는 읽지 않는다 [구현 전] |
 | `aiFill` | `boolean` | 예 | `true`면 AI가 요약에서 채운다. `false`면 사용자가 채우는 필드로 보고 AI가 쓰지 않는다 |
@@ -613,7 +613,7 @@ AI의 결과를 검사하고, 걸리면 걸린 이유를 붙여 다시 시킨다
 | `template.fields` 수 | 20 | `400` |
 | 필드 이름 길이 | 100자 (minutes-service 칸 이름 길이와 같음) | `400` |
 | 사용자가 채우는 필드의 `content`, 머리글·바닥글 길이 | 20,000자 | `400` |
-| 필드 설명(`description`) 길이 | 2,000자 [구현 전] | `400` |
+| 필드 설명(`description`) 길이 | 2,000자 | `400` |
 | 표의 열 수 (`columns`) | 1~6 (5.8) [구현 전] | `400` |
 | 표의 열 이름 길이 | 30자 (7.6) [구현 전] | 검사 실패로 다시 시킴 |
 | AI에 넘기는 항목 수 | 300. 처음 초안은 요약 항목 수, 다시 배치는 `previousLines` 줄 수 (이전 초안에 없던 요약 항목은 AI에 넘기지 않으므로 세지 않음) | `INPUT_TOO_LONG` |
@@ -692,8 +692,8 @@ API 1에 새 `requestId`, 새 `template.fields`, **처음과 같은 `summary`**�
 | `previousLines` 어디에도 없는 재료 항목 (처음에 넣지 못했거나 작성자가 지운 것) | — | 다시 넣지 않고 `unplaced`로 돌려줌. 작성자가 지운 것을 되살리지 않기 위해서다 |
 
 - 줄의 근거, 표시, 출처와 고친 글은 AI가 쓰지 않고 코드가 그대로 옮긴다.
-- 결정할 사항에서 나온 줄은 `agendaId`, `kind`, `decisionPointId`로 재료 항목을 찾는다. 사항 번호가 같아도 요약에서 상태가 바뀌었으면(예: `decisionCheck` → `decision`) 출처가 가리키는 항목이 없는 경우(아래 표)로 다룬다 [구현 전].
-- v0.7 결과로 저장한 줄(`decisionPointId`가 없는 상태 줄)은 출처가 가리키는 항목이 없는 경우로 다룬다 [구현 전].
+- 결정할 사항에서 나온 줄은 `agendaId`, `kind`, `decisionPointId`로 재료 항목을 찾는다. 사항 번호가 같아도 요약에서 상태가 바뀌었으면(예: `decisionCheck` → `decision`) 출처가 가리키는 항목이 없는 경우로 다룬다.
+- v0.7 결과로 저장한 줄(`decisionPointId`가 없는 상태 줄)은 출처가 가리키는 항목이 없는 경우로 다룬다.
 - 7.3의 검사에 더해, `previousLines`의 모든 줄이 한 칸이나 `unplacedLines` 중 정확히 한 곳에 있는지 검사한다.
 - 결과의 줄에는 `draftEdited`가 더해진다 (들어온 값 그대로. 다시 배치가 값을 바꾸지 않는다).
 - 고정한 글에 줄바꿈이 있으면 공백으로 바꾼다 (7.3 빈 줄 검사).

@@ -1,0 +1,24 @@
+{
+  "meetingId": "m_1234",
+  "version": 3,
+  "agendas": [
+    {
+      "agendaId": "a_101", "position": 1,
+      "title": "배포 일정",
+      "decisionPoint": "1차 배포 날짜를 확정한다",
+      "addedDuringMeeting": false
+    },
+    {
+      "agendaId": "a_102", "position": 2,
+      "title": "예산 배분",
+      "decisionPoint": "외부 API 비용 한도를 정한다",
+      "addedDuringMeeting": false
+    },
+    {
+      "agendaId": "a_103", "position": 3,
+      "title": "QA 담당 정하기",
+      "decisionPoint": "QA를 맡을 사람을 정한다",
+      "addedDuringMeeting": true
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+ "about": "운영계획서(합성) 검색 평가. 정답은 위치로 적는다: pdf 쪽, docx 제목, xlsx 시트와 행. answer 는 그 위치에 있는 답 글귀 (사람이 확인하는 용도). 엑셀에 없는 답은 xlsx 를 비운다. gold 가 빈 질문은 문서에 없는 내용이라 검색 지표에서 뺀다.",
+ "docs": {
+  "plan": {
+   "pdf": "rag/tests/fixtures/upload_plan.pdf",
+   "docx": "rag/tests/fixtures/upload_plan.docx",
+   "xlsx": "rag/tests/fixtures/upload_plan.xlsx"
+  },
+  "report": {
+   "file": "rag/tests/fixtures/upload_report.pdf"
+  },
+  "minutes": {
+   "file": "rag/tests/fixtures/minutes_confirmed.json"
+  }
+ },
+ "questions": [
+  {"id": 1, "q": "케이터링 예산은 얼마야?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "6,750,000원", "pdf": {"page": 4}, "docx": {"heading": "7. 예산"}, "xlsx": {"sheet": "7. 예산", "row": 4}}]},
+  {"id": 2, "q": "기조 발표는 몇 시에 시작해?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "13:20~14:10", "pdf": {"page": 2}, "docx": {"heading": "3.1 1일차: 11월 20일(목)"}, "xlsx": {"sheet": "3.1 1일차 11월 20일(목)", "row": 5}}]},
+  {"id": 3, "q": "현장 답사는 언제 해?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "D-10 (11/10)", "pdf": {"page": 2}, "docx": {"heading": "2. 추진 일정 (준비 단계)"}, "xlsx": {"sheet": "2. 추진 일정 (준비 단계)", "row": 7}}]},
+  {"id": 4, "q": "무전기는 몇 대 준비해?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "15대", "pdf": {"page": 3}, "docx": {"heading": "5. 준비물과 장비"}, "xlsx": {"sheet": "5. 준비물과 장비", "row": 6}}]},
+  {"id": 5, "q": "안전 요원은 몇 명이야?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "비상구·계단 통제", "pdf": {"page": 4}, "docx": {"heading": "6. 필요 인원과 역할"}, "xlsx": {"sheet": "6. 필요 인원과 역할", "row": 9}}]},
+  {"id": 6, "q": "2일차 점심은 어디서 먹어?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "점심 (뷔페)", "pdf": {"page": 2}, "docx": {"heading": "3.2 2일차: 11월 21일(금)"}, "xlsx": {"sheet": "3.2 2일차 11월 21일(금)", "row": 5}}]},
+  {"id": 7, "q": "행사 장소는 어디야?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "○○컨벤션센터", "pdf": {"page": 1}, "docx": {"heading": "1.2 일시와 장소"}, "xlsx": {"sheet": "1.2 일시와 장소", "row": 4}}]},
+  {"id": 8, "q": "정전이 나면 누가 맡아?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "손전등, 자리에서 기다리도록", "pdf": {"page": 5}, "docx": {"heading": "10. 비상 대응"}, "xlsx": {"sheet": "10. 비상 대응", "row": 4}}]},
+  {"id": 9, "q": "장소 대관비는 얼마야?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "9,000,000원", "pdf": {"page": 4}, "docx": {"heading": "7. 예산"}, "xlsx": {"sheet": "7. 예산", "row": 2}}]},
+  {"id": 10, "q": "초청장은 언제 보내?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "D-30 (10/21)", "pdf": {"page": 1}, "docx": {"heading": "2. 추진 일정 (준비 단계)"}, "xlsx": {"sheet": "2. 추진 일정 (준비 단계)", "row": 4}}]},
+  {"id": 11, "q": "이 문서 작성일이 언제야?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "2026년 10월 20일", "pdf": {"page": 1}, "docx": {"heading": "2026 고객 초청 기술 세미나 운영계획서 (합성 자료)"}, "xlsx": {"sheet": "문서 정보", "row": 4}}]},
+  {"id": 12, "q": "패널 토론은 어디서 해?", "type": "표 속 사실", "gold": [{"doc": "plan", "answer": "패널 토론: 회의 문화와 기록", "pdf": {"page": 2}, "docx": {"heading": "3.2 2일차: 11월 21일(금)"}, "xlsx": {"sheet": "3.2 2일차 11월 21일(금)", "row": 7}}]},
+  {"id": 13, "q": "이 행사를 왜 하는 거야?", "type": "문단 속 설명", "gold": [{"doc": "plan", "answer": "회의 기록 자동화의 새 기능을 소개", "pdf": {"page": 1}, "docx": {"heading": "1.1 목적"}}]},
+  {"id": 14, "q": "총 예산은 얼마야?", "type": "문단 속 설명", "gold": [{"doc": "plan", "answer": "총 예산은 26,500,000원", "pdf": {"page": 4}, "docx": {"heading": "7. 예산"}, "xlsx": {"sheet": "7. 예산", "row": 9}}]},
+  {"id": 15, "q": "스태프 교육은 언제 얼마나 해?", "type": "문단 속 설명", "gold": [{"doc": "plan", "answer": "스태프 교육은 D-3 리허설", "pdf": {"page": 4}, "docx": {"heading": "6. 필요 인원과 역할"}}]},
+  {"id": 16, "q": "무전 채널은 어떻게 나뉘어 있어?", "type": "문단 속 설명", "gold": [{"doc": "plan", "answer": "1번 전체", "pdf": {"page": 4}, "docx": {"heading": "6. 필요 인원과 역할"}}]},
+  {"id": 17, "q": "실습 때 노트북을 안 가져오면 어떻게 해?", "type": "문단 속 설명", "gold": [{"doc": "plan", "answer": "예비 노트북 5대", "pdf": {"page": 3}, "docx": {"heading": "4.4 실습 워크숍"}}]},
+  {"id": 18, "q": "대피 집결지는 어디야?", "type": "문단 속 설명", "gold": [{"doc": "plan", "answer": "건물 정문 앞 광장", "pdf": {"page": 6}, "docx": {"heading": "10. 비상 대응"}}]},
+  {"id": 19, "q": "고객 사례 발표 자료는 누가 검토해?", "type": "문단 속 설명", "gold": [{"doc": "plan", "answer": "법무 담당이 자료를", "pdf": {"page": 3}, "docx": {"heading": "4.2 고객 사례 발표"}}]},
+  {"id": 20, "q": "공직자가 참가하면 경품을 줘도 돼?", "type": "문단 속 설명", "gold": [{"doc": "plan", "answer": "공직자 등", "pdf": {"page": 5}, "docx": {"heading": "8.4 청탁금지법"}}]},
+  {"id": 21, "q": "사진 찍히기 싫은 사람은 어떻게 해?", "type": "문단 속 설명", "gold": [{"doc": "plan", "answer": "파란 스티커", "pdf": {"page": 5}, "docx": {"heading": "8.5 저작권과 초상"}}]},
+  {"id": 22, "q": "사전 등록 때 개인정보 동의는 어떻게 받아?", "type": "문단 속 설명", "gold": [{"doc": "plan", "answer": "수집 목적, 항목, 보유 기간", "pdf": {"page": 4}, "docx": {"heading": "8.1 개인정보 보호법"}}]},
+  {"id": 23, "q": "다친 사람이 생기면 어떻게 해?", "type": "말 바꿔 묻기", "gold": [{"doc": "plan", "answer": "의식 확인, 구급상자", "pdf": {"page": 5}, "docx": {"heading": "10. 비상 대응"}, "xlsx": {"sheet": "10. 비상 대응", "row": 3}}]},
+  {"id": 24, "q": "불이 나면 어떻게 대응해?", "type": "말 바꿔 묻기", "gold": [{"doc": "plan", "answer": "경보 확인, 안내 방송", "pdf": {"page": 5}, "docx": {"heading": "10. 비상 대응"}, "xlsx": {"sheet": "10. 비상 대응", "row": 2}}]},
+  {"id": 25, "q": "비건이나 알레르기 있는 참석자는 몇 명이야?", "type": "말 바꿔 묻기", "gold": [{"doc": "plan", "answer": "채식 12명", "pdf": {"page": 6}, "docx": {"heading": "11. 고려할 점"}}]},
+  {"id": 26, "q": "차 가져와도 돼?", "type": "말 바꿔 묻기", "gold": [{"doc": "plan", "answer": "주차는 120대", "pdf": {"page": 6}, "docx": {"heading": "11. 고려할 점"}}]},
+  {"id": 27, "q": "휠체어 탄 분도 올 수 있어?", "type": "말 바꿔 묻기", "gold": [{"doc": "plan", "answer": "휠체어 이동 동선", "pdf": {"page": 6}, "docx": {"heading": "11. 고려할 점"}}]},
+  {"id": 28, "q": "끝나고 참석자 반응은 어떻게 모아?", "type": "말 바꿔 묻기", "gold": [{"doc": "plan", "answer": "D+3 (11/23)", "pdf": {"page": 2}, "docx": {"heading": "2. 추진 일정 (준비 단계)"}, "xlsx": {"sheet": "2. 추진 일정 (준비 단계)", "row": 11}}, {"doc": "plan", "answer": "응답 기한 D+10", "pdf": {"page": 6}, "docx": {"heading": "12. 사후 처리"}}]},
+  {"id": 29, "q": "마이크는 몇 개 있어?", "type": "말 바꿔 묻기", "gold": [{"doc": "plan", "answer": "무선 마이크, 핀 마이크", "pdf": {"page": 3}, "docx": {"heading": "5. 준비물과 장비"}, "xlsx": {"sheet": "5. 준비물과 장비", "row": 2}}]},
+  {"id": 30, "q": "눈이 많이 오면 어떻게 해?", "type": "말 바꿔 묻기", "gold": [{"doc": "plan", "answer": "악천후 (폭설 등)", "pdf": {"page": 6}, "docx": {"heading": "10. 비상 대응"}, "xlsx": {"sheet": "10. 비상 대응", "row": 6}}]},
+  {"id": 31, "q": "안전 책임자는 무슨 일을 해?", "type": "여러 곳", "gold": [{"doc": "plan", "answer": "안전 점검, 비상 대응 지휘", "pdf": {"page": 4}, "docx": {"heading": "6. 필요 인원과 역할"}, "xlsx": {"sheet": "6. 필요 인원과 역할", "row": 8}}, {"doc": "plan", "answer": "비상구가 열려 있는지", "pdf": {"page": 5}, "docx": {"heading": "9.3 안전"}}, {"doc": "plan", "answer": "현장 답사, 동선·안전 점검", "pdf": {"page": 2}, "docx": {"heading": "2. 추진 일정 (준비 단계)"}, "xlsx": {"sheet": "2. 추진 일정 (준비 단계)", "row": 7}}]},
+  {"id": 32, "q": "개인정보는 언제 파기해?", "type": "여러 곳", "gold": [{"doc": "plan", "answer": "개인정보 파기 계획 확인", "pdf": {"page": 2}, "docx": {"heading": "2. 추진 일정 (준비 단계)"}, "xlsx": {"sheet": "2. 추진 일정 (준비 단계)", "row": 12}}, {"doc": "plan", "answer": "정해 둔 보유 기간이 끝나면", "pdf": {"page": 4}, "docx": {"heading": "8.1 개인정보 보호법"}}, {"doc": "plan", "answer": "파기 확인서", "pdf": {"page": 6}, "docx": {"heading": "12. 사후 처리"}}]},
+  {"id": 33, "q": "경품은 어떻게 나눠 줘?", "type": "여러 곳", "gold": [{"doc": "plan", "answer": "설문 응답자 추첨", "pdf": {"page": 4}, "docx": {"heading": "7. 예산"}, "xlsx": {"sheet": "7. 예산", "row": 7}}, {"doc": "plan", "answer": "경품 추첨은 2일차 폐회", "pdf": {"page": 3}, "docx": {"heading": "4.5 시연 부스와 경품 추첨"}}, {"doc": "plan", "answer": "확인 전에는 해당 참가자에게 경품을", "pdf": {"page": 5}, "docx": {"heading": "8.4 청탁금지법"}}]},
+  {"id": 34, "q": "와이파이는 어떻게 준비해?", "type": "여러 곳", "gold": [{"doc": "plan", "answer": "3개 대역", "pdf": {"page": 3}, "docx": {"heading": "5. 준비물과 장비"}, "xlsx": {"sheet": "5. 준비물과 장비", "row": 5}}, {"doc": "plan", "answer": "실습용 대역을 따로 쓰며", "pdf": {"page": 3}, "docx": {"heading": "4.4 실습 워크숍"}}, {"doc": "plan", "answer": "동시 접속이 몰리므로", "pdf": {"page": 6}, "docx": {"heading": "11. 고려할 점"}}]},
+  {"id": 35, "q": "체험 계정은 어떻게 관리해?", "type": "여러 곳", "gold": [{"doc": "plan", "answer": "체험 계정은 D-3에 미리 발급", "pdf": {"page": 3}, "docx": {"heading": "4.4 실습 워크숍"}}, {"doc": "plan", "answer": "체험 계정은 행사가 끝나고 7일", "pdf": {"page": 5}, "docx": {"heading": "9.4 개인정보와 보안"}}]},
+  {"id": 36, "q": "숙소는 어디로 잡았어?", "type": "없는 내용", "gold": []},
+  {"id": 37, "q": "참가비는 얼마야?", "type": "없는 내용", "gold": []},
+  {"id": 38, "q": "통역 서비스가 있어?", "type": "없는 내용", "gold": []},
+  {"id": 39, "q": "사회자 이름이 뭐야?", "type": "없는 내용", "gold": []},
+  {"id": 40, "q": "셔틀버스는 몇 시에 다녀?", "type": "없는 내용", "gold": []}
+ ]
+}

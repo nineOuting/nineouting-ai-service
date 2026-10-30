@@ -1,0 +1,60 @@
+{
+  "meetingId": "m_1234",
+  "version": 3,
+  "agendas": [
+    {
+      "agendaId": 101,
+      "position": 1,
+      "title": "배포 일정",
+      "addedDuringMeeting": false,
+      "decisionPoints": [
+        {
+          "decisionPointId": 7,
+          "position": 1,
+          "text": "1차 배포 날짜 확정"
+        },
+        {
+          "decisionPointId": 8,
+          "position": 2,
+          "text": "배포 담당 지정"
+        },
+        {
+          "decisionPointId": 9,
+          "position": 3,
+          "text": "배포 전 점검 항목 확정"
+        }
+      ]
+    },
+    {
+      "agendaId": 102,
+      "position": 2,
+      "title": "예산 배분",
+      "addedDuringMeeting": false,
+      "decisionPoints": [
+        {
+          "decisionPointId": 10,
+          "position": 1,
+          "text": "외부 API 비용 한도 확정"
+        },
+        {
+          "decisionPointId": 11,
+          "position": 2,
+          "text": "비용 초과 시 승인 절차"
+        }
+      ]
+    },
+    {
+      "agendaId": 103,
+      "position": 3,
+      "title": "QA 담당 정하기",
+      "addedDuringMeeting": true,
+      "decisionPoints": [
+        {
+          "decisionPointId": 12,
+          "position": 1,
+          "text": "QA 담당자 지정"
+        }
+      ]
+    }
+  ]
+}

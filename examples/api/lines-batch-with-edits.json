@@ -1,0 +1,15 @@
+{
+  "meetingId": "m_1234",
+  "batch": 8,
+  "lines": [
+    {
+      "seq": 60, "startMs": 128900, "endMs": 129000,
+      "text": "참고로 배포 담당은 따로 정하지 않았다",
+      "kind": null, "lowConfidence": false, "recovered": false, "manual": false
+    }
+  ],
+  "edits": [
+    { "seq": 40, "rev": 1, "text": "벡터디비로 가죠" },
+    { "seq": 38, "rev": 2, "deleted": true }
+  ]
+}

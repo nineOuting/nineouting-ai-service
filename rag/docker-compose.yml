@@ -1,0 +1,23 @@
+# 로컬 개발·시험용 Postgres + pgvector. 운영 DB 는 CN팀이 관리하며 이 파일은 쓰지 않는다.
+# 실행: cd rag && docker compose up -d   (rag/.env 필요, .env.example 참고)
+name: nineouting-rag
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?rag/.env 에 POSTGRES_PASSWORD 가 필요함}
+      RAG_APP_PASSWORD: ${RAG_APP_PASSWORD:?rag/.env 에 RAG_APP_PASSWORD 가 필요함}
+    ports:
+      - "127.0.0.1:5433:5432"          # 이 컴퓨터 안에서만 접속. 다른 Postgres 와 포트가 겹치지 않게 5433
+    volumes:
+      - rag_pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro   # 볼륨이 비어 있을 때(처음)만 실행됨
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  rag_pgdata:

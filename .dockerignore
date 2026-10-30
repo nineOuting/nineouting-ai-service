@@ -1,0 +1,22 @@
+.git
+.venv
+.vscode
+# 비밀키: 하위 폴더(rag/.env 등)까지 막는다
+**/.env
+**/*.env
+**/.env.*
+**/__pycache__
+**/*.pyc
+*.jsonl
+data/
+qa/
+out*/
+llm_raw/
+docs/
+examples/
+# RAG 개발·시험용 (이미지에는 필요 없음)
+rag/tests/
+rag/docker-compose.yml
+rag/db/
+# 회의록 초안 시험 (이미지에는 필요 없음)
+minutes/tests/

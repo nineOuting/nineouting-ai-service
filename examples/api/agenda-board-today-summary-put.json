@@ -1,0 +1,409 @@
+{
+  "version": 1792455913004,
+  "basedOnSeq": 52,
+  "currentAgendaId": 102,
+  "agendas": [
+    {
+      "agendaId": 101,
+      "status": "DECIDED",
+      "statusReason": {
+        "text": "결정할 사항 1개가 모두 결정됨",
+        "evidenceSeqs": [
+          43,
+          45
+        ]
+      },
+      "decisionPoints": [
+        {
+          "decisionPointId": 7,
+          "status": "DECIDED",
+          "decisionText": "1차 배포는 다음 주 목요일로 정한다",
+          "evidenceSeqs": [
+            43,
+            45
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "summary": [
+        {
+          "id": "k3f9a1-1",
+          "text": "1차 배포 날짜를 다음 주 목요일로 정하기로 하고 QA 일정은 수요일까지 확인하기로 함",
+          "evidenceSeqs": [
+            42,
+            43,
+            45
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "opinions": [
+        {
+          "id": "k3f9a1-o1",
+          "kind": "OPINION",
+          "text": "목요일 배포가 QA 일정에 여유가 있다",
+          "evidenceSeqs": [
+            42
+          ],
+          "edited": false,
+          "needsCheck": false
+        },
+        {
+          "id": "k3f9a1-o2",
+          "kind": "CONCERN",
+          "text": "수요일까지 QA가 끝나지 않을 수 있다",
+          "evidenceSeqs": [
+            44
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "todos": [
+        {
+          "id": "k3f9a1-t1",
+          "task": "QA 일정표 공유",
+          "assigneeName": "철수",
+          "assigneeStatus": "MATCHED",
+          "assigneeUserId": 7,
+          "dueText": "수요일까지",
+          "evidenceSeqs": [
+            46
+          ],
+          "edited": false,
+          "needsCheck": false,
+          "unclear": false
+        }
+      ]
+    },
+    {
+      "agendaId": 102,
+      "status": "DISCUSSING",
+      "statusReason": {
+        "text": "결정할 사항 2개 중 0개가 결정됨 (미결 1개, 논의 전 1개)",
+        "evidenceSeqs": [
+          51
+        ]
+      },
+      "decisionPoints": [
+        {
+          "decisionPointId": 10,
+          "status": "UNDECIDED",
+          "decisionText": "외부 API 비용 한도는 사용량을 확인한 뒤 정하자는 의견만 나왔다",
+          "evidenceSeqs": [
+            51
+          ],
+          "edited": false,
+          "needsCheck": false
+        },
+        {
+          "decisionPointId": 11,
+          "status": "NOT_STARTED",
+          "decisionText": "아직 논의되지 않았어요",
+          "evidenceSeqs": [],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "summary": [
+        {
+          "id": "k3f9a1-3",
+          "text": "외부 API 비용 한도를 정하기 위해 월 사용량을 먼저 확인하자는 말이 나옴",
+          "evidenceSeqs": [
+            47,
+            48
+          ],
+          "edited": false,
+          "needsCheck": false
+        },
+        {
+          "id": "k3f9a1-4",
+          "text": "사용량 확인 전에는 한도를 정하지 않기로 함",
+          "evidenceSeqs": [
+            49
+          ],
+          "edited": true,
+          "needsCheck": true
+        }
+      ],
+      "opinions": [],
+      "todos": [
+        {
+          "id": "k3f9a1-t2",
+          "task": "월 사용량 확인",
+          "assigneeName": null,
+          "assigneeStatus": "UNASSIGNED",
+          "assigneeUserId": null,
+          "dueText": null,
+          "evidenceSeqs": [
+            50
+          ],
+          "edited": false,
+          "needsCheck": false,
+          "unclear": false
+        }
+      ]
+    },
+    {
+      "agendaId": 103,
+      "status": "NOT_STARTED",
+      "statusReason": null,
+      "decisionPoints": [
+        {
+          "decisionPointId": 12,
+          "status": "NOT_STARTED",
+          "decisionText": "아직 논의되지 않았어요",
+          "evidenceSeqs": [],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "summary": [],
+      "opinions": [],
+      "todos": []
+    }
+  ],
+  "offTopic": null,
+  "leftover": {
+    "requestRev": 3,
+    "final": false,
+    "agendas": [
+      {
+        "agendaId": 102,
+        "status": "UNDECIDED",
+        "statusReason": {
+          "text": "결정할 사항 2개 중 0개가 결정됨 (미결 1개, 논의 전 1개)",
+          "evidenceSeqs": [
+            51
+          ]
+        },
+        "decisionPoints": [
+          {
+            "decisionPointId": 10,
+            "status": "UNDECIDED",
+            "decisionText": "외부 API 비용 한도는 사용량을 확인한 뒤 정하자는 의견만 나왔다",
+            "evidenceSeqs": [
+              51
+            ],
+            "edited": false,
+            "needsCheck": false
+          },
+          {
+            "decisionPointId": 11,
+            "status": "NOT_STARTED",
+            "decisionText": "아직 논의되지 않았어요",
+            "evidenceSeqs": [],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
+        "summary": [
+          {
+            "id": "k3f9a1-3",
+            "text": "외부 API 비용 한도를 정하기 위해 월 사용량을 먼저 확인하자는 말이 나옴",
+            "evidenceSeqs": [
+              47,
+              48
+            ],
+            "edited": false,
+            "needsCheck": false
+          },
+          {
+            "id": "k3f9a1-4",
+            "text": "사용량 확인 전에는 한도를 정하지 않기로 함",
+            "evidenceSeqs": [
+              49
+            ],
+            "edited": true,
+            "needsCheck": true
+          }
+        ]
+      },
+      {
+        "agendaId": 103,
+        "status": "NOT_STARTED",
+        "statusReason": null,
+        "decisionPoints": [
+          {
+            "decisionPointId": 12,
+            "status": "NOT_STARTED",
+            "decisionText": "아직 논의되지 않았어요",
+            "evidenceSeqs": [],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
+        "summary": []
+      }
+    ]
+  },
+  "todaySummary": {
+    "requestRev": 3,
+    "final": false,
+    "agendas": [
+      {
+        "agendaId": 101,
+        "status": "DECIDED",
+        "statusReason": {
+          "text": "결정할 사항 1개가 모두 결정됨",
+          "evidenceSeqs": [
+            43,
+            45
+          ]
+        },
+        "decisionPoints": [
+          {
+            "decisionPointId": 7,
+            "status": "DECIDED",
+            "decisionText": "1차 배포는 다음 주 목요일로 정한다",
+            "evidenceSeqs": [
+              43,
+              45
+            ],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
+        "summary": [
+          {
+            "id": "k3f9a1-1",
+            "text": "1차 배포 날짜를 다음 주 목요일로 정하기로 하고 QA 일정은 수요일까지 확인하기로 함",
+            "evidenceSeqs": [
+              42,
+              43,
+              45
+            ],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
+        "opinions": [
+          {
+            "id": "k3f9a1-o1",
+            "kind": "OPINION",
+            "text": "목요일 배포가 QA 일정에 여유가 있다",
+            "evidenceSeqs": [
+              42
+            ],
+            "edited": false,
+            "needsCheck": false
+          },
+          {
+            "id": "k3f9a1-o2",
+            "kind": "CONCERN",
+            "text": "수요일까지 QA가 끝나지 않을 수 있다",
+            "evidenceSeqs": [
+              44
+            ],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
+        "todos": [
+          {
+            "id": "k3f9a1-t1",
+            "task": "QA 일정표 공유",
+            "assigneeName": "철수",
+            "assigneeStatus": "MATCHED",
+            "assigneeUserId": 7,
+            "dueText": "수요일까지",
+            "evidenceSeqs": [
+              46
+            ],
+            "edited": false,
+            "needsCheck": false,
+            "unclear": false
+          }
+        ]
+      },
+      {
+        "agendaId": 102,
+        "status": "UNDECIDED",
+        "statusReason": {
+          "text": "결정할 사항 2개 중 0개가 결정됨 (미결 1개, 논의 전 1개)",
+          "evidenceSeqs": [
+            51
+          ]
+        },
+        "decisionPoints": [
+          {
+            "decisionPointId": 10,
+            "status": "UNDECIDED",
+            "decisionText": "외부 API 비용 한도는 사용량을 확인한 뒤 정하자는 의견만 나왔다",
+            "evidenceSeqs": [
+              51
+            ],
+            "edited": false,
+            "needsCheck": false
+          },
+          {
+            "decisionPointId": 11,
+            "status": "NOT_STARTED",
+            "decisionText": "아직 논의되지 않았어요",
+            "evidenceSeqs": [],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
+        "summary": [
+          {
+            "id": "k3f9a1-3",
+            "text": "외부 API 비용 한도를 정하기 위해 월 사용량을 먼저 확인하자는 말이 나옴",
+            "evidenceSeqs": [
+              47,
+              48
+            ],
+            "edited": false,
+            "needsCheck": false
+          },
+          {
+            "id": "k3f9a1-4",
+            "text": "사용량 확인 전에는 한도를 정하지 않기로 함",
+            "evidenceSeqs": [
+              49
+            ],
+            "edited": true,
+            "needsCheck": true
+          }
+        ],
+        "opinions": [],
+        "todos": [
+          {
+            "id": "k3f9a1-t2",
+            "task": "월 사용량 확인",
+            "assigneeName": null,
+            "assigneeStatus": "UNASSIGNED",
+            "assigneeUserId": null,
+            "dueText": null,
+            "evidenceSeqs": [
+              50
+            ],
+            "edited": false,
+            "needsCheck": false,
+            "unclear": false
+          }
+        ]
+      },
+      {
+        "agendaId": 103,
+        "status": "NOT_STARTED",
+        "statusReason": null,
+        "decisionPoints": [
+          {
+            "decisionPointId": 12,
+            "status": "NOT_STARTED",
+            "decisionText": "아직 논의되지 않았어요",
+            "evidenceSeqs": [],
+            "edited": false,
+            "needsCheck": false
+          }
+        ],
+        "summary": [],
+        "opinions": [],
+        "todos": []
+      }
+    ]
+  }
+}

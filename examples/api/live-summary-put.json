@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "0.1",
+  "meetingId": "m_1234",
+  "version": 1792455707432,
+  "atMs": 134200,
+  "final": false,
+  "summary": [
+    {
+      "text": "배포 일정을 「다음 주 목요일」로 하자는 제안이 나옴",
+      "topic": "배포 일정",
+      "evidence": [{ "start": 125.3, "end": 128.9 }]
+    },
+    {
+      "text": "배포 서버를 어디에 올릴지는 정하지 못함 (일부 STT 불확실)",
+      "topic": "배포 서버",
+      "evidence": [{ "start": 131.5, "end": 134.2 }]
+    }
+  ]
+}

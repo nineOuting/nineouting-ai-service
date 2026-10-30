@@ -1,0 +1,27 @@
+{
+  "meetingId": "m_1234",
+  "batch": 7,
+  "lines": [
+    {
+      "seq": 45, "startMs": 123000, "endMs": 125000,
+      "text": "그럼 일정부터 정할까요",
+      "kind": null, "lowConfidence": false, "recovered": true, "manual": false
+    },
+    {
+      "seq": 42, "startMs": 125300, "endMs": 128900,
+      "text": "배포는 다음 주 목요일로 하죠",
+      "kind": null, "lowConfidence": false, "recovered": false, "manual": false
+    },
+    {
+      "seq": 43, "startMs": 129000, "endMs": 130400,
+      "text": "네 알겠습니다",
+      "kind": "backchannel", "lowConfidence": false, "recovered": false, "manual": false
+    },
+    {
+      "seq": 44, "startMs": 131500, "endMs": 134200,
+      "text": "그건 어디 서버에 올릴지",
+      "kind": null, "lowConfidence": true, "recovered": false, "manual": false
+    }
+  ],
+  "edits": []
+}

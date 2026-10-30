@@ -1,0 +1,109 @@
+{
+  "version": 1792455712004,
+  "basedOnSeq": 58,
+  "currentAgendaId": 102,
+  "agendas": [
+    {
+      "agendaId": 101,
+      "status": "UNDECIDED",
+      "statusReason": {
+        "text": "결정할 사항 3개 중 1개가 결정됨 (결정 확인 필요 1개, 미결 1개)",
+        "evidenceSeqs": [
+          51
+        ]
+      },
+      "decisionPoints": [
+        {
+          "decisionPointId": 7,
+          "status": "DECIDED",
+          "decisionText": "1차 배포는 다음 주 목요일로 정한다",
+          "evidenceSeqs": [
+            42,
+            43
+          ],
+          "edited": false,
+          "needsCheck": false
+        },
+        {
+          "decisionPointId": 8,
+          "status": "DECISION_CHECK",
+          "decisionText": "배포 담당은 백엔드 쪽에서 맡는 것으로 보인다",
+          "evidenceSeqs": [
+            47
+          ],
+          "edited": false,
+          "needsCheck": false
+        },
+        {
+          "decisionPointId": 9,
+          "status": "UNDECIDED",
+          "decisionText": "배포 전 점검 항목은 아직 정해지지 않았다",
+          "evidenceSeqs": [
+            50,
+            51
+          ],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "summary": [],
+      "opinions": [],
+      "todos": []
+    },
+    {
+      "agendaId": 102,
+      "status": "DISCUSSING",
+      "statusReason": {
+        "text": "결정할 사항 2개 중 1개가 결정됨 (미결 1개)",
+        "evidenceSeqs": [
+          58
+        ]
+      },
+      "decisionPoints": [
+        {
+          "decisionPointId": 10,
+          "status": "DECIDED",
+          "decisionText": "외부 API 비용 한도는 월 30만 원으로 한다",
+          "evidenceSeqs": [
+            55,
+            56
+          ],
+          "edited": true,
+          "needsCheck": false
+        },
+        {
+          "decisionPointId": 11,
+          "status": "UNDECIDED",
+          "decisionText": "비용 초과 시 승인 절차는 아직 결정되지 않았어요",
+          "evidenceSeqs": [],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "summary": [],
+      "opinions": [],
+      "todos": []
+    },
+    {
+      "agendaId": 103,
+      "status": "NOT_STARTED",
+      "statusReason": null,
+      "decisionPoints": [
+        {
+          "decisionPointId": 12,
+          "status": "NOT_STARTED",
+          "decisionText": "아직 논의되지 않았어요",
+          "evidenceSeqs": [],
+          "edited": false,
+          "needsCheck": false
+        }
+      ],
+      "summary": [],
+      "opinions": [],
+      "todos": []
+    }
+  ],
+  "offTopic": null,
+  "leftover": null,
+  "todaySummary": null
+}

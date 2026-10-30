@@ -138,7 +138,8 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 | `workspaceId`·`docIds` 로 거른 검색에서 조각 0개 | `no_result` (LLM 을 부르지 않음) |
 | 조각에 `[1]..[k]` 를 붙여 LLM 에 넘김. LLM 이 `NO_ANSWER` | `no_result` |
 | LLM 시간 초과 / 그 밖의 오류 | `failed` + `llm_timeout` / `llm_failed` |
-| 답에 `[n]` 이 없거나 넘긴 번호 밖 | `failed` + `llm_failed` (근거를 지어냈을 수 있음) |
+| 답에 `[n]` 이 하나도 없음 | `no_result` (근거 없는 글은 보여 주지 않음. AI 가 `NO_ANSWER` 대신 "자료에 없습니다" 같은 문장을 쓰는 경우) |
+| 답에 넘긴 번호 밖의 `[n]` 이 있음 | `failed` + `llm_failed` (근거를 지어냈을 수 있음) |
 | 통과 | `answered`. `citations` 는 답에 나온 번호의 조각만 (`ref`, `docId`, `sourceType`, `title`, `text` 원문, `location`) |
 
 - answered·no_result·failed 모두 200 이고, 입력 오류는 400 `INVALID_INPUT`, DB·임베딩 모델·LLM 설정이 준비되지 않으면 503 `NOT_READY`

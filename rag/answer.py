@@ -2,7 +2,8 @@
 
   docIds 가 비었거나 찾은 조각이 없으면 LLM 을 부르지 않고 no_result
   LLM 이 NO_ANSWER 를 내면 no_result
-  답의 [n] 이 하나도 없거나 넘긴 번호(1..k) 밖이면 failed / llm_failed (근거를 지어냈을 수 있다)
+  답에 [n] 이 하나도 없으면 no_result. 근거 없는 글은 보여 주지 않는다 ("없다"는 말인지 지어낸 답인지 코드로 가릴 수 없다)
+  넘긴 번호(1..k) 밖의 [n] 이 있으면 failed / llm_failed (근거를 지어냈을 수 있다)
   citations 는 답에 나온 번호의 조각만 담고, ref 는 그 번호 그대로다
 
 지시문(시스템 프롬프트)은 rag/prompts/answer/v{n}.md 에 버전마다 따로 있다. RAG_ANSWER_PROMPT_VERSION 으로 고르고,
@@ -159,10 +160,13 @@ def answer(connection: Callable[[], ContextManager], embedder, llm, workspace_id
         log.info("답변 no_result(근거로 답할 수 없음) %s", tag)
         return _result("no_result")
     refs = parse_refs(text)
+    if not refs:
+        # 실제 측정 (2026-10-30, gpt-5.6-luna): 답할 내용이 없는 질문에 NO_ANSWER 대신 "자료에 없습니다" 문장을 씀
+        log.info("답변 no_result(근거 번호 없음) %s", tag)
+        return _result("no_result")
     bad = [n for n in refs if not 1 <= n <= len(hits)]
-    if not refs or bad:
-        reason = "근거 번호 없음" if not refs else f"범위 밖 번호 {len(bad)}개"
-        log.warning("답변 failed(%s) %s code=%s", reason, tag, LLM_FAILED)
+    if bad:
+        log.warning("답변 failed(범위 밖 번호 %d개) %s code=%s", len(bad), tag, LLM_FAILED)
         return _result("failed", error_code=LLM_FAILED)
 
     citations = [{"ref": n, "docId": hits[n - 1].doc_id, "sourceType": hits[n - 1].source_type,

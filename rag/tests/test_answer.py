@@ -113,10 +113,16 @@ def test_여러_번호는_번호순으로(two_hits):
     assert [c["ref"] for c in r["citations"]] == [1, 2]
 
 
-@pytest.mark.parametrize("reply", ["가 [3].", "가 [1]. 나 [0].", "번호 없는 답."])
-def test_번호가_없거나_범위_밖이면_llm_failed(two_hits, reply):
+@pytest.mark.parametrize("reply", ["가 [3].", "가 [1]. 나 [0]."])
+def test_범위_밖_번호면_llm_failed(two_hits, reply):
     r = run(ScriptLLM(reply))
     assert r == {"status": "failed", "answer": None, "citations": [], "errorCode": "llm_failed"}
+
+
+@pytest.mark.parametrize("reply", ["번호 없는 답.", "자료에 디자인팀 인원은 나와 있지 않습니다."])
+def test_번호가_하나도_없으면_no_result(two_hits, reply):
+    r = run(ScriptLLM(reply))
+    assert r == {"status": "no_result", "answer": None, "citations": [], "errorCode": None}
 
 
 def test_시간_초과는_llm_timeout(two_hits):

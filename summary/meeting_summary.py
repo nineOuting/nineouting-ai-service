@@ -15,6 +15,7 @@
 import argparse
 import datetime
 import json
+import logging
 import os
 import re
 import sys
@@ -267,8 +268,8 @@ def _invoke_llm(provider, model, task, invoke):
     return response
 
 
-def call_llm(provider, model, system, user, mock_file=None, task=None):
-    """task: 작업 종류. 토큰 사용량과 호출 시간 지표의 ai.task 속성으로 쓴다. live_summary(회의 중 요약),
+def _call_once(provider, model, system, user, mock_file=None, task=None):
+    """모델을 한 번 부른다 (폴백 없음). task: 작업 종류. 토큰 사용량과 호출 시간 지표의 ai.task 속성으로 쓴다. live_summary(회의 중 요약),
     draft(끝난 회의 요약), agenda_classification(안건 분류)"""
     if provider == "mock":
         path = mock_file or os.path.join(HERE, "mock_llm_output.json")
@@ -298,7 +299,7 @@ def call_llm(provider, model, system, user, mock_file=None, task=None):
             return "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
     elif provider == "openai":
         from openai import OpenAI
-        client = OpenAI()   # OPENAI_API_KEY 환경변수
+        client = OpenAI(**_openai_client_options())   # OPENAI_API_KEY 환경변수
 
         def invoke():
             return client.chat.completions.create(
@@ -312,6 +313,56 @@ def call_llm(provider, model, system, user, mock_file=None, task=None):
 
     response = _invoke_llm(provider, model, task, invoke)
     return response_text(response)
+
+
+def _openai_client_options():
+    """LLM_TIMEOUT_SEC(요청 제한 시간), LLM_MAX_RETRIES(SDK 자동 재시도 횟수)를 넣으면 쓴다. 안 넣으면 SDK 기본값.
+    폴백을 쓰면 기본 모델 실패를 빨리 알아야 하므로 둘 다 짧게 두는 것을 권한다."""
+    opts = {}
+    if os.environ.get("LLM_TIMEOUT_SEC"):
+        opts["timeout"] = float(os.environ["LLM_TIMEOUT_SEC"])
+    if os.environ.get("LLM_MAX_RETRIES"):
+        opts["max_retries"] = int(os.environ["LLM_MAX_RETRIES"])
+    return opts
+
+
+log = logging.getLogger("ai-service")
+FALLBACK_COOLDOWN_SEC = 60
+_primary_down_until = {}      # (provider, model) -> 이 시각(time.monotonic)까지는 기본 모델을 건너뛰고 폴백만 부른다
+
+
+def fallback_target(provider, model):
+    """서버 설정의 기본 모델(LLM_PROVIDER, LLM_MODEL)로 부를 때만 폴백 (provider, model) 을 돌려준다.
+    LLM_FALLBACK_MODEL 이 없거나, 평가 스크립트처럼 모델을 직접 지정한 호출이면 None (폴백하지 않는다).
+    LLM_FALLBACK_PROVIDER 를 넣지 않으면 기본 모델과 같은 공급자를 쓴다."""
+    fb_model = (os.environ.get("LLM_FALLBACK_MODEL") or "").strip()
+    if not fb_model or provider in ("mock", "echo"):
+        return None
+    if provider != os.environ.get("LLM_PROVIDER") or model != (os.environ.get("LLM_MODEL") or None):
+        return None
+    fb = ((os.environ.get("LLM_FALLBACK_PROVIDER") or "").strip() or provider, fb_model)
+    return None if fb == (provider, model) else fb
+
+
+def call_llm(provider, model, system, user, mock_file=None, task=None):
+    """모델을 부른다. LLM_FALLBACK_MODEL 이 설정돼 있고 기본 모델 호출이 예외로 실패하면 폴백 모델로 한 번 더 부른다.
+    기본 모델이 실패하면 LLM_FALLBACK_COOLDOWN_SEC(기본 60초) 동안은 기본 모델을 건너뛰고 폴백만 부른다
+    (장애 중에 호출마다 제한 시간을 기다리지 않도록). 이후 한 번 다시 기본 모델을 시험한다.
+    검증 실패(근거 번호 오류 등)는 호출 성공이므로 폴백하지 않는다. 로그에는 내용 없이 작업·모델·예외 이름만 남긴다."""
+    fb = fallback_target(provider, model)
+    if fb is None:
+        return _call_once(provider, model, system, user, mock_file, task)
+    if time.monotonic() < _primary_down_until.get((provider, model), 0):
+        return _call_once(fb[0], fb[1], system, user, mock_file, task)
+    try:
+        return _call_once(provider, model, system, user, mock_file, task)
+    except Exception as exc:
+        cooldown = float(os.environ.get("LLM_FALLBACK_COOLDOWN_SEC") or FALLBACK_COOLDOWN_SEC)
+        _primary_down_until[(provider, model)] = time.monotonic() + cooldown
+        log.warning("기본 모델 호출 실패, 폴백 모델로 전환: task=%s primary=%s/%s fallback=%s/%s error=%s cooldown_sec=%s",
+                    task, provider, model, fb[0], fb[1], type(exc).__name__, cooldown)
+        return _call_once(fb[0], fb[1], system, user, mock_file, task)
+
 
 def parse_llm_json(raw):
     s = raw.strip()
@@ -724,6 +775,75 @@ def run(args):
     return summary, snapshot, input_text
 
 
+def _selftest_fallback():
+    """기본 모델 실패 -> 폴백, 쿨다운 동안 기본 모델 건너뜀, 평가처럼 모델을 직접 지정하면 폴백 안 함"""
+    global _call_once
+    real, saved = _call_once, {k: os.environ.get(k) for k in
+                               ("LLM_PROVIDER", "LLM_MODEL", "LLM_FALLBACK_MODEL", "LLM_FALLBACK_PROVIDER", "LLM_FALLBACK_COOLDOWN_SEC")}
+    calls = []
+
+    def fake(provider, model, system, user, mock_file=None, task=None):
+        calls.append((provider, model))
+        if model in ("primary", "gpt-other") and fake.primary_down:
+            raise ConnectionError("down")
+        return f"ok:{model}"
+    fake.primary_down = True
+    _call_once = fake
+    try:
+        for k in saved:
+            os.environ.pop(k, None)
+        os.environ.update({"LLM_PROVIDER": "openai", "LLM_MODEL": "primary"})
+        # 폴백을 안 정했으면 예외 그대로
+        try:
+            call_llm("openai", "primary", "s", "u")
+            raise SystemExit("폴백이 없는데 성공")
+        except ConnectionError:
+            pass
+        os.environ["LLM_FALLBACK_MODEL"] = "fallback"
+        calls.clear(); _primary_down_until.clear()
+        assert call_llm("openai", "primary", "s", "u", task="t") == "ok:fallback"
+        assert calls == [("openai", "primary"), ("openai", "fallback")], calls
+        calls.clear()
+        assert call_llm("openai", "primary", "s", "u") == "ok:fallback"        # 쿨다운 중: 기본 모델을 건너뜀
+        assert calls == [("openai", "fallback")], calls
+        calls.clear(); fake.primary_down = False; _primary_down_until.clear()  # 쿨다운이 끝남 -> 기본 모델을 다시 시험
+        assert call_llm("openai", "primary", "s", "u") == "ok:primary" and calls == [("openai", "primary")], calls
+        # 평가 스크립트처럼 설정과 다른 모델을 직접 지정하면 폴백하지 않는다
+        fake.primary_down = True; calls.clear()
+        try:
+            call_llm("openai", "gpt-other", "s", "u")
+            raise SystemExit("직접 지정한 모델인데 폴백함")
+        except ConnectionError:
+            assert calls == [("openai", "gpt-other")], calls
+        _primary_down_until.clear()
+        fake.primary_down = False
+        # 폴백도 실패하면 예외가 나간다 (연속 실패 3번 규칙이 받는다)
+        def both_down(provider, model, *a, **k):
+            raise TimeoutError(model)
+        _call_once = both_down
+        try:
+            call_llm("openai", "primary", "s", "u")
+            raise SystemExit("둘 다 실패인데 성공")
+        except TimeoutError as e:
+            assert str(e) == "fallback"
+        # 같은 모델이면 폴백이 아니다 / echo, mock 은 대상 아님
+        assert fallback_target("openai", "primary") == ("openai", "fallback")
+        os.environ["LLM_FALLBACK_MODEL"] = "primary"
+        assert fallback_target("openai", "primary") is None
+        os.environ["LLM_FALLBACK_MODEL"] = "fallback"
+        assert fallback_target("mock", "primary") is None
+        os.environ["LLM_FALLBACK_PROVIDER"] = "gemini"
+        assert fallback_target("openai", "primary") == ("gemini", "fallback")
+    finally:
+        _call_once = real
+        _primary_down_until.clear()
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def selftest():
     # 1) 전송 규격: rev가 큰 것만 반영, deleted는 제거, 늦게 온 recovered는 제자리에 정렬
     st = TranscriptStore("t")
@@ -786,7 +906,8 @@ def selftest():
     finally:
         USAGE_HOOK = None
     assert got == [("openai", "m", "live_summary", 9, 4)], got
-    print("자체 시험 통과 (전송 규격 처리, 한글 숫자 변환, 검증기, 토큰 사용량)")
+    _selftest_fallback()
+    print("자체 시험 통과 (전송 규격 처리, 한글 숫자 변환, 검증기, 토큰 사용량, 폴백 모델)")
 
 
 def load_dotenv(path):

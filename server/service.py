@@ -71,13 +71,16 @@ class NotReady(Exception):
 
 def cfg_from_env(env=None):
     """환경변수 -> 요약기 설정.
-    LLM_PROVIDER (기본 echo = 모델을 부르지 않는 테스트용), LLM_MODEL,
+    LLM_PROVIDER (기본 echo = 모델을 부르지 않는 테스트용), LLM_MODEL, LLM_FALLBACK_MODEL (선택, 기본 모델 호출이 실패하면 대신 부름),
     WINDOW_SEC, REFRESH_SEC, MAX_CALLS_PER_MEETING
     """
     env = os.environ if env is None else env
     provider = env.get("LLM_PROVIDER", "echo")
     if provider not in SUPPORTED_PROVIDERS:
         raise ConfigError(f"지원하지 않는 LLM_PROVIDER: {provider} (가능: {', '.join(SUPPORTED_PROVIDERS)})")
+    fb_provider = env.get("LLM_FALLBACK_PROVIDER")      # 폴백 모델은 summary/meeting_summary.py 의 call_llm 이 환경변수로 직접 읽는다
+    if fb_provider and (fb_provider not in SUPPORTED_PROVIDERS or fb_provider == "echo"):
+        raise ConfigError(f"지원하지 않는 LLM_FALLBACK_PROVIDER: {fb_provider} (가능: {', '.join(p for p in SUPPORTED_PROVIDERS if p != 'echo')})")
     kw = {"provider": provider, "model": env.get("LLM_MODEL") or None}
     for name, key in (("window_sec", "WINDOW_SEC"), ("refresh_sec", "REFRESH_SEC"), ("max_calls", "MAX_CALLS_PER_MEETING")):
         if env.get(key):

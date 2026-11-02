@@ -51,7 +51,7 @@ def test_config():
     assert cfg_from_env({}).provider == "echo"
     c = cfg_from_env({"LLM_PROVIDER": "gemini", "LLM_MODEL": "m", "WINDOW_SEC": "90"})
     assert (c.provider, c.model, c.window_sec) == ("gemini", "m", 90)
-    for bad in ({"LLM_PROVIDER": "nope"}, {"WINDOW_SEC": "abc"}):
+    for bad in ({"LLM_PROVIDER": "nope"}, {"WINDOW_SEC": "abc"}, {"LLM_FALLBACK_PROVIDER": "nope"}, {"LLM_FALLBACK_PROVIDER": "echo"}):
         try:
             cfg_from_env(bad)
             raise SystemExit(f"잘못된 설정을 못 잡음: {bad}")

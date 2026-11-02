@@ -1,0 +1,168 @@
+{
+  "requestId": "8a2f4c61-7e3d-4b9a-a0c5-1d6e8f2b3c47",
+  "minutesId": 52,
+  "meetingId": 62,
+  "title": "서비스 월간 회의 (합성 시험 데이터)",
+  "meetingStartAt": "2026-11-04T14:00:00",
+  "attendees": [{"userId": 7, "name": "김철수"}, {"userId": 8, "name": "이영희"}, {"userId": 9, "name": "박민수"}, {"userId": 10, "name": "최지은"}],
+  "template": {
+    "header": null,
+    "footer": null,
+    "fields": [
+      {"title": "회의 내용", "description": "", "type": "text", "aiFill": true},
+      {"title": "결정 사항", "description": "", "type": "text", "aiFill": true},
+      {"title": "리스크", "description": "우려와 확인할 점", "type": "text", "aiFill": true},
+      {"title": "할 일", "description": "", "type": "text", "aiFill": true}
+    ]
+  },
+  "agendas": [
+    {"agendaId": 401, "title": "출시 마케팅", "decisionPoints": [{"decisionPointId": 4001, "position": 1, "text": "광고 시작 시점"}]},
+    {"agendaId": 402, "title": "결제 오류", "decisionPoints": [
+      {"decisionPointId": 4002, "position": 1, "text": "재시도 기능 적용"},
+      {"decisionPointId": 4003, "position": 2, "text": "오류 원인 판단"}
+    ]},
+    {"agendaId": 403, "title": "고객 지원", "decisionPoints": [{"decisionPointId": 4004, "position": 1, "text": "답변 템플릿 도입"}]},
+    {"agendaId": 404, "title": "디자인 개편", "decisionPoints": [{"decisionPointId": 4005, "position": 1, "text": "메인 화면 시안"}]},
+    {"agendaId": 405, "title": "인프라 비용", "decisionPoints": [{"decisionPointId": 4006, "position": 1, "text": "예약 인스턴스 전환"}]},
+    {"agendaId": 406, "title": "보안 점검", "decisionPoints": [{"decisionPointId": 4007, "position": 1, "text": "외부 점검 업체"}]},
+    {"agendaId": 407, "title": "팀 행사", "decisionPoints": [{"decisionPointId": 4008, "position": 1, "text": "송년회 날짜"}]},
+    {"agendaId": 408, "title": "위키 정리", "decisionPoints": [{"decisionPointId": 4009, "position": 1, "text": "위키 구조 개편"}]}
+  ],
+  "summary": {
+    "meetingId": 62,
+    "agendas": [
+      {
+        "agendaId": 401, "status": "DECIDED",
+        "statusReason": {"text": "결정할 사항 1개가 모두 결정됨", "evidenceSeqs": [14]},
+        "decisionPoints": [
+          {"decisionPointId": 4001, "status": "DECIDED", "decisionText": "SNS 광고를 11월 첫 주에 시작하기로 정함", "evidenceSeqs": [14], "edited": false, "needsCheck": false}
+        ],
+        "summary": [
+          {"id": "b1-s1", "text": "광고 대상은 20~30대 직장인으로 좁힘", "evidenceSeqs": [10], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [
+          {"id": "b1-o1", "text": "지난 캠페인 클릭률이 SNS에서 두 배 높았다는 근거", "kind": "EVIDENCE", "evidenceSeqs": [11], "edited": false, "needsCheck": false},
+          {"id": "b1-o2", "text": "광고 예산이 이번 달 한도를 넘을 수 있다는 우려", "kind": "CONCERN", "evidenceSeqs": [12], "edited": false, "needsCheck": false}
+        ],
+        "todos": [
+          {"id": "b1-t1", "task": "광고 문구 세 가지 준비", "assigneeName": "이영희", "assigneeStatus": "MATCHED", "assigneeUserId": 8, "dueText": "수요일까지", "evidenceSeqs": [15], "edited": false, "needsCheck": false, "unclear": false}
+        ]
+      },
+      {
+        "agendaId": 402, "status": "UNDECIDED",
+        "statusReason": {"text": "결정할 사항 2개 중 1개가 결정됨 (미결 1개)", "evidenceSeqs": [24, 27]},
+        "decisionPoints": [
+          {"decisionPointId": 4002, "status": "DECIDED", "decisionText": "다음 배포에 결제 재시도 기능을 넣기로 정함", "evidenceSeqs": [24], "edited": false, "needsCheck": false},
+          {"decisionPointId": 4003, "status": "UNDECIDED", "decisionText": "원인이 결제사 쪽인지 확인되지 않음", "evidenceSeqs": [27], "edited": false, "needsCheck": false}
+        ],
+        "summary": [
+          {"id": "b2-s1", "text": "지난주 결제 실패가 37건 있었음", "evidenceSeqs": [21], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [
+          {"id": "b2-o1", "text": "결제사에 장애 보고를 요청했는지 묻는 질문", "kind": "QUESTION", "evidenceSeqs": [25], "edited": false, "needsCheck": false},
+          {"id": "b2-o2", "text": "재시도가 중복 결제를 만들 수 있다는 우려", "kind": "CONCERN", "evidenceSeqs": [26], "edited": false, "needsCheck": false}
+        ],
+        "todos": [
+          {"id": "b2-t1", "task": "결제사에 장애 내역 요청", "assigneeName": "박민수", "assigneeStatus": "MATCHED", "assigneeUserId": 9, "dueText": "내일까지", "evidenceSeqs": [28], "edited": false, "needsCheck": false, "unclear": false}
+        ]
+      },
+      {
+        "agendaId": 403, "status": "DECISION_CHECK",
+        "statusReason": {"text": "결정할 사항 1개 중 0개가 결정됨 (결정 확인 필요 1개)", "evidenceSeqs": [36]},
+        "decisionPoints": [
+          {"decisionPointId": 4004, "status": "DECISION_CHECK", "decisionText": "다음 달부터 쓰기로 한 것 같음", "evidenceSeqs": [36], "edited": false, "needsCheck": false}
+        ],
+        "summary": [
+          {"id": "b3-s1", "text": "문의의 절반이 비밀번호 재설정 관련", "evidenceSeqs": [32], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [
+          {"id": "b3-o1", "text": "자주 묻는 질문 페이지를 먼저 고치자는 의견", "kind": "OPINION", "evidenceSeqs": [33], "edited": false, "needsCheck": false}
+        ],
+        "todos": [
+          {"id": "b3-t1", "task": "자주 묻는 질문 초안 작성", "assigneeName": "최지은", "assigneeStatus": "MATCHED", "assigneeUserId": 10, "dueText": "다음 주까지", "evidenceSeqs": [37], "edited": false, "needsCheck": false, "unclear": false},
+          {"id": "b3-t2", "task": "문의 유형 통계 정리", "assigneeName": null, "assigneeStatus": "UNASSIGNED", "assigneeUserId": null, "dueText": null, "evidenceSeqs": [38], "edited": false, "needsCheck": false, "unclear": true}
+        ]
+      },
+      {
+        "agendaId": 404, "status": "DECIDED",
+        "statusReason": {"text": "결정할 사항 1개가 모두 결정됨", "evidenceSeqs": [44]},
+        "decisionPoints": [
+          {"decisionPointId": 4005, "status": "DECIDED", "decisionText": "메인 화면은 B안으로 정함", "evidenceSeqs": [44], "edited": false, "needsCheck": false}
+        ],
+        "summary": [
+          {"id": "b4-s1", "text": "B안이 버튼 위치가 더 눈에 띈다는 평가", "evidenceSeqs": [42], "edited": false, "needsCheck": false},
+          {"id": "b4-s2", "text": "아이콘 세트 교체는 비용을 확인한 뒤 다시 논의하기로 함", "evidenceSeqs": [47], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [
+          {"id": "b4-o1", "text": "B안 색 대비가 접근성 기준에 못 미칠 수 있다는 우려", "kind": "CONCERN", "evidenceSeqs": [45], "edited": false, "needsCheck": false}
+        ],
+        "todos": [
+          {"id": "b4-t1", "task": "B안 색 대비 점검", "assigneeName": "최지은", "assigneeStatus": "MATCHED", "assigneeUserId": 10, "dueText": "금요일까지", "evidenceSeqs": [46], "edited": false, "needsCheck": false, "unclear": false},
+          {"id": "b4-t2", "task": "아이콘 세트 견적 받기", "assigneeName": null, "assigneeStatus": "UNASSIGNED", "assigneeUserId": null, "dueText": null, "evidenceSeqs": [48], "edited": false, "needsCheck": false, "unclear": false}
+        ]
+      },
+      {
+        "agendaId": 405, "status": "UNDECIDED",
+        "statusReason": {"text": "결정할 사항 1개 중 0개가 결정됨 (미결 1개)", "evidenceSeqs": [55]},
+        "decisionPoints": [
+          {"decisionPointId": 4006, "status": "UNDECIDED", "decisionText": "1년 약정이 부담이라 보류함", "evidenceSeqs": [55], "edited": false, "needsCheck": false}
+        ],
+        "summary": [
+          {"id": "b5-s1", "text": "이번 달 서버 비용이 지난달보다 18% 늘었음", "evidenceSeqs": [51], "edited": false, "needsCheck": false},
+          {"id": "b5-s2", "text": "예약 인스턴스 전환은 다음 분기 예산을 보고 정하기로 보류함", "evidenceSeqs": [55, 56], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [
+          {"id": "b5-o1", "text": "야간 사용량이 낮아 자동 축소로 비용을 줄일 수 있다는 근거", "kind": "EVIDENCE", "evidenceSeqs": [53], "edited": false, "needsCheck": false}
+        ],
+        "todos": [
+          {"id": "b5-t1", "task": "자동 축소 설정 시험", "assigneeName": "김철수", "assigneeStatus": "MATCHED", "assigneeUserId": 7, "dueText": "다음 회의 전까지", "evidenceSeqs": [57], "edited": false, "needsCheck": false, "unclear": false}
+        ]
+      },
+      {
+        "agendaId": 406, "status": "DECIDED",
+        "statusReason": {"text": "결정할 사항 1개가 모두 결정됨", "evidenceSeqs": [62]},
+        "decisionPoints": [
+          {"decisionPointId": 4007, "status": "DECIDED", "decisionText": "외부 점검 업체는 A사로 정함", "evidenceSeqs": [62], "edited": false, "needsCheck": false}
+        ],
+        "summary": [],
+        "opinions": [
+          {"id": "b6-o1", "text": "점검 기간에 배포를 멈춰야 할 수 있다는 우려", "kind": "CONCERN", "evidenceSeqs": [63], "edited": false, "needsCheck": false},
+          {"id": "b6-o2", "text": "점검 결과를 고객사에 공유해야 하는지 묻는 질문", "kind": "QUESTION", "evidenceSeqs": [64], "edited": false, "needsCheck": false}
+        ],
+        "todos": [
+          {"id": "b6-t1", "task": "A사와 점검 일정 협의", "assigneeName": "박민수", "assigneeStatus": "MATCHED", "assigneeUserId": 9, "dueText": "이번 주", "evidenceSeqs": [65], "edited": false, "needsCheck": false, "unclear": false}
+        ]
+      },
+      {
+        "agendaId": 407, "status": "DECIDED",
+        "statusReason": {"text": "결정할 사항 1개가 모두 결정됨", "evidenceSeqs": [71]},
+        "decisionPoints": [
+          {"decisionPointId": 4008, "status": "DECIDED", "decisionText": "송년회는 12월 19일(금)로 정함", "evidenceSeqs": [71], "edited": false, "needsCheck": false}
+        ],
+        "summary": [
+          {"id": "b7-s1", "text": "장소는 팀원 투표로 고르기로 함", "evidenceSeqs": [72], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [
+          {"id": "b7-o1", "text": "평일 저녁보다 금요일 점심이 낫다는 의견", "kind": "OPINION", "evidenceSeqs": [70], "edited": false, "needsCheck": false}
+        ],
+        "todos": [
+          {"id": "b7-t1", "task": "장소 투표 만들기", "assigneeName": "이영희", "assigneeStatus": "MATCHED", "assigneeUserId": 8, "dueText": "다음 주 월요일까지", "evidenceSeqs": [73], "edited": false, "needsCheck": false, "unclear": false}
+        ]
+      },
+      {
+        "agendaId": 408, "status": "NOT_STARTED",
+        "statusReason": null,
+        "decisionPoints": [
+          {"decisionPointId": 4009, "status": "NOT_STARTED", "decisionText": "아직 논의되지 않았어요", "evidenceSeqs": [], "edited": false, "needsCheck": false}
+        ],
+        "summary": [
+          {"id": "b8-s1", "text": "시간이 부족해 다음 회의에서 다루기로 함", "evidenceSeqs": [80], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [],
+        "todos": []
+      }
+    ]
+  },
+  "previousLines": [],
+  "callbackUrl": "http://minutes-service:8084/internal/minutes/52/draft-result"
+}

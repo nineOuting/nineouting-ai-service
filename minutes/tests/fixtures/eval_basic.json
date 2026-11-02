@@ -1,0 +1,53 @@
+{
+ "about": "기본 합성 회의(안건 4개, 재료 10개). SCRUM-130 모델 비교(2026-10-30)에서 쓴 정답표. 예산 요약 \"정하기로 함\"은 미결 칸 설명과도 맞아 논의·미결 둘 다 정답, 직접 쓴 줄은 할 일·고객 요청 둘 다 정답",
+ "tasks": [
+  {
+   "name": "배치",
+   "request": "draft_request.json",
+   "expect": [
+    {"source": [101, "decision", 7], "in": ["결정 사항"]},
+    {"source": [101, "summary", "k3f9a1-1"], "in": ["안건별 논의"]},
+    {"source": [101, "opinion", "k3f9a1-7"], "in": ["안건별 논의"]},
+    {"source": [101, "todo", "k3f9a1-10"], "in": ["할 일"]},
+    {"source": [102, "undecided", 9], "in": ["미결 안건"]},
+    {"source": [102, "summary", "k3f9a1-3"], "in": ["안건별 논의", "미결 안건"], "serious": ["결정 사항"]},
+    {"source": [102, "todo", "u-1"], "in": ["할 일"]},
+    {"source": [103, "decisionCheck", 12], "in": ["미결 안건"], "serious": ["결정 사항"]},
+    {"source": [103, "opinion", "k3f9a1-20"], "in": ["안건별 논의"]},
+    {"source": [103, "todo", "k3f9a1-21"], "in": ["할 일"]}
+   ]
+  },
+  {
+   "name": "다시배치",
+   "request": "relayout_request.json",
+   "expect": [
+    {"source": [101, "decision", 7], "in": ["결정 사항"]},
+    {"source": [101, "todo", "k3f9a1-10"], "in": ["할 일"]},
+    {"source": [103, "todo", "k3f9a1-21"], "in": ["할 일"]},
+    {"text": "고객사 로고는", "in": ["할 일", "고객 요청"]},
+    {"source": [101, "summary", "k3f9a1-1"], "in": ["(넣지 않음)"]},
+    {"source": [101, "opinion", "k3f9a1-7"], "in": ["(넣지 않음)"]},
+    {"source": [102, "summary", "k3f9a1-3"], "in": ["(넣지 않음)"], "serious": ["결정 사항"]},
+    {"source": [102, "undecided", 9], "in": ["(넣지 않음)"], "serious": ["결정 사항"]},
+    {"source": [103, "decisionCheck", 12], "in": ["(넣지 않음)"], "serious": ["결정 사항"]}
+   ]
+  },
+  {
+   "name": "표",
+   "request": "table_request.json",
+   "expect": [
+    {"source": [101, "decision", 7], "in": ["결정 사항"]},
+    {"source": [101, "summary", "k3f9a1-1"], "in": ["안건별 논의"]},
+    {"source": [101, "opinion", "k3f9a1-7"], "in": ["안건별 논의"]},
+    {"source": [101, "todo", "k3f9a1-10"], "in": ["할 일"]},
+    {"source": [102, "undecided", 9], "in": ["미결 안건"]},
+    {"source": [102, "summary", "k3f9a1-3"], "in": ["안건별 논의", "미결 안건"], "serious": ["결정 사항"]},
+    {"source": [102, "todo", "u-1"], "in": ["할 일"]},
+    {"source": [103, "decisionCheck", 12], "in": ["미결 안건"], "serious": ["결정 사항"]},
+    {"source": [103, "opinion", "k3f9a1-20"], "in": ["안건별 논의"]},
+    {"source": [103, "todo", "k3f9a1-21"], "in": ["할 일"]}
+   ],
+   "tables": [{"field": "할 일", "columns": 4, "rows": 3}]
+  }
+ ]
+}

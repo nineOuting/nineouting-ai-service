@@ -86,6 +86,20 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 - 실제 AI 를 쓰면 요약 내용이 공급자(Google)로 전송된다
 - 실제 회의 데이터는 레포 밖에 두고 `--file` 로 경로만 넘긴다
 
+## 지시문 평가
+
+합성 요청을 여러 번 돌려 재료가 정답 칸에 들어간 횟수를 세고, 지시문 버전끼리 비교한다 (`eval_draft.py`).
+사례 파일(요청 + 정답표)은 `minutes/tests/fixtures/eval_*.json` 에 둔다. 형식은 `eval_draft.py` 머리에 있다.
+
+```bash
+.venv/bin/python -m minutes.eval_draft minutes/tests/fixtures/eval_basic.json --dry-run    # AI 없이 정답표와 재료가 맞물리는지
+.venv/bin/python -m minutes.eval_draft minutes/tests/fixtures/eval_basic.json --runs 20    # 실제 AI. 호출마다 요금이 나간다
+.venv/bin/python -m minutes.eval_draft 사례.json --prompt v8 v9 --relayout-prompt v2 v3   # 버전을 번갈아 비교
+```
+
+- AI 설정은 손 시험 도구와 같다. 결과는 `data/eval/minutes/{사례}-{시각}/` 에 남는다 (git 이 무시함)
+- 토큰은 공급자가 알려 준 입력·출력 수 그대로다. 캐시 할인은 반영하지 않으므로 비용으로 바꾸면 상한값이다
+
 ## 시험
 
 ```bash

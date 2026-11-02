@@ -1,0 +1,47 @@
+{
+ "about": "긴 회의 (합성, SCRUM-131 샘플 B). 안건 8개, 재료 36개. 양식에 회의 전체를 적는 칸(회의 내용)과 설명으로 판단하는 칸(리스크: 우려와 확인할 점)이 있고 미결 칸은 없다. 미결·결정 확인 필요는 회의 내용(규칙 4·6), 확인할 점으로 읽히므로 리스크도 정답. 질문은 리스크·회의 내용 둘 다 정답",
+ "tasks": [
+  {
+   "name": "긴회의",
+   "request": "eval_long_request.json",
+   "expect": [
+    {"source": [401, "decision", 4001], "in": ["결정 사항"]},
+    {"source": [401, "summary", "b1-s1"], "in": ["회의 내용"]},
+    {"source": [401, "opinion", "b1-o1"], "in": ["회의 내용"]},
+    {"source": [401, "opinion", "b1-o2"], "in": ["리스크"]},
+    {"source": [401, "todo", "b1-t1"], "in": ["할 일"]},
+    {"source": [402, "decision", 4002], "in": ["결정 사항"]},
+    {"source": [402, "undecided", 4003], "in": ["회의 내용", "리스크"], "serious": ["결정 사항"]},
+    {"source": [402, "summary", "b2-s1"], "in": ["회의 내용"]},
+    {"source": [402, "opinion", "b2-o1"], "in": ["리스크", "회의 내용"]},
+    {"source": [402, "opinion", "b2-o2"], "in": ["리스크"]},
+    {"source": [402, "todo", "b2-t1"], "in": ["할 일"]},
+    {"source": [403, "decisionCheck", 4004], "in": ["회의 내용", "리스크"], "serious": ["결정 사항"]},
+    {"source": [403, "summary", "b3-s1"], "in": ["회의 내용"]},
+    {"source": [403, "opinion", "b3-o1"], "in": ["회의 내용"]},
+    {"source": [403, "todo", "b3-t1"], "in": ["할 일"]},
+    {"source": [403, "todo", "b3-t2"], "in": ["할 일"]},
+    {"source": [404, "decision", 4005], "in": ["결정 사항"]},
+    {"source": [404, "summary", "b4-s1"], "in": ["회의 내용"]},
+    {"source": [404, "summary", "b4-s2"], "in": ["회의 내용"], "serious": ["결정 사항"]},
+    {"source": [404, "opinion", "b4-o1"], "in": ["리스크"]},
+    {"source": [404, "todo", "b4-t1"], "in": ["할 일"]},
+    {"source": [404, "todo", "b4-t2"], "in": ["할 일"]},
+    {"source": [405, "undecided", 4006], "in": ["회의 내용", "리스크"], "serious": ["결정 사항"]},
+    {"source": [405, "summary", "b5-s1"], "in": ["회의 내용"]},
+    {"source": [405, "summary", "b5-s2"], "in": ["회의 내용"], "serious": ["결정 사항"]},
+    {"source": [405, "opinion", "b5-o1"], "in": ["회의 내용"]},
+    {"source": [405, "todo", "b5-t1"], "in": ["할 일"]},
+    {"source": [406, "decision", 4007], "in": ["결정 사항"]},
+    {"source": [406, "opinion", "b6-o1"], "in": ["리스크"]},
+    {"source": [406, "opinion", "b6-o2"], "in": ["리스크", "회의 내용"]},
+    {"source": [406, "todo", "b6-t1"], "in": ["할 일"]},
+    {"source": [407, "decision", 4008], "in": ["결정 사항"]},
+    {"source": [407, "summary", "b7-s1"], "in": ["회의 내용"]},
+    {"source": [407, "opinion", "b7-o1"], "in": ["회의 내용"]},
+    {"source": [407, "todo", "b7-t1"], "in": ["할 일"]},
+    {"source": [408, "summary", "b8-s1"], "in": ["회의 내용"], "serious": ["결정 사항"]}
+   ]
+  }
+ ]
+}

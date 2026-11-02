@@ -1,0 +1,91 @@
+{
+  "requestId": "3d5e7a10-2c4b-4f6e-9a81-5b0c7d2e4f60",
+  "minutesId": 51,
+  "meetingId": 61,
+  "title": "제품 주간 회의 (합성 시험 데이터)",
+  "meetingStartAt": "2026-11-03T10:00:00",
+  "attendees": [{"userId": 7, "name": "김철수"}, {"userId": 8, "name": "이영희"}, {"userId": 9, "name": "박민수"}],
+  "template": {
+    "header": null,
+    "footer": null,
+    "fields": [
+      {"title": "안건별 논의", "description": "", "type": "text", "aiFill": true},
+      {"title": "결정 사항", "description": "", "type": "text", "aiFill": true},
+      {"title": "미결 안건", "description": "", "type": "text", "aiFill": true},
+      {"title": "할 일", "description": "", "type": "text", "aiFill": true}
+    ]
+  },
+  "agendas": [
+    {"agendaId": 201, "title": "출시 일정", "decisionPoints": [
+      {"decisionPointId": 2001, "position": 1, "text": "정식 출시일"},
+      {"decisionPointId": 2002, "position": 2, "text": "베타 대상"},
+      {"decisionPointId": 2003, "position": 3, "text": "월 요금"}
+    ]},
+    {"agendaId": 202, "title": "채용", "decisionPoints": [
+      {"decisionPointId": 2004, "position": 1, "text": "면접관 구성"},
+      {"decisionPointId": 2005, "position": 2, "text": "채용 인원"}
+    ]},
+    {"agendaId": 203, "title": "사무실 이전", "decisionPoints": [
+      {"decisionPointId": 2006, "position": 1, "text": "이전 여부"}
+    ]}
+  ],
+  "summary": {
+    "meetingId": 61,
+    "agendas": [
+      {
+        "agendaId": 201,
+        "status": "UNDECIDED",
+        "statusReason": {"text": "결정할 사항 3개 중 1개가 결정됨 (미결 1개, 결정 확인 필요 1개)", "evidenceSeqs": [12, 20, 27]},
+        "decisionPoints": [
+          {"decisionPointId": 2001, "status": "DECIDED", "decisionText": "정식 출시를 11월 20일(목)로 정함", "evidenceSeqs": [12, 13], "edited": false, "needsCheck": false},
+          {"decisionPointId": 2002, "status": "UNDECIDED", "decisionText": "내부 사용자만 할지 외부 고객까지 할지 의견이 갈림", "evidenceSeqs": [20], "edited": false, "needsCheck": false},
+          {"decisionPointId": 2003, "status": "DECISION_CHECK", "decisionText": "월 9,900원으로 하자는 의견이 많았음", "evidenceSeqs": [27, 28], "edited": false, "needsCheck": false}
+        ],
+        "summary": [
+          {"id": "a1-s1", "text": "출시일은 마케팅 일정에 맞춰 11월 20일로 하기로 함", "evidenceSeqs": [11, 12], "edited": false, "needsCheck": false},
+          {"id": "a1-s2", "text": "월 요금은 경쟁사 가격을 조사한 뒤 다시 논의하기로 함", "evidenceSeqs": [29], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [
+          {"id": "a1-o1", "text": "베타 기간이 2주라 피드백을 모으기에 짧다는 우려", "kind": "CONCERN", "evidenceSeqs": [21], "edited": false, "needsCheck": false}
+        ],
+        "todos": [
+          {"id": "a1-t1", "task": "경쟁사 요금 조사", "assigneeName": "박민수", "assigneeStatus": "MATCHED", "assigneeUserId": 9, "dueText": "다음 주 월요일까지", "evidenceSeqs": [30], "edited": false, "needsCheck": false, "unclear": false}
+        ]
+      },
+      {
+        "agendaId": 202,
+        "status": "UNDECIDED",
+        "statusReason": {"text": "결정할 사항 2개 중 1개가 결정됨 (미결 1개)", "evidenceSeqs": [41, 47]},
+        "decisionPoints": [
+          {"decisionPointId": 2004, "status": "DECIDED", "decisionText": "팀장 2명과 실무자 1명으로 정함", "evidenceSeqs": [41], "edited": false, "needsCheck": false},
+          {"decisionPointId": 2005, "status": "UNDECIDED", "decisionText": "예산이 확정되지 않아 정하지 못함", "evidenceSeqs": [47], "edited": false, "needsCheck": false}
+        ],
+        "summary": [
+          {"id": "a2-s1", "text": "채용 인원은 예산이 나온 뒤 정하기로 하고 보류함", "evidenceSeqs": [46, 47], "edited": false, "needsCheck": false},
+          {"id": "a2-s2", "text": "면접은 2차까지 진행하기로 함", "evidenceSeqs": [43], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [],
+        "todos": [
+          {"id": "a2-t1", "task": "면접 질문 목록 작성", "assigneeName": "이영희", "assigneeStatus": "MATCHED", "assigneeUserId": 8, "dueText": "금요일까지", "evidenceSeqs": [44], "edited": false, "needsCheck": false, "unclear": false}
+        ]
+      },
+      {
+        "agendaId": 203,
+        "status": "UNDECIDED",
+        "statusReason": {"text": "결정할 사항 1개 중 0개가 결정됨 (미결 1개)", "evidenceSeqs": [58]},
+        "decisionPoints": [
+          {"decisionPointId": 2006, "status": "UNDECIDED", "decisionText": "후보지 비교 자료가 없어 결정하지 못함", "evidenceSeqs": [58], "edited": false, "needsCheck": false}
+        ],
+        "summary": [
+          {"id": "a3-s1", "text": "다음 회의에서 후보지 세 곳을 비교해 다시 논의하기로 함", "evidenceSeqs": [59], "edited": false, "needsCheck": false}
+        ],
+        "opinions": [
+          {"id": "a3-o1", "text": "이전 비용을 어느 부서 예산에서 낼지 묻는 질문", "kind": "QUESTION", "evidenceSeqs": [56], "edited": false, "needsCheck": false}
+        ],
+        "todos": []
+      }
+    ]
+  },
+  "previousLines": [],
+  "callbackUrl": "http://minutes-service:8084/internal/minutes/51/draft-result"
+}

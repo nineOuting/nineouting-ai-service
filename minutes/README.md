@@ -56,7 +56,7 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 | `MINUTES_LLM_PROVIDER`, `MINUTES_LLM_MODEL` | 초안 AI 공급자·모델. 운영 값은 `openai`, `gpt-5.6-luna`. 공급자가 있으면 둘을 한 묶음으로 쓰고, 없으면 RAG 답변 설정(`RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`)을 그대로 쓴다. 모델만 넣으면 설정 오류. 틀리면 서버는 뜨고 초안 주소만 503 (`llm_config.py`) | 없음 (RAG 설정, 그 기본값은 `fake`) |
 | `OPENAI_API_KEY` | OpenAI API 키. RAG 답변과 같이 쓴다. 이미지에 넣지 않고 실행할 때 비밀값으로 넣는다 | 없음 |
 | `MINUTES_LLM_TIMEOUT_S` | AI 응답 시간 제한(초) | 60 |
-| `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION`, `MINUTES_TABLE_PROMPT_VERSION` | 처음 초안·다시 배치·표 채우기 지시문 버전 (예: `v8`, `v2`, `v1`). v7·v1 은 결정 문장을 다듬던 때의 글이라 지금 코드와 맞지 않는다 (답의 글은 버린다) | 가장 큰 번호 |
+| `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION`, `MINUTES_TABLE_PROMPT_VERSION` | 처음 초안·다시 배치·표 채우기 지시문 버전 (예: `v9`, `v3`, `v1`). v7·v1 은 결정 문장을 다듬던 때의 글이라 지금 코드와 맞지 않는다 (답의 글은 버린다) | 가장 큰 번호 |
 | `MINUTES_WORKER_IN_PROCESS` | `0` 이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker` 로 따로) | `1` |
 | `MINUTES_DB_POOL_MAX`, `MINUTES_DB_POOL_TIMEOUT_S` | 접수 주소의 DB 연결 수, 연결을 기다리는 초 | 3, 5 |
 | `MINUTES_DB_STATEMENT_TIMEOUT_MS`, `MINUTES_DB_IDLE_TX_TIMEOUT_MS`, `MINUTES_DB_CONNECT_TIMEOUT_S` | DB 시간 제한 | 30000, 60000, 10 |
@@ -85,6 +85,20 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 
 - 실제 AI 를 쓰면 요약 내용이 공급자(Google)로 전송된다
 - 실제 회의 데이터는 레포 밖에 두고 `--file` 로 경로만 넘긴다
+
+## 지시문 평가
+
+합성 요청을 여러 번 돌려 재료가 정답 칸에 들어간 횟수를 세고, 지시문 버전끼리 비교한다 (`eval_draft.py`).
+사례 파일(요청 + 정답표)은 `minutes/tests/fixtures/eval_*.json` 에 둔다. 형식은 `eval_draft.py` 머리에 있다.
+
+```bash
+.venv/bin/python -m minutes.eval_draft minutes/tests/fixtures/eval_basic.json --dry-run    # AI 없이 정답표와 재료가 맞물리는지
+.venv/bin/python -m minutes.eval_draft minutes/tests/fixtures/eval_basic.json --runs 20    # 실제 AI. 호출마다 요금이 나간다
+.venv/bin/python -m minutes.eval_draft 사례.json --prompt v8 v9 --relayout-prompt v2 v3   # 버전을 번갈아 비교
+```
+
+- AI 설정은 손 시험 도구와 같다. 결과는 `data/eval/minutes/{사례}-{시각}/` 에 남는다 (git 이 무시함)
+- 토큰은 공급자가 알려 준 입력·출력 수 그대로다. 캐시 할인은 반영하지 않으므로 비용으로 바꾸면 상한값이다
 
 ## 시험
 

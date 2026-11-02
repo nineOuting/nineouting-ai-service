@@ -1,0 +1,53 @@
+{
+ "about": "섞인 결정 (합성, SCRUM-131 샘플 A). 안건 하나에 결정할 사항 여러 개(결정·미결·결정 확인 필요), 미루는 말투 여러 가지(다시 논의, 보류), 결정 말투의 요약. 처음 양식 뒤 논의·미결 칸이 없는 양식으로 다시 배치하고, 작성자가 직접 쓴 줄 2개를 더한다. 결정 말투 요약(하기로 함)은 결정 자체가 결정 종류로 따로 오므로 논의 칸이 정답",
+ "tasks": [
+  {
+   "name": "섞인결정",
+   "request": "eval_mixed_request.json",
+   "expect": [
+    {"source": [201, "decision", 2001], "in": ["결정 사항"]},
+    {"source": [201, "undecided", 2002], "in": ["미결 안건"], "serious": ["결정 사항"]},
+    {"source": [201, "decisionCheck", 2003], "in": ["미결 안건"], "serious": ["결정 사항"]},
+    {"source": [201, "summary", "a1-s1"], "in": ["안건별 논의"]},
+    {"source": [201, "summary", "a1-s2"], "in": ["안건별 논의", "미결 안건"], "serious": ["결정 사항"]},
+    {"source": [201, "opinion", "a1-o1"], "in": ["안건별 논의"]},
+    {"source": [201, "todo", "a1-t1"], "in": ["할 일"]},
+    {"source": [202, "decision", 2004], "in": ["결정 사항"]},
+    {"source": [202, "undecided", 2005], "in": ["미결 안건"], "serious": ["결정 사항"]},
+    {"source": [202, "summary", "a2-s1"], "in": ["안건별 논의", "미결 안건"], "serious": ["결정 사항"]},
+    {"source": [202, "summary", "a2-s2"], "in": ["안건별 논의"]},
+    {"source": [202, "todo", "a2-t1"], "in": ["할 일"]},
+    {"source": [203, "undecided", 2006], "in": ["미결 안건"], "serious": ["결정 사항"]},
+    {"source": [203, "summary", "a3-s1"], "in": ["안건별 논의", "미결 안건"], "serious": ["결정 사항"]},
+    {"source": [203, "opinion", "a3-o1"], "in": ["안건별 논의"]}
+   ],
+   "then": {
+    "name": "섞인결정-다시배치",
+    "relayoutTo": ["결정 사항", "할 일", "고객 요청"],
+    "addLines": [
+     {"title": "안건별 논의", "sentence": "다음 회의는 11월 10일(월) 오전 10시로 정함", "transcriptSeqs": [], "edited": false, "needsCheck": false, "sources": [], "draftEdited": true},
+     {"title": "할 일", "sentence": "고객사 세 곳에 베타 초대 메일 보내기", "transcriptSeqs": [], "edited": false, "needsCheck": false, "sources": [], "draftEdited": true}
+    ],
+    "expect": [
+     {"source": [201, "decision", 2001], "in": ["결정 사항"]},
+     {"source": [202, "decision", 2004], "in": ["결정 사항"]},
+     {"source": [201, "todo", "a1-t1"], "in": ["할 일"]},
+     {"source": [202, "todo", "a2-t1"], "in": ["할 일"]},
+     {"text": "다음 회의는 11월 10일", "in": ["결정 사항"]},
+     {"text": "고객사 세 곳에 베타 초대", "in": ["할 일", "고객 요청"]},
+     {"source": [201, "undecided", 2002], "in": ["(넣지 않음)"], "serious": ["결정 사항"]},
+     {"source": [201, "decisionCheck", 2003], "in": ["(넣지 않음)"], "serious": ["결정 사항"]},
+     {"source": [201, "summary", "a1-s1"], "in": ["(넣지 않음)"]},
+     {"source": [201, "summary", "a1-s2"], "in": ["(넣지 않음)"], "serious": ["결정 사항"]},
+     {"source": [201, "opinion", "a1-o1"], "in": ["(넣지 않음)"]},
+     {"source": [202, "undecided", 2005], "in": ["(넣지 않음)"], "serious": ["결정 사항"]},
+     {"source": [202, "summary", "a2-s1"], "in": ["(넣지 않음)"], "serious": ["결정 사항"]},
+     {"source": [202, "summary", "a2-s2"], "in": ["(넣지 않음)"]},
+     {"source": [203, "undecided", 2006], "in": ["(넣지 않음)"], "serious": ["결정 사항"]},
+     {"source": [203, "summary", "a3-s1"], "in": ["(넣지 않음)"], "serious": ["결정 사항"]},
+     {"source": [203, "opinion", "a3-o1"], "in": ["(넣지 않음)"]}
+    ]
+   }
+  }
+ ]
+}

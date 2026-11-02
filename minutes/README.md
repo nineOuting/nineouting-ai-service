@@ -56,7 +56,7 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 | `MINUTES_LLM_PROVIDER`, `MINUTES_LLM_MODEL` | 초안 AI 공급자·모델. 운영 값은 `openai`, `gpt-5.6-luna`. 공급자가 있으면 둘을 한 묶음으로 쓰고, 없으면 RAG 답변 설정(`RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`)을 그대로 쓴다. 모델만 넣으면 설정 오류. 틀리면 서버는 뜨고 초안 주소만 503 (`llm_config.py`) | 없음 (RAG 설정, 그 기본값은 `fake`) |
 | `OPENAI_API_KEY` | OpenAI API 키. RAG 답변과 같이 쓴다. 이미지에 넣지 않고 실행할 때 비밀값으로 넣는다 | 없음 |
 | `MINUTES_LLM_TIMEOUT_S` | AI 응답 시간 제한(초) | 60 |
-| `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION`, `MINUTES_TABLE_PROMPT_VERSION` | 처음 초안·다시 배치·표 채우기 지시문 버전 (예: `v8`, `v2`, `v1`). v7·v1 은 결정 문장을 다듬던 때의 글이라 지금 코드와 맞지 않는다 (답의 글은 버린다) | 가장 큰 번호 |
+| `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION`, `MINUTES_TABLE_PROMPT_VERSION` | 처음 초안·다시 배치·표 채우기 지시문 버전 (예: `v9`, `v3`, `v1`). v7·v1 은 결정 문장을 다듬던 때의 글이라 지금 코드와 맞지 않는다 (답의 글은 버린다) | 가장 큰 번호 |
 | `MINUTES_WORKER_IN_PROCESS` | `0` 이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker` 로 따로) | `1` |
 | `MINUTES_DB_POOL_MAX`, `MINUTES_DB_POOL_TIMEOUT_S` | 접수 주소의 DB 연결 수, 연결을 기다리는 초 | 3, 5 |
 | `MINUTES_DB_STATEMENT_TIMEOUT_MS`, `MINUTES_DB_IDLE_TX_TIMEOUT_MS`, `MINUTES_DB_CONNECT_TIMEOUT_S` | DB 시간 제한 | 30000, 60000, 10 |

@@ -152,4 +152,4 @@ def test_다시_배치는_다시_배치_지시문을_쓰고_처음_초안은_칸
     make_draft(relayout_body(body, lines), llm)
     make_draft(body, llm)
     assert llm.calls[0][0] == load_prompt(kind=RELAYOUT_KIND).text and llm.calls[1][0] == load_prompt().text
-    assert load_prompt(kind=RELAYOUT_KIND).version == "relayout-v2"
+    assert load_prompt(kind=RELAYOUT_KIND).version == "relayout-v3"

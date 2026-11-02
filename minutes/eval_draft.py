@@ -24,6 +24,7 @@ AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수,
   text    출처 없는 줄(작성자가 직접 쓴 줄)을 글 일부로 찾는다
   in      정답 칸 이름들. "(넣지 않음)" 은 어느 칸에도 넣지 않은 것
   serious 이 칸에 들어가면 큰 실수로 따로 센다 (예: 확인 안 된 결정이 결정 칸에)
+  tables  표 필드의 열 개수(columns)와 행 수(rows). null 이면 보지 않는다
   then    처음 초안의 줄로 양식을 바꿔 다시 배치한다 (try_draft --relayout-to 와 같은 흐름). 처음이 실패하면 건너뛴다.
           addLines 에 줄(previousLines 모양)을 주면 이전 줄 뒤에 붙인다 (작성자가 직접 쓴 줄)
 """
@@ -130,7 +131,7 @@ def _score_table(result, want):
     sec = next((s for s in result["sections"] if s["title"] == want["field"]), None) or {}
     columns = sec.get("columns") or []
     rows = sum("cells" in line for line in sec.get("evidence", []))
-    ok = rows == want.get("rows", rows) and (want.get("columns") is None or len(columns) == want["columns"])
+    ok = (want.get("rows") is None or rows == want["rows"]) and (want.get("columns") is None or len(columns) == want["columns"])
     return {"field": want["field"], "columns": columns, "rows": rows, "ok": ok}
 
 

@@ -198,6 +198,27 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 - 질문 파일 형식은 `rag/eval_search.py` 맨 위 설명. `gold` 가 빈 질문(답할 수 없음)은 검색 지표에서 뺀다
 - 회의록·질문·결과는 레포 밖이나 git 이 무시하는 `data/` 에 둔다. 실제 회의 데이터로 낸 결과는 올리지 않는다
 
+## 답변 지시문 평가
+
+질문마다 넘길 조각을 정해 두고 실제 AI 로 여러 번 답하게 해, 정답표(상태, 꼭 쓸 근거, 꼭 들어갈 말, 따르면 안 되는 지시)와 맞는 횟수를 세고 지시문 버전끼리 비교한다 (`eval_answer.py`). 검색은 하지 않으므로 지시문 차이만 본다.
+사례 파일은 `rag/tests/fixtures/answer_eval_*.json` 에 둔다. 형식은 `eval_answer.py` 맨 위 설명.
+
+```bash
+.venv/bin/python -m rag.eval_answer rag/tests/fixtures/answer_eval_two_meetings.json --dry-run      # AI 없이 조각·정답표 점검
+.venv/bin/python -m rag.eval_answer rag/tests/fixtures/answer_eval_two_meetings.json --runs 20      # 실제 AI. 호출마다 요금이 나간다
+.venv/bin/python -m rag.eval_answer 사례.json --runs 20 --prompt v3 v4                               # 버전을 번갈아 비교
+.venv/bin/python -m rag.eval_answer 사례.json --rescore data/eval/answer/{결과폴더}                  # 정답표를 고친 뒤 저장된 답을 다시 채점
+```
+
+| 사례 | 내용 |
+|---|---|
+| `answer_eval_basic.json` | 회의 하나, 6문항: 결정 날짜, 사람 이름만, 사용자가 만든 표 속 금액, 메모 속 장소, 자료에 없는 질문 2개 |
+| `answer_eval_two_meetings.json` | 회의 둘(10/20, 10/27), 5문항: 두 회의에 걸친 변경, 맡은 일이 여러 개인 사람, 일부만 답할 수 있는 질문, 지시문이 섞인 조각(답이 있는/없는 질문) |
+
+- AI 설정은 서버와 같다 (`RAG_LLM_*`, 환경변수가 없으면 `rag/.env`). 조각 글과 판정은 답변 API 와 같은 함수(`build_prompt`, `judge_reply`)를 쓴다
+- 결과는 `data/eval/answer/{사례}-{시각}/` 에 남는다 (git 이 무시함). 답 글이 들어가므로 합성 회의록만 쓴다
+- 꼭 들어갈 말은 낱말로 본다. 틀림으로 나온 답은 `runs.jsonl` 의 글을 직접 보고 판단한다 (같은 뜻을 다르게 쓴 경우가 있다)
+
 ## 이미지·배포
 
 공용 `Dockerfile` 이미지에 RAG 가 함께 들어간다. GitHub Actions(`.github/workflows/image.yml`)가 PR 에서는 빌드·크기 측정·모델 확인만 하고, `develop` 에 합쳐지면 `ghcr.io/nineouting/nineouting-ai-service:develop` 과 `:<커밋 SHA>` 로 올린다.

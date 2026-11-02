@@ -115,6 +115,21 @@ def parse_refs(text) -> list[int]:
     return seen
 
 
+def judge_reply(text, hit_count) -> tuple[str, list[int], str]:
+    """AI 답 글 → (상태, 근거 번호, 이유). 답변 API 와 평가 도구(eval_answer)가 같이 쓴다.
+    이유는 로그용: no_answer(NO_ANSWER), no_refs(번호 없음), bad_refs(넘긴 번호 밖), 답이 되면 빈 글."""
+    text = (text or "").strip()
+    if text == NO_ANSWER:
+        return "no_result", [], "no_answer"
+    refs = parse_refs(text)
+    if not refs:
+        # 실제 측정 (2026-10-30, gpt-5.6-luna): 답할 내용이 없는 질문에 NO_ANSWER 대신 "자료에 없습니다" 문장을 씀
+        return "no_result", [], "no_refs"
+    if any(not 1 <= n <= hit_count for n in refs):
+        return "failed", refs, "bad_refs"
+    return "answered", refs, ""
+
+
 def _ms(since):
     return round((time.monotonic() - since) * 1000)
 
@@ -156,16 +171,15 @@ def answer(connection: Callable[[], ContextManager], embedder, llm, workspace_id
     tag += f" llm_ms={_ms(t1)} tokens_in={reply.input_tokens} tokens_out={reply.output_tokens}"
 
     text = (reply.text or "").strip()
-    if text == NO_ANSWER:
+    status, refs, why = judge_reply(text, len(hits))
+    if why == "no_answer":
         log.info("답변 no_result(근거로 답할 수 없음) %s", tag)
         return _result("no_result")
-    refs = parse_refs(text)
-    if not refs:
-        # 실제 측정 (2026-10-30, gpt-5.6-luna): 답할 내용이 없는 질문에 NO_ANSWER 대신 "자료에 없습니다" 문장을 씀
+    if why == "no_refs":
         log.info("답변 no_result(근거 번호 없음) %s", tag)
         return _result("no_result")
-    bad = [n for n in refs if not 1 <= n <= len(hits)]
-    if bad:
+    if why == "bad_refs":
+        bad = [n for n in refs if not 1 <= n <= len(hits)]
         log.warning("답변 failed(범위 밖 번호 %d개) %s code=%s", len(bad), tag, LLM_FAILED)
         return _result("failed", error_code=LLM_FAILED)
 

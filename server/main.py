@@ -20,6 +20,7 @@ from .service import Registry, ConfigError, AdapterError, BatchOutOfOrder, NotRe
 from .publisher import Publisher
 from .metrics import Metrics, default_readers
 import meeting_summary                      # summary/ 는 service.py 가 경로에 넣어 둔다
+meeting_summary.FALLBACK_ENABLED = True      # 서버만 폴백 모델(LLM_FALLBACK_MODEL)을 쓴다. 평가 스크립트는 쓰지 않는다
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")

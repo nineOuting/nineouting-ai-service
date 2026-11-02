@@ -120,7 +120,7 @@ flowchart LR
 |---|---|---|
 | `LLM_PROVIDER` | `echo`, `gemini`, `anthropic`, `openai` | `echo` |
 | `LLM_MODEL` | 모델 이름 | 없음 |
-| `LLM_FALLBACK_MODEL` | 폴백 모델. 기본 모델 호출이 예외로 실패하면 이 모델로 한 번 더 부름. 검증 실패(근거 오류 등)는 폴백하지 않음. 평가 스크립트처럼 모델을 직접 지정한 호출에는 적용 안 됨 | 없음 (폴백 안 함) |
+| `LLM_FALLBACK_MODEL` | 폴백 모델. 기본 모델 호출이 예외로 실패하면 이 모델로 한 번 더 부름. 검증 실패(근거 오류 등)는 폴백하지 않음. 서버에서만 적용(평가 스크립트·CLI는 폴백 안 함) | 없음 (폴백 안 함) |
 | `LLM_FALLBACK_PROVIDER` | 폴백 모델의 공급자 (`gemini`, `anthropic`, `openai`) | 기본 모델과 같음 |
 | `LLM_FALLBACK_COOLDOWN_SEC` | 기본 모델이 실패한 뒤 이 시간 동안은 기본 모델을 건너뛰고 폴백만 부름. 끝나면 한 번 다시 시험 | 60 |
 | `LLM_TIMEOUT_SEC`, `LLM_MAX_RETRIES` | OpenAI 요청 제한 시간(초)과 SDK 자동 재시도 횟수. 안 넣으면 SDK 기본값(제한 시간 10분, 재시도 2번)이라 폴백까지 오래 걸림. 폴백을 쓰면 제한 시간 60, 재시도 1 정도를 권장 | SDK 기본값 |

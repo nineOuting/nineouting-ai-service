@@ -328,15 +328,16 @@ def _openai_client_options():
 
 log = logging.getLogger("ai-service")
 FALLBACK_COOLDOWN_SEC = 60
+FALLBACK_ENABLED = False      # 서버(server/main.py)만 True 로 켠다. 평가·CLI 스크립트는 .env 에 폴백 설정이 있어도 폴백하지 않는다
 _primary_down_until = {}      # (provider, model) -> 이 시각(time.monotonic)까지는 기본 모델을 건너뛰고 폴백만 부른다
 
 
 def fallback_target(provider, model):
     """서버 설정의 기본 모델(LLM_PROVIDER, LLM_MODEL)로 부를 때만 폴백 (provider, model) 을 돌려준다.
-    LLM_FALLBACK_MODEL 이 없거나, 평가 스크립트처럼 모델을 직접 지정한 호출이면 None (폴백하지 않는다).
+    서버가 켜지 않았거나(평가·CLI), LLM_FALLBACK_MODEL 이 없거나, 모델을 직접 지정한 호출이면 None (폴백하지 않는다).
     LLM_FALLBACK_PROVIDER 를 넣지 않으면 기본 모델과 같은 공급자를 쓴다."""
     fb_model = (os.environ.get("LLM_FALLBACK_MODEL") or "").strip()
-    if not fb_model or provider in ("mock", "echo"):
+    if not FALLBACK_ENABLED or not fb_model or provider in ("mock", "echo"):
         return None
     if provider != os.environ.get("LLM_PROVIDER") or model != (os.environ.get("LLM_MODEL") or None):
         return None
@@ -777,7 +778,8 @@ def run(args):
 
 def _selftest_fallback():
     """기본 모델 실패 -> 폴백, 쿨다운 동안 기본 모델 건너뜀, 평가처럼 모델을 직접 지정하면 폴백 안 함"""
-    global _call_once
+    global _call_once, FALLBACK_ENABLED
+    real_enabled = FALLBACK_ENABLED
     real, saved = _call_once, {k: os.environ.get(k) for k in
                                ("LLM_PROVIDER", "LLM_MODEL", "LLM_FALLBACK_MODEL", "LLM_FALLBACK_PROVIDER", "LLM_FALLBACK_COOLDOWN_SEC")}
     calls = []
@@ -800,6 +802,12 @@ def _selftest_fallback():
         except ConnectionError:
             pass
         os.environ["LLM_FALLBACK_MODEL"] = "fallback"
+        try:                                    # 서버가 켜지 않았으면(평가·CLI) 설정이 있어도 폴백하지 않는다
+            call_llm("openai", "primary", "s", "u")
+            raise SystemExit("서버가 켜지 않았는데 폴백함")
+        except ConnectionError:
+            assert fallback_target("openai", "primary") is None
+        FALLBACK_ENABLED = True
         calls.clear(); _primary_down_until.clear()
         assert call_llm("openai", "primary", "s", "u", task="t") == "ok:fallback"
         assert calls == [("openai", "primary"), ("openai", "fallback")], calls
@@ -836,6 +844,7 @@ def _selftest_fallback():
         assert fallback_target("openai", "primary") == ("gemini", "fallback")
     finally:
         _call_once = real
+        FALLBACK_ENABLED = real_enabled
         _primary_down_until.clear()
         for k, v in saved.items():
             if v is None:

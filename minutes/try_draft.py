@@ -12,19 +12,18 @@
                                                                  처음 초안 → 그 줄을 새 양식으로 다시 배치 (AI 2번)
 
 가짜 AI 는 모든 재료를 첫 칸에 넣는다. 흐름이 도는지만 본다.
-실제 AI 는 RAG 답변과 같은 설정으로 연결한다 (환경변수가 있으면 그것, 없으면 rag/.env). 키 값은 출력하지 않는다.
+실제 AI 는 RAG 답변과 같은 설정으로 연결한다 (환경변수가 있으면 그것, 없으면 저장소 루트 .env). 키 값은 출력하지 않는다.
 실제 회의 데이터는 레포 밖에 두고 --file 로 경로만 넘긴다.
 """
 import argparse
 import json
 import logging
-import os
 import re
 import sys
 from pathlib import Path
 
 from shared.llm import LLMConfigError, Reply
-from rag.try_answer import load_env_file
+from shared.envfile import local_env
 
 from .draft import make_draft
 from .llm_config import make_minutes_llm
@@ -32,7 +31,6 @@ from .relayout import previous_lines_from
 from .request import InvalidInput, validate_request
 
 SAMPLE = Path(__file__).parent / "tests" / "fixtures" / "draft_request.json"
-ENV_FILE = Path(__file__).resolve().parent.parent / "rag" / ".env"
 _MATERIAL = re.compile(r"^(m\d+) \[", re.M)
 
 
@@ -70,13 +68,13 @@ def show_io(calls):
 
 
 def real_llm():
-    env = {**load_env_file(ENV_FILE), **os.environ}
+    env = local_env()
     try:
         llm, _, source = make_minutes_llm(env)     # 시간 제한은 이 도구의 --timeout 을 쓴다
     except LLMConfigError as e:
         sys.exit(f"실제 AI 설정 오류: {e}")
     if llm.name == "fake":
-        sys.exit(f"{source}_PROVIDER 가 fake 다. rag/.env 에 gemini 나 openai 를 넣어야 실제 AI 로 돈다")
+        sys.exit(f"{source}_PROVIDER 가 fake 다. .env 에 gemini 나 openai 를 넣어야 실제 AI 로 돈다")
     return llm
 
 
@@ -161,7 +159,7 @@ def run(body, llm, args, previous=None, before_items=None):
 def main():
     p = argparse.ArgumentParser(description="회의록 초안을 만들어 칸별 글을 본다")
     p.add_argument("--file", type=Path, default=SAMPLE, help="요청 JSON (생략하면 합성 요청)")
-    p.add_argument("--real", action="store_true", help="실제 AI 로 (rag/.env 설정)")
+    p.add_argument("--real", action="store_true", help="실제 AI 로 (.env 설정)")
     p.add_argument("--timeout", type=float, default=60.0, help="AI 응답을 기다리는 초")
     p.add_argument("--retries", type=int, default=2, help="검사에 걸렸을 때 다시 시키는 횟수")
     p.add_argument("--json", action="store_true", help="결과 JSON 전체도 출력")

@@ -11,7 +11,7 @@
 --dry-run 은 AI 를 부르지 않는다. 조각이 하나씩 골라지는지와 정답표가 넘기는 조각을 가리키는지만 본다.
 버전을 여럿 주면 판마다 번갈아 돌린다.
 --rescore 는 저장된 답 글을 지금 사례 파일의 정답표로 다시 채점해 요약만 낸다 (AI 를 부르지 않는다. 결과 파일은 그대로).
-AI 는 서버와 같은 설정이다 (RAG_LLM_PROVIDER·RAG_LLM_MODEL·키, 환경변수가 없으면 rag/.env). 키 값은 출력하지 않는다.
+AI 는 서버와 같은 설정이다 (RAG_LLM_PROVIDER·RAG_LLM_MODEL·키, 환경변수가 없으면 저장소 루트 .env). 키 값은 출력하지 않는다.
 결과는 data/eval/answer/{사례}-{시각}/ 에 남는다 (git 이 무시함): meta.json, calls.csv(호출마다 시간·토큰), runs.jsonl(판마다 답 글과 채점).
 답 글을 남기므로 합성 회의록만 쓴다. 실제 회의 데이터로 돌린 결과는 레포에 올리지 않는다.
 
@@ -39,7 +39,6 @@ AI 는 서버와 같은 설정이다 (RAG_LLM_PROVIDER·RAG_LLM_MODEL·키, 환�
 import argparse
 import csv
 import json
-import os
 import re
 import statistics
 import sys
@@ -53,7 +52,6 @@ from .search import Hit
 
 REPO = Path(__file__).resolve().parent.parent
 OUT_ROOT = REPO / "data" / "eval" / "answer"
-ENV_FILE = Path(__file__).parent / ".env"
 TIMEOUT_S = 30.0                  # 운영 기본값 (RAG_LLM_TIMEOUT_S)
 EXPECTS = ("answered", "no_result")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -303,15 +301,15 @@ def dry_run(case: dict, out=print) -> bool:
 # ---------- 실제 AI ----------
 def real_llm():
     from shared.llm import LLMConfigError, make_llm
-    from .try_answer import load_env_file
+    from shared.envfile import local_env
 
-    env = {**load_env_file(ENV_FILE), **os.environ}
+    env = local_env()
     try:
         llm, _ = make_llm(env, "RAG_LLM")              # 시간 제한은 이 도구의 --timeout 을 쓴다
     except LLMConfigError as e:
         sys.exit(f"실제 AI 설정 오류: {e}")
     if llm.name == "fake":
-        sys.exit("RAG_LLM_PROVIDER 가 fake 다. rag/.env 에 gemini 나 openai 를 넣어야 실제 AI 로 돈다")
+        sys.exit("RAG_LLM_PROVIDER 가 fake 다. .env 에 gemini 나 openai 를 넣어야 실제 AI 로 돈다")
     return llm
 
 

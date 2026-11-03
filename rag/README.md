@@ -41,12 +41,15 @@ uv venv --python 3.12 --seed .venv        # uv 가 없으면: python3.12 -m venv
 먼저 접속 정보를 만든다 (공통).
 
 ```bash
-cp rag/.env.example rag/.env   # 값을 채운다. 채팅·로그에 붙여 넣지 않는다. 로컬 전용이라 간단한 값이면 된다
+cp .env.example .env   # 저장소 루트에서. "RAG 답변" 절의 주석을 풀고 값을 채운다. 채팅·로그에 붙여 넣지 않는다. 로컬 전용이라 간단한 값이면 된다
 ```
+
+- 설정 파일은 저장소 루트 `.env` 하나다. 요약·RAG·회의록 초안 설정이 같이 들어간다
+- 예전에 `rag/.env` 를 만들어 썼다면 그 줄들을 루트 `.env` 로 옮긴다 (루트 `.env` 가 아직 없으면 `cp rag/.env .env`). 옮기는 동안 손 시험·평가 도구는 `rag/.env` 도 읽고, 거기서 값을 가져오면 경고한다 (루트 `.env` 가 우선)
 
 ### A. Homebrew (macOS, 상주 서비스 없이)
 
-`rag/.env` 의 포트는 `5432` (기본값 그대로).
+`.env` 의 포트는 `5432` (기본값 그대로).
 
 ```bash
 brew install postgresql@17 pgvector     # pgvector 0.8 이상인지 brew info pgvector 로 확인
@@ -56,8 +59,8 @@ DATA=/opt/homebrew/var/postgresql@17
 $PG/pg_ctl -D $DATA -l /opt/homebrew/var/log/postgresql@17.log -w start   # 띄우기
 $PG/pg_ctl -D $DATA stop                                                  # 끄기
 
-# 처음 한 번: 앱 계정·DB·vector 확장 만들기 (비밀번호는 rag/.env 에서 읽는다)
-set -a; . rag/.env; set +a
+# 처음 한 번: 앱 계정·DB·vector 확장 만들기 (비밀번호는 .env 에서 읽는다)
+set -a; . ./.env; set +a
 $PG/psql -X -d postgres -v ON_ERROR_STOP=1 -f rag/db/init/01_roles.sql
 ```
 
@@ -66,11 +69,11 @@ $PG/psql -X -d postgres -v ON_ERROR_STOP=1 -f rag/db/init/01_roles.sql
 
 ### B. Docker
 
-`rag/.env` 의 두 주소 포트를 `5433` 으로 바꾸고 `POSTGRES_PASSWORD` 도 채운다.
+`.env` 의 두 주소 포트를 `5433` 으로 바꾸고 `POSTGRES_PASSWORD` 도 채운다.
 
 ```bash
-cd rag && docker compose up -d && cd ..   # pgvector/pgvector:0.8.0-pg17, 포트 127.0.0.1:5433
-cd rag && docker compose down && cd ..    # 끄기 (데이터는 볼륨에 남음)
+cd rag && docker compose --env-file ../.env up -d && cd ..   # pgvector/pgvector:0.8.0-pg17, 포트 127.0.0.1:5433
+cd rag && docker compose --env-file ../.env down && cd ..    # 끄기 (데이터는 볼륨에 남음)
 ```
 
 - 처음 띄울 때 `db/init/01_roles.sql` 이 자동으로 실행된다 (볼륨이 비어 있을 때만. 비밀번호를 바꾸려면 볼륨을 지우고 다시 띄운다)
@@ -78,7 +81,7 @@ cd rag && docker compose down && cd ..    # 끄기 (데이터는 볼륨에 남�
 ### 마이그레이션 (공통)
 
 ```bash
-set -a; . rag/.env; set +a                # 환경변수로 불러오기 (현재 셸에서만)
+set -a; . ./.env; set +a                 # 환경변수로 불러오기 (현재 셸에서만)
 .venv/bin/python -m rag.migrate           # 개발 DB(rag)
 .venv/bin/python -m rag.migrate --test    # 시험 DB(rag_test)
 ```
@@ -89,10 +92,10 @@ set -a; . rag/.env; set +a                # 환경변수로 불러오기 (현재
 
 `server/main.py` 에 라우터로 붙는다. `RAG_DATABASE_URL` 이 있을 때만 붙고, 없으면 요약만 뜬다.
 
-**아래는 모두 같은 터미널에서 한다.** `rag/.env` 를 불러오지 않은 터미널에서 서버를 띄우면 RAG 가 꺼진 채로 떠서 RAG 주소가 `404 Not Found` 가 된다.
+**아래는 모두 같은 터미널에서 한다.** `.env` 를 불러오지 않은 터미널에서 서버를 띄우면 RAG 가 꺼진 채로 떠서 RAG 주소가 `404 Not Found` 가 된다.
 
 ```bash
-cd <저장소 루트> && set -a && . rag/.env && set +a
+cd <저장소 루트> && set -a && . ./.env && set +a
 .venv/bin/pip install -r requirements.txt       # 요약 서버 의존성 (처음 한 번)
 # DB 띄우기 (Homebrew 기준, 위 "DB" 참고). pg_ctl 은 전체 경로로 쓴다
 /opt/homebrew/opt/postgresql@17/bin/pg_ctl -D /opt/homebrew/var/postgresql@17 -l /opt/homebrew/var/log/postgresql@17.log start
@@ -100,6 +103,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 .venv/bin/uvicorn server.main:app --port 8000   # 로그에 "RAG 작업자 시작" 이 나오면 준비 끝
 ```
 
+- 루트 `.env` 에는 요약 설정도 들어 있어서 같이 불러와진다. `LLM_PROVIDER` 를 실제 공급자로 두면 로컬 서버의 회의 중 요약도 실제 AI 를 부른다 (요금이 나간다)
 - 브라우저로 http://127.0.0.1:8000/docs 를 열면 주소별 설명·필드·예시가 있고, "Try it out" 으로 직접 호출할 수 있다
 - `RAG_WORKER_IN_PROCESS=0` 이면 작업자는 띄우지 않는다 (`python -m rag.worker` 로 따로)
 
@@ -158,7 +162,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 ```
 
 - 가짜 LLM 은 검색된 조각을 모두 근거로 단다. 어느 문서의 어떤 조각이 찾아졌는지 보는 용도다 (`--top-k` 로 개수 조정)
-- 실제 LLM 으로 보려면 서버를 띄울 때 `RAG_LLM_PROVIDER=openai`, `RAG_LLM_MODEL=gpt-5.6-luna`, `OPENAI_API_KEY` 를 넣는다 (`rag/.env` 에 적어 두면 된다). 질문마다 요금이 나간다
+- 실제 LLM 으로 보려면 서버를 띄울 때 `RAG_LLM_PROVIDER=openai`, `RAG_LLM_MODEL=gpt-5.6-luna`, `OPENAI_API_KEY` 를 넣는다 (`.env` 에 적어 두면 된다). 질문마다 요금이 나간다
 - 실제 회의 데이터는 레포 밖(또는 git 이 무시하는 `data/`)에 두고 `--file` 로 경로만 넘긴다
 
 ## 작업자
@@ -166,7 +170,7 @@ cd <저장소 루트> && set -a && . rag/.env && set +a
 접수(`jobs.submit()`)는 문서를 `queued` 로 두고 작업 표(`rag_jobs`)에 적기만 한다. 작업자가 꺼내서 로더 → 나누기 → 임베딩 → 저장을 하고 완료 콜백을 보낸다.
 
 ```bash
-set -a; . rag/.env; set +a
+set -a; . ./.env; set +a
 .venv/bin/python -m rag.worker            # 따로 띄우기. Ctrl+C 나 SIGTERM 이면 처리 중인 작업을 마치고 멈춘다
 ```
 
@@ -215,7 +219,7 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 | `answer_eval_basic.json` | 회의 하나, 6문항: 결정 날짜, 사람 이름만, 사용자가 만든 표 속 금액, 메모 속 장소, 자료에 없는 질문 2개 |
 | `answer_eval_two_meetings.json` | 회의 둘(10/20, 10/27), 5문항: 두 회의에 걸친 변경, 맡은 일이 여러 개인 사람, 일부만 답할 수 있는 질문, 지시문이 섞인 조각(답이 있는/없는 질문) |
 
-- AI 설정은 서버와 같다 (`RAG_LLM_*`, 환경변수가 없으면 `rag/.env`). 조각 글과 판정은 답변 API 와 같은 함수(`build_prompt`, `judge_reply`)를 쓴다
+- AI 설정은 서버와 같다 (`RAG_LLM_*`, 환경변수가 없으면 `.env`). 조각 글과 판정은 답변 API 와 같은 함수(`build_prompt`, `judge_reply`)를 쓴다
 - 결과는 `data/eval/answer/{사례}-{시각}/` 에 남는다 (git 이 무시함). 답 글이 들어가므로 합성 회의록만 쓴다
 - 꼭 들어갈 말은 낱말로 본다. 틀림으로 나온 답은 `runs.jsonl` 의 글을 직접 보고 판단한다 (같은 뜻을 다르게 쓴 경우가 있다)
 
@@ -236,7 +240,7 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 ## 시험
 
 ```bash
-set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면 DB 시험은 건너뜀)
+set -a; . ./.env; set +a                 # DB 시험을 돌리려면 (없으면 DB 시험은 건너뜀)
 .venv/bin/python -m pytest rag/tests
 ```
 

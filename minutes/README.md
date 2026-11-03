@@ -43,7 +43,7 @@
 `server/main.py` 는 `MINUTES_DATABASE_URL` 이 있을 때만 초안 기능을 붙인다. 없으면 이 주소는 404 이고, 요약·RAG 는 그대로다. RAG 와 같은 PostgreSQL 을 써도 되지만 연결 풀·마이그레이션·설정은 따로다.
 
 ```bash
-cd <저장소 루트> && set -a && . rag/.env && set +a     # DB 접속 정보와 RAG_LLM_* (rag/README.md 의 "DB")
+cd <저장소 루트> && set -a && . ./.env && set +a      # DB 접속 정보와 AI 설정 (rag/README.md 의 "DB")
 export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개발 DB 를 같이 써도 된다
 .venv/bin/python -m minutes.migrate                    # minutes_jobs 표 (새 마이그레이션이 있을 때마다)
 .venv/bin/uvicorn server.main:app --port 8000          # 로그에 "회의록 초안 작업자 시작" 이 나오면 준비 끝
@@ -81,7 +81,7 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 
 ```bash
 .venv/bin/python -m minutes.try_draft                           # 합성 요청, 가짜 AI (비용 없음)
-.venv/bin/python -m minutes.try_draft --real                    # 실제 AI (MINUTES_LLM_*, 없으면 rag/.env 의 RAG_LLM_*). 호출마다 요금이 나간다
+.venv/bin/python -m minutes.try_draft --real                    # 실제 AI (MINUTES_LLM_*, 없으면 RAG_LLM_*. 환경변수가 없으면 .env). 호출마다 요금이 나간다
 .venv/bin/python -m minutes.try_draft --file 요청.json --real --show-io   # AI 입력·출력·토큰까지
 ```
 

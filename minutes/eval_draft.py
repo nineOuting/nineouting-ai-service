@@ -7,7 +7,7 @@
 
 --dry-run 은 AI 를 부르지 않는다. 사례의 정답표가 AI 에 가는 재료와 하나씩 맞물리는지만 본다.
 버전을 여럿 주면 판마다 번갈아 돌린다. 개수가 모자란 쪽은 마지막 값을 그대로 쓴다 (예: --prompt v8 v9 --table-prompt v1).
-AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수, 없으면 rag/.env). 키 값은 출력하지 않는다.
+AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수, 없으면 저장소 루트 .env). 키 값은 출력하지 않는다.
 결과는 data/eval/minutes/{사례}-{시각}/ 에 남는다 (git 이 무시함): meta.json, calls.csv(호출마다 시간·토큰), runs.jsonl(판마다 채점과 결과).
 실제 회의 데이터로 돌린 결과는 레포에 올리지 않는다.
 
@@ -332,7 +332,7 @@ def main(argv=None):
     case = load_case(args.case)
     if args.dry_run:
         sys.exit(0 if dry_run(case) else 1)
-    from .try_draft import real_llm                      # rag/.env 를 읽는다. 키 값은 출력하지 않는다
+    from .try_draft import real_llm                      # .env 를 읽는다. 키 값은 출력하지 않는다
     llm = real_llm()
     variants = [{k: _resolved(v, kind) for k, v, kind in (("placement", x["placement"], "placement"),
                                                           ("relayout", x["relayout"], RELAYOUT_KIND),

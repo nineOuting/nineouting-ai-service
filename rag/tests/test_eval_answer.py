@@ -6,7 +6,7 @@ import pytest
 
 from rag import eval_answer as ev
 from rag.answer import answer_prompt
-from rag.llm import LLMTimeout, Reply
+from shared.llm import LLMTimeout, Reply
 
 FIX = Path(__file__).parent / "fixtures"
 CASES = sorted(FIX.glob("answer_eval_*.json"))

@@ -1,14 +1,14 @@
-"""처리 결과를 백엔드로 알리는 완료 콜백.
+"""처리 결과를 백엔드로 알리는 완료 콜백. RAG(rag/)와 회의록 초안(minutes/)이 같이 쓴다.
 
-  POST {callbackUrl}  본문 {docId, docVersion, status, errorCode, chunkCount}
+  POST {callbackUrl}  본문은 부르는 쪽이 정한다 (RAG: docId·docVersion·status·errorCode·chunkCount)
   헤더 X-Request-Id (접수 때 받은 값), 인증 헤더 (auth_headers, 방식이 정해지면 채운다)
 
 재시도 규칙은 server/publisher.py 와 같다 (연동 API 초안 7장 6번 합의).
   - 408·429·5xx·연결 오류만 재시도, 3회, 간격 1초·2초·4초
   - 그 밖의 4xx 는 바로 포기한다
 
-콜백 주소는 요청이 정하므로, 허용한 호스트로만 보낸다 (RAG_CALLBACK_ALLOWED_HOSTS).
-로그에는 docId, 상태 코드만 남긴다.
+콜백 주소는 요청이 정하므로, 허용한 호스트로만 보낸다 (RAG_CALLBACK_ALLOWED_HOSTS, MINUTES_CALLBACK_ALLOWED_HOSTS).
+로그에는 부르는 쪽이 넘긴 대상 표시(ref)와 상태 코드만 남긴다.
 """
 import json
 import logging
@@ -17,16 +17,16 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
-log = logging.getLogger("rag.callback")
+log = logging.getLogger("shared.callback")
 
 
 class CallbackNotAllowed(ValueError):
     """콜백 주소가 형식에 맞지 않거나 허용 목록에 없다."""
 
 
-def allowed_hosts_from_env(env, key="RAG_CALLBACK_ALLOWED_HOSTS"):
-    """RAG_CALLBACK_ALLOWED_HOSTS="host" 또는 "host:port" 를 쉼표로. 비어 있으면 None (모두 허용, 개발용).
-    회의록 초안은 key="MINUTES_CALLBACK_ALLOWED_HOSTS" 로 따로 읽는다."""
+def allowed_hosts_from_env(env, key):
+    """key 설정값 "host" 또는 "host:port" 를 쉼표로. 비어 있으면 None (모두 허용, 개발용).
+    RAG 는 key="RAG_CALLBACK_ALLOWED_HOSTS", 회의록 초안은 key="MINUTES_CALLBACK_ALLOWED_HOSTS"."""
     raw = (env.get(key) or "").strip()
     if not raw:
         return None
@@ -73,10 +73,9 @@ class CallbackSender:
         self.sender = sender                   # 시험용: fn(url, body, headers) -> (성공, 재시도 가능, 상태 코드)
         self.sleep = sleep
 
-    def send(self, url, body, request_id=None, ref=None):
+    def send(self, url, body, request_id=None, *, ref):
         """보냈으면 True. 끝내 실패하면 False (로그만 남기고 예외는 내지 않는다).
-        ref 는 로그에 남길 대상 표시다. 없으면 doc=<docId> (RAG). 회의록 초안은 minutes_request=<requestId> 를 넘긴다."""
-        ref = ref or f"doc={body.get('docId')}"
+        ref 는 로그에 남길 대상 표시다. RAG 는 doc=<docId>, 회의록 초안은 minutes_request=<requestId> 를 넘긴다."""
         try:
             check_callback_url(url, self.allowed)
         except CallbackNotAllowed as e:

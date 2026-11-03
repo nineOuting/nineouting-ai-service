@@ -9,7 +9,7 @@ from _helpers import OTHER_WS, WS, doc, put
 from rag import answer as answer_mod
 from rag.answer import (NO_ANSWER, Answerer, Prompt, PromptError, answer, answer_prompt, build_prompt, load_prompt,
                         parse_refs, prompt_versions)
-from rag.llm import FakeLLM, LLMConfigError, LLMError, LLMTimeout, Reply, make_llm
+from shared.llm import FakeLLM, LLMConfigError, LLMError, LLMTimeout, Reply, make_llm
 from rag.search import Hit
 
 QUERY = "1분기 예산은 얼마로 하기로 했어?"
@@ -173,7 +173,7 @@ def test_로그에_질문과_답과_조각_글이_없음(two_hits, caplog):
 # ---- LLM 설정 ----
 
 def test_LLM_설정_기본값은_가짜_30초():
-    llm, timeout_s = make_llm({})
+    llm, timeout_s = make_llm({}, "RAG_LLM")
     assert llm.name == "fake" and timeout_s == 30.0
 
 
@@ -181,7 +181,7 @@ def test_LLM_설정_기본값은_가짜_30초():
                                  {"RAG_LLM_TIMEOUT_S": "0"}])
 def test_LLM_설정_오류(env):
     with pytest.raises(LLMConfigError):
-        make_llm(env)
+        make_llm(env, "RAG_LLM")
 
 
 # ---- 지시문 파일 ----

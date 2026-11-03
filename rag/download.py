@@ -15,7 +15,7 @@ import urllib.request
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from .callback import allowed_hosts_from_env
+from shared.callback import allowed_hosts_from_env
 from .errors import DOWNLOAD_FAILED, TOO_LARGE, URL_EXPIRED, IngestError
 
 DEFAULT_MAX_MB = 20               # 정해 둔 값. SCRUM-110 에서 재서 조정한다

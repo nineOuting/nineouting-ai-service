@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from _helpers import OTHER_WS, WS
-from rag.callback import CallbackNotAllowed, CallbackSender
+from shared.callback import CallbackNotAllowed, CallbackSender
 from rag.jobs import IngestRequest, claim, cleanup_finished, submit
 from rag.store import DocumentMeta, delete_document, delete_workspace, get_status, register
 from rag.worker import Worker

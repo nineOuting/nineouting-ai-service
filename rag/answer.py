@@ -19,7 +19,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, ContextManager
 
-from .llm import LLMError, LLMTimeout
+from shared.llm import LLMError, LLMTimeout
 from .search import search
 
 log = logging.getLogger("rag.answer")

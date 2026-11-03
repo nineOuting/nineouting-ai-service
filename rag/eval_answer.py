@@ -302,12 +302,12 @@ def dry_run(case: dict, out=print) -> bool:
 
 # ---------- 실제 AI ----------
 def real_llm():
-    from .llm import LLMConfigError, make_llm
+    from shared.llm import LLMConfigError, make_llm
     from .try_answer import load_env_file
 
     env = {**load_env_file(ENV_FILE), **os.environ}
     try:
-        llm, _ = make_llm(env)                         # 시간 제한은 이 도구의 --timeout 을 쓴다
+        llm, _ = make_llm(env, "RAG_LLM")              # 시간 제한은 이 도구의 --timeout 을 쓴다
     except LLMConfigError as e:
         sys.exit(f"실제 AI 설정 오류: {e}")
     if llm.name == "fake":

@@ -20,7 +20,7 @@ import signal
 import threading
 import time
 
-from .callback import CallbackSender, allowed_hosts_from_env
+from shared.callback import CallbackSender, allowed_hosts_from_env
 from .chunking import split_pieces
 from .config import CHUNK_TOKENS, MAX_DOC_TOKENS
 from .download import UPLOAD_OFF, UploadSettings, fetch, settings_from_env
@@ -127,7 +127,7 @@ class Worker:
     def _notify(self, job, status, error_code, chunk_count):
         body = {"docId": job.doc_id, "docVersion": job.doc_version, "status": status,
                 "errorCode": error_code, "chunkCount": chunk_count}
-        return self.callback.send(job.payload.get("callbackUrl"), body, job.request_id)
+        return self.callback.send(job.payload.get("callbackUrl"), body, job.request_id, ref=f"doc={job.doc_id}")
 
     def run(self, stop: threading.Event, poll_s=POLL_S, cleanup_every_s=CLEANUP_EVERY_S):
         """stop 이 켜질 때까지 반복한다. 처리 중인 작업은 끝까지 마친 뒤 멈춘다."""
@@ -187,7 +187,7 @@ def from_env(env=None, embedder=None):
                          connect_timeout_s=env.get("RAG_DB_CONNECT_TIMEOUT_S", 10))
     if embedder is None:
         embedder = embedder_from_env(env)
-    allowed = allowed_hosts_from_env(env)
+    allowed = allowed_hosts_from_env(env, key="RAG_CALLBACK_ALLOWED_HOSTS")
     if allowed is None:
         log.warning("RAG_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")
     return Worker(None, embedder, CallbackSender(allowed=allowed), connect=connect_db, upload=settings_from_env(env),

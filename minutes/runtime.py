@@ -57,8 +57,8 @@ class MinutesRuntime:
 def setup(app, env) -> MinutesRuntime:
     from psycopg_pool import ConnectionPool
 
-    from rag.callback import allowed_hosts_from_env
-    from rag.llm import LLMConfigError
+    from shared.callback import allowed_hosts_from_env
+    from shared.llm import LLMConfigError
 
     from .llm_config import make_minutes_llm
     from .placement import RELAYOUT_KIND, load_prompt

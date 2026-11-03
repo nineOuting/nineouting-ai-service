@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from minutes.relayout import previous_lines_from
-from rag.llm import Reply
+from shared.llm import Reply
 
 FIXTURE = Path(__file__).parent / "fixtures" / "draft_request.json"
 ITEMS = ["안건별 논의", "결정 사항", "미결 안건", "할 일"]

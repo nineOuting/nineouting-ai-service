@@ -1,13 +1,14 @@
-"""답변용 LLM 연결. 공급자를 바꿔 끼울 수 있게 generate() 하나만 둔다.
+"""LLM 연결. RAG 답변(rag/)과 회의록 초안(minutes/)이 같이 쓴다. 공급자를 바꿔 끼울 수 있게 generate() 하나만 둔다.
 
-  RAG_LLM_PROVIDER   fake (기본, 시험용 가짜) / gemini (시험) / openai (운영)
-  RAG_LLM_MODEL      공급자의 모델 이름. gemini·openai 는 꼭 넣는다 (기본값 없음)
-  RAG_LLM_TIMEOUT_S  응답을 기다리는 상한 (기본 30초). 재시도는 하지 않는다 (기다림이 길어지지 않게)
-  API 키             GEMINI_API_KEY(또는 GOOGLE_API_KEY) / OPENAI_API_KEY. 요약 서버와 같은 이름
+설정 이름은 부르는 쪽이 앞부분(prefix)을 넘긴다. RAG 는 RAG_LLM, 회의록 초안은 MINUTES_LLM (minutes/llm_config.py).
+  {prefix}_PROVIDER   fake (기본, 시험용 가짜) / gemini (시험) / openai (운영)
+  {prefix}_MODEL      공급자의 모델 이름. gemini·openai 는 꼭 넣는다 (기본값 없음)
+  {prefix}_TIMEOUT_S  응답을 기다리는 상한 (기본값은 부르는 쪽이 정한다). 재시도는 하지 않는다 (기다림이 길어지지 않게)
+  API 키              GEMINI_API_KEY(또는 GOOGLE_API_KEY) / OPENAI_API_KEY. 요약 서버와 같은 이름
 
-모델·키·SDK 가 없으면 LLMConfigError 를 낸다. 서버는 그대로 뜨고 답변 API 만 503 이다.
+모델·키·SDK 가 없으면 LLMConfigError 를 낸다. 서버는 그대로 뜨고 그 기능의 API 만 503 이다.
 공급자 SDK 의 예외는 LLMTimeout(시간 초과)·LLMError(그 밖) 로 바꿔서 던진다. 메시지에는 예외 이름만 넣는다.
-SDK: gemini 는 공용 requirements.txt 의 google-genai, openai(운영)는 rag/requirements.txt 의 openai.
+SDK: gemini 는 공용 requirements.txt 의 google-genai, openai(운영)는 shared/requirements.txt 의 openai.
 """
 import re
 from dataclasses import dataclass
@@ -122,24 +123,28 @@ class OpenAILLM:
         return Reply(text, None if u is None else u.prompt_tokens, None if u is None else u.completion_tokens)
 
 
-def make_llm(env) -> tuple[LLM, float]:
-    """환경변수로 LLM 과 시간 제한을 만든다. 설정이 잘못되면 LLMConfigError (키 값은 메시지에 넣지 않는다)."""
-    provider = env.get("RAG_LLM_PROVIDER", "fake")
+def make_llm(env, prefix: str, timeout_key: str | None = None,
+             default_timeout_s: float = DEFAULT_TIMEOUT_S) -> tuple[LLM, float]:
+    """환경변수로 LLM 과 시간 제한을 만든다. {prefix}_PROVIDER·{prefix}_MODEL 을 읽고,
+    시간 제한은 timeout_key(없으면 {prefix}_TIMEOUT_S)를 읽는다.
+    설정이 잘못되면 LLMConfigError (키 값은 메시지에 넣지 않는다)."""
+    timeout_key = timeout_key or f"{prefix}_TIMEOUT_S"
+    provider = env.get(f"{prefix}_PROVIDER", "fake")
     if provider not in PROVIDERS:
-        raise LLMConfigError(f"지원하지 않는 RAG_LLM_PROVIDER: {provider} (가능: {', '.join(PROVIDERS)})")
-    raw = env.get("RAG_LLM_TIMEOUT_S", DEFAULT_TIMEOUT_S)
+        raise LLMConfigError(f"지원하지 않는 {prefix}_PROVIDER: {provider} (가능: {', '.join(PROVIDERS)})")
+    raw = env.get(timeout_key, default_timeout_s)
     try:
         timeout_s = float(raw)
     except (TypeError, ValueError):
-        raise LLMConfigError("RAG_LLM_TIMEOUT_S 는 숫자여야 함") from None
+        raise LLMConfigError(f"{timeout_key} 는 숫자여야 함") from None
     if timeout_s <= 0:
-        raise LLMConfigError("RAG_LLM_TIMEOUT_S 는 0보다 커야 함")
+        raise LLMConfigError(f"{timeout_key} 는 0보다 커야 함")
     if provider == "fake":
         return FakeLLM(), timeout_s
 
-    model = (env.get("RAG_LLM_MODEL") or "").strip()
+    model = (env.get(f"{prefix}_MODEL") or "").strip()
     if not model:
-        raise LLMConfigError(f"RAG_LLM_PROVIDER={provider} 에는 RAG_LLM_MODEL 이 필요함")
+        raise LLMConfigError(f"{prefix}_PROVIDER={provider} 에는 {prefix}_MODEL 이 필요함")
     key = next((env[k] for k in _KEYS[provider] if env.get(k)), None)
     if not key:
         raise LLMConfigError(f"API 키가 없음 ({' 또는 '.join(_KEYS[provider])})")

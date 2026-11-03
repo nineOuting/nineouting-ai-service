@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from rag.llm import LLMError, LLMTimeout
+from shared.llm import LLMError, LLMTimeout
 
 from .models import Field, Material, Placement, Table
 

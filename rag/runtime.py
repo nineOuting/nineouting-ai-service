@@ -11,10 +11,10 @@ import logging
 
 from .answer import Answerer
 from .api import PREFIX, REQUEST_ID_HEADER, make_router
-from .callback import allowed_hosts_from_env
+from shared.callback import allowed_hosts_from_env
 from .db import timeout_options
 from .download import settings_from_env as upload_settings_from_env
-from .llm import LLMConfigError, make_llm
+from shared.llm import LLMConfigError, make_llm
 
 log = logging.getLogger("rag.runtime")
 
@@ -51,7 +51,7 @@ class RagRuntime:
 def make_answerer(runtime, env) -> Answerer:
     """LLM 설정이 잘못돼도 서버는 뜨게 한다 (요약까지 멈추지 않게). 그때 답변 API 만 503 이다."""
     try:
-        llm, timeout_s = make_llm(env)
+        llm, timeout_s = make_llm(env, "RAG_LLM")
     except LLMConfigError as e:
         log.error("답변 LLM 설정 오류: %s", e)
         return Answerer(lambda: runtime.embedder, config_error=str(e))
@@ -73,7 +73,7 @@ def setup(app, env) -> RagRuntime:
                           timeout=float(env.get("RAG_DB_POOL_TIMEOUT_S", "5")), open=False,
                           kwargs={"autocommit": True, "options": options}, configure=register_vector,
                           name="rag")
-    allowed = allowed_hosts_from_env(env)
+    allowed = allowed_hosts_from_env(env, key="RAG_CALLBACK_ALLOWED_HOSTS")
     if allowed is None:
         log.warning("RAG_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")
     upload = upload_settings_from_env(env)

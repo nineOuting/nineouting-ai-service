@@ -22,6 +22,7 @@ on:
       - 'server/**'
       - 'rag/**'
       - 'minutes/**'
+      - 'shared/**'
       - 'requirements.txt'
       - 'Dockerfile'
       - '.dockerignore'
@@ -32,6 +33,7 @@ on:
       - 'server/**'
       - 'rag/**'
       - 'minutes/**'
+      - 'shared/**'
       - 'requirements.txt'
       - 'Dockerfile'
       - '.dockerignore'
@@ -120,6 +122,15 @@ jobs:
           verify_model_files()
           E5Embedder()
           print('모델 확인 uid=%d arch=%s' % (os.getuid(), platform.machine()))
+          "
+
+      # 공용 코드(shared/)와 그 의존성(openai)이 이미지에 들어갔는지 확인. 서버가 시작할 때 처음 불러오는 것들이라
+      # 여기서 보지 않으면 빌드는 통과하고 서버를 띄운 뒤에야 RAG 답변·회의록 초안이 503 으로 드러난다
+      - name: 공용 코드 확인
+        run: |
+          docker run --rm --network none "$REF" python -c "
+          import openai, shared.llm, shared.callback, rag.runtime
+          print('공용 코드 확인 openai', openai.__version__)
           "
 
       # 회의록 초안 코드와 마이그레이션 파일이 이미지에 들어갔는지 확인 (DB 에는 붙지 않음)

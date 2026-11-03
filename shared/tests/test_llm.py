@@ -4,7 +4,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from rag.llm import GeminiLLM, LLMConfigError, LLMError, LLMTimeout, OpenAILLM, make_llm
+from shared.llm import GeminiLLM, LLMConfigError, LLMError, LLMTimeout, OpenAILLM, make_llm
 
 GEMINI_ENV = {"RAG_LLM_PROVIDER": "gemini", "RAG_LLM_MODEL": "gemini-test", "GEMINI_API_KEY": "k" * 20}
 
@@ -20,7 +20,7 @@ GEMINI_ENV = {"RAG_LLM_PROVIDER": "gemini", "RAG_LLM_MODEL": "gemini-test", "GEM
 ])
 def test_설정_오류(env, word):
     with pytest.raises(LLMConfigError) as e:
-        make_llm(env)
+        make_llm(env, "RAG_LLM")
     assert word in str(e.value)
 
 
@@ -28,29 +28,62 @@ def test_설정_오류_메시지에_키_값이_없음(monkeypatch):
     monkeypatch.setitem(sys.modules, "openai", None)        # SDK 가 없는 상태
     secret = "sk-비밀키-값"
     with pytest.raises(LLMConfigError) as e:
-        make_llm({"RAG_LLM_PROVIDER": "openai", "RAG_LLM_MODEL": "m", "OPENAI_API_KEY": secret})
+        make_llm({"RAG_LLM_PROVIDER": "openai", "RAG_LLM_MODEL": "m", "OPENAI_API_KEY": secret}, "RAG_LLM")
     assert "SDK(openai)" in str(e.value) and secret not in str(e.value)
 
 
 def test_GOOGLE_API_KEY_도_받음():
     pytest.importorskip("google.genai")
     llm, timeout_s = make_llm({"RAG_LLM_PROVIDER": "gemini", "RAG_LLM_MODEL": "m", "GOOGLE_API_KEY": "k" * 20,
-                               "RAG_LLM_TIMEOUT_S": "12"})
+                               "RAG_LLM_TIMEOUT_S": "12"}, "RAG_LLM")
     assert llm.name == "gemini" and llm.model == "m" and timeout_s == 12.0
 
 
 def test_gemini_SDK_가_없으면_설정_오류(monkeypatch):
     monkeypatch.setitem(sys.modules, "google.genai", None)
     with pytest.raises(LLMConfigError) as e:
-        make_llm(GEMINI_ENV)
+        make_llm(GEMINI_ENV, "RAG_LLM")
     assert "google-genai" in str(e.value)
 
 
 def test_gemini_클라이언트는_재시도를_끔():
     pytest.importorskip("google.genai")
-    llm, _ = make_llm(GEMINI_ENV)
+    llm, _ = make_llm(GEMINI_ENV, "RAG_LLM")
     retry = llm._client._api_client._http_options.retry_options
     assert retry is not None and retry.attempts == 1
+
+
+# ---- 설정 이름 앞부분 (RAG 와 회의록 초안이 같이 쓴다) ----
+
+OPENAI_KEY = {"OPENAI_API_KEY": "k" * 20}          # 클라이언트만 만들고 부르지는 않는다
+
+
+def test_넘긴_앞부분의_설정만_읽음():
+    pytest.importorskip("openai")
+    env = {**OPENAI_KEY, "RAG_LLM_PROVIDER": "gemini", "RAG_LLM_MODEL": "rag-model", "RAG_LLM_TIMEOUT_S": "5",
+           "MINUTES_LLM_PROVIDER": "openai", "MINUTES_LLM_MODEL": "minutes-model", "MINUTES_LLM_TIMEOUT_S": "42"}
+    llm, timeout_s = make_llm(env, "MINUTES_LLM")
+    assert (llm.name, llm.model, timeout_s) == ("openai", "minutes-model", 42.0)
+
+
+def test_시간_제한_설정_이름과_기본값을_따로_줄_수_있음():
+    _, timeout_s = make_llm({"MINUTES_LLM_TIMEOUT_S": "42", "RAG_LLM_TIMEOUT_S": "5"}, "RAG_LLM",
+                            timeout_key="MINUTES_LLM_TIMEOUT_S")
+    assert timeout_s == 42.0
+    _, timeout_s = make_llm({}, "RAG_LLM", timeout_key="MINUTES_LLM_TIMEOUT_S", default_timeout_s=60.0)
+    assert timeout_s == 60.0
+
+
+@pytest.mark.parametrize("env, timeout_key, message", [
+    ({"MINUTES_LLM_PROVIDER": "nope"}, None, "지원하지 않는 MINUTES_LLM_PROVIDER: nope"),
+    ({"MINUTES_LLM_PROVIDER": "gemini"}, None, "MINUTES_LLM_PROVIDER=gemini 에는 MINUTES_LLM_MODEL 이 필요함"),
+    ({"MINUTES_LLM_TIMEOUT_S": "x"}, None, "MINUTES_LLM_TIMEOUT_S 는 숫자여야 함"),
+    ({"OTHER_TIMEOUT_S": "0"}, "OTHER_TIMEOUT_S", "OTHER_TIMEOUT_S 는 0보다 커야 함"),
+])
+def test_오류_메시지는_넘긴_설정_이름으로(env, timeout_key, message):
+    with pytest.raises(LLMConfigError) as e:
+        make_llm(env, "MINUTES_LLM", timeout_key=timeout_key)
+    assert message in str(e.value)
 
 
 # ---- Gemini (가짜 클라이언트) ----

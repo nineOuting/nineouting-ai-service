@@ -37,7 +37,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from rag.llm import Reply
+from shared.llm import Reply
 
 from .draft import make_draft
 from .materials import build_materials

@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import JSONResponse
 
-from rag.callback import CallbackNotAllowed, check_callback_url
+from shared.callback import CallbackNotAllowed, check_callback_url
 
 from .jobs import submit
 from .request import InvalidInput, validate_request

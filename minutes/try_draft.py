@@ -23,7 +23,7 @@ import re
 import sys
 from pathlib import Path
 
-from rag.llm import LLMConfigError, Reply
+from shared.llm import LLMConfigError, Reply
 from rag.try_answer import load_env_file
 
 from .draft import make_draft

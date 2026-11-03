@@ -8,7 +8,7 @@ from minutes.draft import FAILED, INPUT_TOO_LONG, MAX_MATERIALS, SUCCEEDED, make
 from minutes.lines import EMPTY_SECTION
 from minutes.placement import RELAYOUT_KIND, load_prompt
 from minutes_fakes import GOOD, ScriptLLM, load_request, previous_lines_of
-from rag.llm import LLMError, LLMTimeout
+from shared.llm import LLMError, LLMTimeout
 
 
 @pytest.fixture

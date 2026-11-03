@@ -20,6 +20,10 @@ RUN pip install --no-cache-dir torch==2.14.1 --index-url https://download.pytorc
 COPY minutes/requirements.txt minutes/requirements.txt
 RUN pip install --no-cache-dir -r minutes/requirements.txt
 
+# 2-2) RAG·회의록 초안 공용 코드(shared/) 의존성. AI 호출용 openai
+COPY shared/requirements.txt shared/requirements.txt
+RUN pip install --no-cache-dir -r shared/requirements.txt
+
 # 3) 임베딩 모델. revision 고정으로 받고 sha256 을 확인한다. 실행 사용자가 바뀌어도 같은 곳을 찾도록 /models 로 고정
 ENV HF_HUB_CACHE=/models
 COPY rag/__init__.py rag/config.py rag/embedding.py rag/fetch_model.py rag/
@@ -29,6 +33,7 @@ ENV HF_HUB_OFFLINE=1
 # 4) 코드 (커밋마다 바뀌는 부분이라 맨 뒤)
 COPY summary/ summary/
 COPY server/ server/
+COPY shared/ shared/
 COPY rag/ rag/
 COPY minutes/ minutes/
 

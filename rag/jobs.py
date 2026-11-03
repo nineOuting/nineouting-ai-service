@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from psycopg.types.json import Jsonb
 
-from .callback import check_callback_url
+from shared.callback import check_callback_url
 from .store import DocumentMeta, RegisterResult, register
 
 STUCK_AFTER_S = 600              # running 으로 이만큼 멈춰 있으면 작업자가 죽은 것으로 보고 다시 잡는다

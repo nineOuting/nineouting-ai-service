@@ -18,7 +18,7 @@ import time
 
 from psycopg.errors import UndefinedTable
 
-from rag.callback import CallbackSender, allowed_hosts_from_env
+from shared.callback import CallbackSender, allowed_hosts_from_env
 
 from .draft import INTERNAL_ERROR, MESSAGES, failed, make_draft
 from .jobs import KEEP_DAYS, claim, cleanup_finished, finish, retry_later

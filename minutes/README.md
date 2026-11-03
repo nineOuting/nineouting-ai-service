@@ -33,7 +33,7 @@
 | `draft.py` | 위를 묶어 결과 JSON 하나를 만든다 (`make_draft`) |
 | `jobs.py`, `worker.py` | 대기열 표와 작업자 |
 | `api.py`, `runtime.py` | 접수 주소와 `server/main.py` 에 붙이는 곳 |
-| `llm_config.py` | 초안 AI 설정 고르기. AI 연결(`rag/llm.py`)과 콜백 보내기(`rag/callback.py`)는 RAG 코드를 같이 쓴다 |
+| `llm_config.py` | 초안 AI 설정 고르기. AI 연결(`shared/llm.py`)과 콜백 보내기(`shared/callback.py`)는 RAG 와 같이 쓰는 공용 코드다 |
 | `prompts/placement/v*.md` | 칸 배치 지시문 (처음 초안). `MINUTES_PROMPT_VERSION` 이 없으면 번호가 가장 큰 파일 |
 | `table.py`, `prompts/table/v*.md` | AI 가 채우는 표 필드: 열 이름과 칸 값을 AI 에게 묻고, 칸 값이 재료 조각에 있는지 검사 (명세 7.6) |
 | `relayout.py`, `prompts/relayout/v*.md` | 양식 변경 시 다시 배치: 이전 줄 → 재료, 다시 배치 지시문. 처음 초안 지시문과 거의 같은 글이라 규칙을 고치면 두 파일을 같이 고친다 |

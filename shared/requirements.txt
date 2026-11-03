@@ -1,0 +1,5 @@
+# 공용 코드(shared/) 의존성. RAG 답변·회의록 초안 AI 호출 (OpenAI, shared/llm.py). 운영 공급자.
+# jiter·httpx2 는 openai 만 쓰는 하위 패키지. google-genai(시험 공급자)는 루트 requirements.txt
+openai==3.37.0
+jiter==0.18.0
+httpx2==2.16.0

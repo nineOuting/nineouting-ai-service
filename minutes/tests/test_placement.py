@@ -9,7 +9,7 @@ from minutes.placement import (CHECK_FAILED, LLM_FAILED, LLM_TIMEOUT, PromptErro
                                parse_reply, place)
 from minutes.relayout import build_relayout
 from minutes_fakes import GOOD, ITEMS, ScriptLLM, load_request, previous_lines_of
-from rag.llm import LLMError, LLMTimeout
+from shared.llm import LLMError, LLMTimeout
 
 
 @pytest.fixture

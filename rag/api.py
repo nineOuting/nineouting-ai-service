@@ -23,7 +23,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Path, Request
 from fastapi.responses import JSONResponse, Response
 
-from .callback import CallbackNotAllowed
+from shared.callback import CallbackNotAllowed
 from .download import UPLOAD_OFF, FileUrlNotAllowed, UploadSettings, check_file_url
 from .errors import IngestError
 from .jobs import IngestRequest, submit

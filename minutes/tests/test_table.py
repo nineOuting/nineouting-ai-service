@@ -16,7 +16,7 @@ from minutes.placement import CHECK_FAILED, LLM_TIMEOUT, load_prompt
 from minutes.request import InvalidInput, validate_request
 from minutes.table import TABLE_KIND, build_user, check, fill
 from minutes_fakes import GOOD, ITEMS, ScriptLLM, load_request, previous_lines_of
-from rag.llm import LLMTimeout
+from shared.llm import LLMTimeout
 
 TODO_TABLE = {"columns": ["안건", "할 일", "담당", "기한"], "rows": [
     {"m": "m10", "cells": ["회식 장소", "식당 후보 알아보기", "", ""]},       # AI 가 순서를 바꿔 보내도

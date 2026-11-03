@@ -6,6 +6,7 @@
 
 - RAG 코드, 시험, 마이그레이션, 의존성은 모두 `rag/` 안에 둔다.
 - `rag/` 밖의 파일은 수정하지 않는다. 공용 파일(`Dockerfile`, `requirements.txt` 등)을 바꿔야 하면 담당자와 먼저 합의한다.
+- 예외: `shared/`는 RAG와 회의록 초안(`minutes/`)이 같이 쓰는 코드(AI 연결, 완료 콜백)다. 고치면 두 기능의 시험을 모두 돌린다. 요약 기능(`summary/`, `server/`)은 대상이 아니다.
 - 브랜치는 `develop`에서 `feature/rag-*`로 만든다.
 
 ## 데이터와 로그
@@ -24,5 +25,5 @@
 ## 실행 환경
 
 - Python은 저장소의 `.venv`를 쓰고, 버전은 `Dockerfile`과 같은 3.12에 맞춘다.
-- 의존성은 `rag/requirements.txt`에 둔다. 공용 `requirements.txt`와 합치는 방식은 따로 정한다.
-- 시험: `.venv/bin/python -m pytest rag/tests`
+- 의존성은 `rag/requirements.txt`에 둔다. 공용 코드(`shared/`)가 쓰는 것은 `shared/requirements.txt`에 둔다. 공용 `requirements.txt`와 합치는 방식은 따로 정한다.
+- 시험: `.venv/bin/python -m pytest rag/tests shared/tests`

@@ -1,27 +1,32 @@
 """초안 AI 설정 고르기 시험. 실제 AI 는 부르지 않는다 (fake 이거나 설정 오류에서 멈춤)."""
 import pytest
 
-from minutes.llm_config import MINUTES, RAG, llm_env, make_minutes_llm
-from rag.llm import LLMConfigError
+from minutes.llm_config import MINUTES, RAG, make_minutes_llm
+from shared.llm import LLMConfigError
+
+KEY = {"OPENAI_API_KEY": "k" * 20}          # 클라이언트만 만들고 부르지는 않는다
 
 
 def test_초안_설정이_없으면_RAG_설정을_그대로_쓴다():
-    env = {"RAG_LLM_PROVIDER": "gemini", "RAG_LLM_MODEL": "rag-model"}
-    mapped, source = llm_env(env)
+    pytest.importorskip("openai")
+    llm, _, source = make_minutes_llm({**KEY, "RAG_LLM_PROVIDER": "openai", "RAG_LLM_MODEL": "rag-model"})
     assert source == RAG
-    assert (mapped["RAG_LLM_PROVIDER"], mapped["RAG_LLM_MODEL"]) == ("gemini", "rag-model")
+    assert (llm.name, llm.model) == ("openai", "rag-model")
 
 
 def test_초안_공급자가_있으면_공급자와_모델을_한_묶음으로_쓴다():
-    env = {"RAG_LLM_PROVIDER": "gemini", "RAG_LLM_MODEL": "rag-model", "MINUTES_LLM_PROVIDER": "openai"}
-    mapped, source = llm_env(env)
+    pytest.importorskip("openai")
+    env = {**KEY, "RAG_LLM_PROVIDER": "gemini", "RAG_LLM_MODEL": "rag-model", "MINUTES_LLM_PROVIDER": "openai"}
+    with pytest.raises(LLMConfigError, match="MINUTES_LLM_MODEL 이 필요함"):    # RAG 모델이 섞이지 않는다
+        make_minutes_llm(env)
+    llm, _, source = make_minutes_llm({**env, "MINUTES_LLM_MODEL": "minutes-model"})
     assert source == MINUTES
-    assert (mapped["RAG_LLM_PROVIDER"], mapped["RAG_LLM_MODEL"]) == ("openai", "")    # RAG 모델이 섞이지 않는다
+    assert (llm.name, llm.model) == ("openai", "minutes-model")
 
 
 def test_초안_모델만_있으면_설정_오류():
     with pytest.raises(LLMConfigError, match="MINUTES_LLM_PROVIDER 와 함께"):
-        llm_env({"RAG_LLM_PROVIDER": "gemini", "MINUTES_LLM_MODEL": "m"})
+        make_minutes_llm({"RAG_LLM_PROVIDER": "gemini", "MINUTES_LLM_MODEL": "m"})
 
 
 def test_시간_제한은_어느_쪽이든_초안_설정을_쓴다():

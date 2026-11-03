@@ -6,6 +6,7 @@ RAG 답변(`rag/`)과 회의록 초안(`minutes/`)이 같이 쓰는 코드다. �
 |---|---|
 | `llm.py` | AI 연결. 공급자(`fake`·`gemini`·`openai`)를 바꿔 끼울 수 있게 `generate()` 하나만 둔다. 설정 이름의 앞부분은 부르는 쪽이 넘긴다 (RAG `RAG_LLM`, 회의록 초안 `MINUTES_LLM`) |
 | `llm.py` 의 `add_fallback`, `FallbackLLM` | 폴백 모델. `{앞부분}_FALLBACK_PROVIDER`·`_MODEL`(함께 넣는다)·`_COOLDOWN_S`(기본 60초). 기본 모델 호출이 실패하면(`LLMError`) 같은 입력으로 폴백을 한 번 부르고, 정한 시간 동안 기본 모델을 건너뛴다. 서버에서 AI 를 만드는 곳에서만 부른다 (평가·손 시험 도구는 폴백하지 않는다) |
+| `envfile.py` | 로컬 설정 파일 읽기. 손 시험·평가 도구만 쓴다 (서버는 환경변수만 본다). 순서는 환경변수 → 저장소 루트 `.env` → `rag/.env`(옛 위치, 옮기는 동안만 읽고 경고) |
 | `callback.py` | 처리가 끝났음을 백엔드에 알리는 완료 콜백. 허용 호스트 설정 이름(`key`)과 로그에 남길 대상 표시(`ref`)는 부르는 쪽이 넘긴다 |
 
 설정 값과 기본값은 각 기능의 README 에 있다 (`rag/README.md`, `minutes/README.md`).

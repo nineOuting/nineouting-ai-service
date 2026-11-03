@@ -1,7 +1,7 @@
 """답변 API 를 손으로 시험하는 대화형 도구. 회의록을 넣고, 처리가 끝나면 질문하고 답을 본다.
 
 서버(터미널 1):
-  set -a && . rag/.env && set +a && .venv/bin/uvicorn server.main:app --port 8000
+  set -a && . ./.env && set +a && .venv/bin/uvicorn server.main:app --port 8000
 이 도구(터미널 2):
   .venv/bin/python -m rag.try_answer                       합성 예시 회의록으로
   .venv/bin/python -m rag.try_answer --file 회의록.json     확정 회의록(formatVersion 1.0) 또는 임시 형식(summary.json v0.1)
@@ -14,7 +14,7 @@
 시험용 워크스페이스(기본 999999)에 넣고, 끝날 때 그 워크스페이스를 지운다 (--keep 이면 남김).
 실제 회의 데이터는 레포 밖에 두고 --file 로 경로만 넘긴다.
 완료 콜백은 이 도구가 127.0.0.1 의 빈 포트에서 받는다. 서버의 RAG_CALLBACK_ALLOWED_HOSTS 가 비어 있어야 한다.
---show-search 는 서버와 같은 DB(rag/.env 의 RAG_DATABASE_URL)와 같은 검색 함수로 이 도구가 직접 검색한다.
+--show-search 는 서버와 같은 DB(.env 의 RAG_DATABASE_URL)와 같은 검색 함수로 이 도구가 직접 검색한다.
 API 응답의 citations 는 답에 쓰인 조각만 담으므로, LLM 에 넘어간 조각 전체는 이걸로 본다 (임베딩 모델을 따로 불러 시작이 느리다).
 그 밖에는 파이썬 기본 라이브러리만 쓴다.
 """
@@ -82,29 +82,18 @@ def ingest(server, args, doc_id, title, minutes, callback_url):
     sys.exit(f"  {args.wait}초 안에 처리가 끝나지 않음 (서버 로그를 확인)")
 
 
-def load_env_file(path):
-    env = {}
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                env[k.strip()] = v.strip().strip('"').strip("'")
-    return env
-
-
 class Searcher:
     """서버와 같은 검색을 이 도구 안에서 한다 (--show-search). 결과는 LLM 에 넘어간 조각과 같은 순서다."""
 
     def __init__(self):
-        import os
+        from shared.envfile import local_env
 
         from .db import connect
         from .embedding import E5Embedder
 
-        url = os.environ.get("RAG_DATABASE_URL") or load_env_file(Path(__file__).parent / ".env").get("RAG_DATABASE_URL")
+        url = local_env().get("RAG_DATABASE_URL")
         if not url:
-            sys.exit("  --show-search 에는 RAG_DATABASE_URL 이 필요함 (rag/.env)")
+            sys.exit("  --show-search 에는 RAG_DATABASE_URL 이 필요함 (.env)")
         self.conn = connect(url)
         self.embedder = E5Embedder(threads=2)
 

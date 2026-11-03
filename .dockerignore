@@ -1,7 +1,7 @@
 .git
 .venv
 .vscode
-# 비밀키: 하위 폴더(rag/.env 등)까지 막는다
+# 비밀키: 루트 .env 와 하위 폴더(옛 위치 rag/.env 등)까지 막는다
 **/.env
 **/*.env
 **/.env.*

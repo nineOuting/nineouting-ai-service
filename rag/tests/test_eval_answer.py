@@ -197,7 +197,9 @@ def test_범위_밖_번호는_failed(two, tmp_path):
 
 
 def test_가짜_AI_설정이면_실제_실행을_멈춤(monkeypatch, tmp_path):
-    monkeypatch.setattr(ev, "ENV_FILE", tmp_path / "없는.env")
+    import shared.envfile
+    monkeypatch.setattr(shared.envfile, "ROOT_ENV", tmp_path / "없는.env")
+    monkeypatch.setattr(shared.envfile, "OLD_ENV", tmp_path / "없는.env")
     monkeypatch.setenv("RAG_LLM_PROVIDER", "fake")
     with pytest.raises(SystemExit, match="fake"):
         ev.real_llm()

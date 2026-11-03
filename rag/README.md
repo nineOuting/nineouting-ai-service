@@ -260,7 +260,7 @@ set -a; . rag/.env; set +a                # DB 시험을 돌리려면 (없으면
 | `RAG_LLM_MODEL` | 공급자의 모델 이름. `gemini`·`openai` 는 꼭 넣는다 (기본값 없음). 운영 값은 `gpt-5.6-luna` (회의록 초안과 같음) |
 | `RAG_ANSWER_PROMPT_VERSION` | 답변 지시문 버전 (`v1`, `v2` …). 없으면 `rag/prompts/answer/` 에서 번호가 가장 큰 파일. 없는 버전이면 답변만 503 |
 | `RAG_LLM_TIMEOUT_S` | 답변 LLM 을 기다리는 상한 (기본 30초). 넘으면 `llm_timeout`. 재시도는 하지 않는다 |
-| `RAG_LLM_FALLBACK_PROVIDER`, `RAG_LLM_FALLBACK_MODEL` | 폴백 모델. 기본 모델 호출이 실패하면(연결 실패, 시간 초과, 429, 5xx, 빈 응답) 같은 입력으로 한 번 더 부른다. **공급자와 모델은 함께 넣는다** (요약 쪽 `LLM_FALLBACK_*` 와 달리 공급자를 생략할 수 없다). 둘 다 비면 폴백 없음. 한쪽만 있거나 틀리면 답변만 503. 서버에서만 쓰고 평가·손 시험 도구는 폴백하지 않는다. 답을 받은 뒤의 판정(`no_result`, 범위 밖 번호)에는 폴백하지 않는다. 폴백이 답하면 로그에 `answered_by=… fallback=1` |
+| `RAG_LLM_FALLBACK_PROVIDER`, `RAG_LLM_FALLBACK_MODEL` | 폴백 모델. 기본 모델 호출이 실패하면(호출 오류 전부: 연결 실패, 시간 초과, 빈 응답, 429·5xx, 404·401 같은 설정 오류도. 실패마다 경고 로그가 남는다) 같은 입력으로 한 번 더 부른다. **공급자와 모델은 함께 넣는다** (요약 쪽 `LLM_FALLBACK_*` 와 달리 공급자를 생략할 수 없다). 둘 다 비면 폴백 없음. 한쪽만 있거나 틀리면 답변만 503. 서버에서만 쓰고 평가·손 시험 도구는 폴백하지 않는다. 답을 받은 뒤의 판정(`no_result`, 범위 밖 번호)에는 폴백하지 않는다. 폴백이 답하면 로그에 `answered_by=… fallback=1` |
 | `RAG_LLM_FALLBACK_COOLDOWN_S` | 기본 모델이 실패한 뒤 기본 모델을 건너뛰고 폴백만 부르는 시간 (기본 60초). 지나면 기본 모델을 다시 부른다. 폴백까지 가면 한 번의 답변이 시간 제한의 두 배(기본 약 60초)까지 걸릴 수 있다 |
 | `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`), `OPENAI_API_KEY` | 공급자 API 키. 요약 서버와 같은 이름이라 하나로 같이 쓴다. 이미지에 넣지 않고 실행할 때 비밀값으로 |
 | `RAG_DB_CONNECT_TIMEOUT_S` | 작업자가 DB 에 접속할 때 기다리는 상한 (기본 10초). 닿지 않는 주소에서 서버 종료가 늦어지지 않게 |

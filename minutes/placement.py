@@ -47,6 +47,7 @@ class Outcome:
     attempts: int                   # AI 를 부른 횟수
     input_tokens: int = 0
     output_tokens: int = 0
+    fallback_calls: int = 0         # 폴백 모델이 답한 횟수 (서버에서 폴백을 붙였을 때만 생긴다)
 
 
 @lru_cache(maxsize=None)
@@ -164,7 +165,7 @@ def ask(prompt: Prompt, make_user, check_reply, llm, timeout_s: float, max_retri
     """AI 에 묻고 답을 검사하는 반복. 배치와 표 채우기(table.py)가 같이 쓴다.
     make_user(문제 목록) → AI 입력, check_reply(읽은 JSON) → (결과, 문제 목록). 결과는 Outcome.placement 에 담긴다."""
     problems, attempts, tokens_in, tokens_out = [], 0, 0, 0
-    checks = call_failures = 0
+    checks = call_failures = fallbacks = 0
     while checks <= max_retries:
         attempts += 1
         try:
@@ -173,12 +174,13 @@ def ask(prompt: Prompt, make_user, check_reply, llm, timeout_s: float, max_retri
             call_failures += 1
             if call_failures > call_retries:
                 code = LLM_TIMEOUT if isinstance(e, LLMTimeout) else LLM_FAILED
-                return Outcome(None, code, attempts, tokens_in, tokens_out)
+                return Outcome(None, code, attempts, tokens_in, tokens_out, fallbacks)
             continue
         checks += 1
         tokens_in += reply.input_tokens or 0
         tokens_out += reply.output_tokens or 0
+        fallbacks += reply.fallback
         result, problems = check_reply(parse_reply(reply.text))
         if result is not None:
-            return Outcome(result, None, attempts, tokens_in, tokens_out)
-    return Outcome(None, CHECK_FAILED, attempts, tokens_in, tokens_out)
+            return Outcome(result, None, attempts, tokens_in, tokens_out, fallbacks)
+    return Outcome(None, CHECK_FAILED, attempts, tokens_in, tokens_out, fallbacks)

@@ -201,3 +201,39 @@ def test_다시_배치에서도_이전_줄은_모두_한_곳에_한_번씩이어
     assert check({"placements": placed, "unplaced": []}, materials, 4)[1] == ["m10가 placements에도 unplaced에도 없음"]
     ok, problems = check({"placements": placed, "unplaced": ["m10"]}, materials, 4)
     assert problems == [] and ok.unplaced == ("m10",)
+
+
+# ---- 폴백 모델 (shared/llm.py FallbackLLM, 서버에서만 붙는다)
+
+def test_형식_검사에_걸려도_폴백은_부르지_않는다(materials):
+    from shared.llm import FallbackLLM
+    primary, spare = ScriptLLM("JSON 아님", GOOD), ScriptLLM(GOOD)
+    outcome = place(ITEMS, materials, FallbackLLM(primary, spare), timeout_s=60)
+    assert outcome.error_code is None and outcome.attempts == 2 and outcome.fallback_calls == 0
+    assert spare.calls == []
+
+
+def test_기본_모델_호출이_실패하면_폴백이_답하고_횟수를_센다(materials):
+    from shared.llm import FallbackLLM
+    primary, spare = ScriptLLM(LLMTimeout("ReadTimeout")), ScriptLLM(GOOD)
+    outcome = place(ITEMS, materials, FallbackLLM(primary, spare), timeout_s=60)
+    assert outcome.error_code is None and outcome.attempts == 1 and outcome.fallback_calls == 1
+
+
+def test_폴백까지_실패하면_다시_부를_때는_폴백만_부른다(materials):
+    from shared.llm import FallbackLLM
+    primary, spare = ScriptLLM(LLMError("APIError")), ScriptLLM(LLMTimeout("ReadTimeout"), GOOD)
+    outcome = place(ITEMS, materials, FallbackLLM(primary, spare), timeout_s=60)
+    assert outcome.error_code is None and outcome.attempts == 2 and outcome.fallback_calls == 1
+    assert (len(primary.calls), len(spare.calls)) == (1, 2)          # 다시 부를 때는 기본 모델을 건너뜀
+
+
+def test_초안_로그에_폴백이_답한_횟수가_남는다(caplog):
+    import logging
+    from shared.llm import FallbackLLM
+    caplog.set_level(logging.INFO, logger="minutes")
+    make_draft(load_request(), FallbackLLM(ScriptLLM(LLMError("APIError")), ScriptLLM(GOOD)))
+    assert "초안 완료" in caplog.text and "fallback_calls=1" in caplog.text
+    caplog.clear()
+    make_draft(load_request(), ScriptLLM(GOOD))
+    assert "초안 완료" in caplog.text and "fallback_calls" not in caplog.text   # 폴백이 없으면 남기지 않는다

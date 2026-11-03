@@ -189,6 +189,8 @@ X-Request-Id: (선택)
 | `MINUTES_LLM_PROVIDER`, `MINUTES_LLM_MODEL` | 초안 AI 공급자·모델. 운영 값은 `openai`, `gpt-5.6-luna`. 넣지 않으면 RAG 답변 설정(`RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`)을 그대로 쓴다. 공급자가 기본값(`fake`)이면 초안을 만들지 못한다 | 없음 (RAG 설정) |
 | `OPENAI_API_KEY` | OpenAI API 키. RAG 답변과 같이 쓴다. 이미지에 넣지 않고 실행할 때 비밀값으로 넣는다 | 없음 |
 | `MINUTES_LLM_TIMEOUT_S` | AI 응답 시간 제한(초) | 60 |
+| `MINUTES_LLM_FALLBACK_PROVIDER`, `MINUTES_LLM_FALLBACK_MODEL` | 폴백 모델. 기본 모델 호출이 실패하면(연결 실패, 시간 초과, 429, 5xx, 빈 응답) 같은 입력으로 한 번 더 부른다. 공급자와 모델은 함께 넣는다. 넣지 않으면 RAG 폴백 설정(`RAG_LLM_FALLBACK_PROVIDER`, `RAG_LLM_FALLBACK_MODEL`)을 그대로 쓴다. 폴백까지 실패하면 지금과 같은 오류 코드로 답한다 | 없음 (RAG 설정) |
+| `MINUTES_LLM_FALLBACK_COOLDOWN_S` | 기본 모델이 실패한 뒤 폴백만 부르는 시간(초) | 60 |
 | `MINUTES_WORKER_IN_PROCESS` | `0`이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker`로 따로 띄울 때) | `1` |
 | `MINUTES_DB_POOL_MAX` | 접수 주소의 DB 연결 수 상한 | 3 |
 
@@ -622,6 +624,7 @@ AI의 결과를 검사하고, 걸리면 걸린 이유를 붙여 다시 시킨다
 | AI 응답 시간 | 한 번에 60초 | 다시 부름 |
 | AI 호출 수 | 배치 1번 + **재료가 놓인 AI 채움 표 필드마다 1번** (7.6) | |
 | 호출 실패(시간 초과·오류) 뒤 다시 부르기 | 1번. 같은 입력으로 부른다. 접수 후 콜백으로 알리는 기능이라 화면에서 기다리는 RAG 답변(다시 부르지 않음)과 다르게 둔다 | `LLM_TIMEOUT` / `LLM_FAILED` |
+| 폴백 모델 (설정했을 때) | 기본 모델 호출이 실패하면 같은 호출 안에서 폴백 모델을 1번 부른다. 그래서 AI 호출 한 번이 최대 120초(시간 제한 60초 × 2)까지 걸릴 수 있다. 기본 모델이 실패한 뒤 60초 동안은 폴백만 부르므로, 위의 다시 부르기는 폴백으로 간다 | 폴백까지 실패하면 위와 같음 |
 | 검사 실패 후 다시 시키기 | 2번. 호출 실패 뒤 다시 부르기와 따로 센다 | `CHECK_FAILED` |
 
 위 상한은 정해 둔 설계값이다. 아래는 2026-10-23에 `gemini-3.5-flash-lite`로 잰 **측정값**이며, 크기마다 한 번씩만 쟀다.

@@ -14,7 +14,7 @@ from .api import PREFIX, REQUEST_ID_HEADER, make_router
 from shared.callback import allowed_hosts_from_env
 from .db import timeout_options
 from .download import settings_from_env as upload_settings_from_env
-from shared.llm import LLMConfigError, make_llm
+from shared.llm import LLMConfigError, add_fallback, describe, make_llm
 
 log = logging.getLogger("rag.runtime")
 
@@ -49,9 +49,11 @@ class RagRuntime:
 
 
 def make_answerer(runtime, env) -> Answerer:
-    """LLM 설정이 잘못돼도 서버는 뜨게 한다 (요약까지 멈추지 않게). 그때 답변 API 만 503 이다."""
+    """LLM 설정이 잘못돼도 서버는 뜨게 한다 (요약까지 멈추지 않게). 그때 답변 API 만 503 이다.
+    폴백 모델(RAG_LLM_FALLBACK_*)은 서버에서만 붙인다. 설정이 틀리면 기본 모델 설정이 틀렸을 때와 같이 503."""
     try:
         llm, timeout_s = make_llm(env, "RAG_LLM")
+        llm = add_fallback(llm, env, "RAG_LLM")
     except LLMConfigError as e:
         log.error("답변 LLM 설정 오류: %s", e)
         return Answerer(lambda: runtime.embedder, config_error=str(e))
@@ -60,7 +62,7 @@ def make_answerer(runtime, env) -> Answerer:
     if answerer.config_error:
         log.error("답변 설정 오류: %s", answerer.config_error)
     else:
-        log.info("답변 LLM %s/%s, 지시문 %s, 시간 제한 %.0f초", llm.name, llm.model, answerer.prompt.version, timeout_s)
+        log.info("답변 LLM %s, 지시문 %s, 시간 제한 %.0f초", describe(llm), answerer.prompt.version, timeout_s)
     return answerer
 
 

@@ -56,6 +56,8 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 | `MINUTES_LLM_PROVIDER`, `MINUTES_LLM_MODEL` | 초안 AI 공급자·모델. 운영 값은 `openai`, `gpt-5.6-luna`. 공급자가 있으면 둘을 한 묶음으로 쓰고, 없으면 RAG 답변 설정(`RAG_LLM_PROVIDER`, `RAG_LLM_MODEL`)을 그대로 쓴다. 모델만 넣으면 설정 오류. 틀리면 서버는 뜨고 초안 주소만 503 (`llm_config.py`) | 없음 (RAG 설정, 그 기본값은 `fake`) |
 | `OPENAI_API_KEY` | OpenAI API 키. RAG 답변과 같이 쓴다. 이미지에 넣지 않고 실행할 때 비밀값으로 넣는다 | 없음 |
 | `MINUTES_LLM_TIMEOUT_S` | AI 응답 시간 제한(초) | 60 |
+| `MINUTES_LLM_FALLBACK_PROVIDER`, `MINUTES_LLM_FALLBACK_MODEL` | 폴백 모델. 기본 모델 호출이 실패하면(연결 실패, 시간 초과, 429, 5xx, 빈 응답) 같은 입력으로 한 번 더 부른다. **공급자와 모델은 함께 넣는다.** 둘 다 없으면 RAG 폴백 설정(`RAG_LLM_FALLBACK_*`)을 그대로 쓴다 (기본 모델을 어느 쪽에서 골랐는지와 상관없음). 폴백이 기본 모델과 같으면 폴백 없이 쓴다. 틀리면 초안 주소만 503. 서버와 따로 띄운 작업자에서만 쓰고 평가·손 시험 도구는 폴백하지 않는다. 형식 검사 실패에는 폴백하지 않는다. 폴백이 답하면 로그에 `fallback_calls=N` | 없음 (RAG 폴백 설정) |
+| `MINUTES_LLM_FALLBACK_COOLDOWN_S` | 기본 모델이 실패한 뒤 기본 모델을 건너뛰고 폴백만 부르는 시간(초). 폴백 설정을 고른 쪽 값을 쓴다 | 60 |
 | `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION`, `MINUTES_TABLE_PROMPT_VERSION` | 처음 초안·다시 배치·표 채우기 지시문 버전 (예: `v9`, `v3`, `v1`). v7·v1 은 결정 문장을 다듬던 때의 글이라 지금 코드와 맞지 않는다 (답의 글은 버린다) | 가장 큰 번호 |
 | `MINUTES_WORKER_IN_PROCESS` | `0` 이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker` 로 따로) | `1` |
 | `MINUTES_DB_POOL_MAX`, `MINUTES_DB_POOL_TIMEOUT_S` | 접수 주소의 DB 연결 수, 연결을 기다리는 초 | 3, 5 |

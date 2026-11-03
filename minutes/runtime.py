@@ -58,7 +58,7 @@ def setup(app, env) -> MinutesRuntime:
     from psycopg_pool import ConnectionPool
 
     from shared.callback import allowed_hosts_from_env
-    from shared.llm import LLMConfigError
+    from shared.llm import LLMConfigError, describe
 
     from .llm_config import make_minutes_llm
     from .placement import RELAYOUT_KIND, load_prompt
@@ -75,7 +75,7 @@ def setup(app, env) -> MinutesRuntime:
 
     llm, config_error, prompt, relayout_prompt, table_prompt = None, None, None, None, None
     try:
-        llm, _, source = make_minutes_llm(env)
+        llm, _, source = make_minutes_llm(env, fallback=True)      # 폴백 모델은 서버에서만
         prompt = load_prompt(env.get("MINUTES_PROMPT_VERSION") or None)
         relayout_prompt = load_prompt(env.get("MINUTES_RELAYOUT_PROMPT_VERSION") or None, RELAYOUT_KIND)
         table_prompt = load_prompt(env.get("MINUTES_TABLE_PROMPT_VERSION") or None, TABLE_KIND)
@@ -83,7 +83,7 @@ def setup(app, env) -> MinutesRuntime:
         llm, config_error = None, str(e)
         log.error("회의록 초안 설정 오류: %s", e)
     else:
-        log.info("회의록 초안 AI %s/%s (%s_* 설정), 지시문 %s, %s, %s", llm.name, llm.model, source, prompt.version,
+        log.info("회의록 초안 AI %s (%s_* 설정), 지시문 %s, %s, %s", describe(llm), source, prompt.version,
                  relayout_prompt.version, table_prompt.version)
 
     app.include_router(make_router(pool, allowed, env.get("MINUTES_REQUEST_ID_HEADER", REQUEST_ID_HEADER),

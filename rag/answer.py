@@ -169,6 +169,8 @@ def answer(connection: Callable[[], ContextManager], embedder, llm, workspace_id
         log.warning("답변 failed %s llm_ms=%d code=%s error=%s", tag, _ms(t1), LLM_FAILED, detail)
         return _result("failed", error_code=LLM_FAILED)
     tag += f" llm_ms={_ms(t1)} tokens_in={reply.input_tokens} tokens_out={reply.output_tokens}"
+    if reply.model:                                     # 폴백을 붙였을 때만 채워진다 (shared/llm.py FallbackLLM)
+        tag += f" answered_by={reply.model}" + (" fallback=1" if reply.fallback else "")
 
     text = (reply.text or "").strip()
     status, refs, why = judge_reply(text, len(hits))

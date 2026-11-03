@@ -80,6 +80,8 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
     outcome = place(items, materials, llm, timeout_s, max_retries, prompt, call_retries)
     tag += (f" prompt={prompt.version} attempts={outcome.attempts}"
             f" in_tokens={outcome.input_tokens} out_tokens={outcome.output_tokens}")
+    if outcome.fallback_calls:                              # 폴백 모델이 답한 횟수. 폴백이 없으면 남기지 않는다
+        tag += f" fallback_calls={outcome.fallback_calls}"
     if outcome.placement is None:
         log.warning("초안 실패 %s error=%s ms=%d", tag, outcome.error_code, _ms(t0))
         return failed(request_id, outcome.error_code, MESSAGES[outcome.error_code])
@@ -88,21 +90,22 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
     placement = Placement(sections={ref: ai_fields[i] for ref, i in placement.sections.items()},
                           unplaced=placement.unplaced)
     table_prompt = table_prompt or load_prompt(kind=TABLE_KIND)
-    tables, calls, tokens_in, tokens_out = {}, 0, 0, 0
+    tables, calls, tokens_in, tokens_out, fallbacks = {}, 0, 0, 0, 0
     for i, ms in enumerate(group(len(fields), materials, placement)):
         if not (ms and fields[i].type == TABLE):            # 놓인 재료가 없는 표는 AI 를 부르지 않는다
             continue
         filled = fill(fields[i], ms, llm, timeout_s, max_retries, table_prompt, call_retries)
         calls, tokens_in, tokens_out = (calls + filled.attempts, tokens_in + filled.input_tokens,
                                         tokens_out + filled.output_tokens)
+        fallbacks += filled.fallback_calls
         if filled.placement is None:
-            tag += f" table_prompt={table_prompt.version} table_attempts={calls}"
+            tag += f" table_prompt={table_prompt.version} table_attempts={calls}" + _fallback_tag(fallbacks)
             log.warning("초안 실패 %s error=%s at=table ms=%d", tag, filled.error_code, _ms(t0))
             return failed(request_id, filled.error_code, MESSAGES[filled.error_code])
         tables[i] = filled.placement
     if tables:
         tag += (f" tables={len(tables)} table_prompt={table_prompt.version} table_attempts={calls}"
-                f" table_in_tokens={tokens_in} table_out_tokens={tokens_out}")
+                f" table_in_tokens={tokens_in} table_out_tokens={tokens_out}" + _fallback_tag(fallbacks))
     sections, unplaced = build_sections(fields, materials, placement, v07, tables)
     unplaced = not_sent + unplaced
     lost_lines = unplaced_lines(materials, placement, previous)
@@ -110,6 +113,11 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
     log.info("초안 완료 %s lines=%d unplaced=%d unplaced_lines=%d ms=%d",
              tag, lines, len(unplaced), len(lost_lines), _ms(t0))
     return succeeded(request_id, sections, unplaced, lost_lines, extra)
+
+
+def _fallback_tag(count) -> str:
+    """표 채우기에서 폴백 모델이 답한 횟수. 없으면 남기지 않는다."""
+    return f" table_fallback_calls={count}" if count else ""
 
 
 def succeeded(request_id, sections, unplaced, unplaced_lines_=(), extra=None) -> dict:

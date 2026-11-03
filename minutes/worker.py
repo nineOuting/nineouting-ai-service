@@ -133,7 +133,7 @@ def from_env(env=None, llm=None, prompt=None, relayout_prompt=None, table_prompt
                          connect_timeout_s=env.get("MINUTES_DB_CONNECT_TIMEOUT_S", 10))
     if llm is None:
         from .llm_config import make_minutes_llm
-        llm, _, _ = make_minutes_llm(env)
+        llm, _, _ = make_minutes_llm(env, fallback=True)      # 따로 띄운 작업자도 운영 경로라 폴백을 붙인다
     allowed = allowed_hosts_from_env(env, key="MINUTES_CALLBACK_ALLOWED_HOSTS")
     if allowed is None:
         log.warning("MINUTES_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")

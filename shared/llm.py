@@ -6,18 +6,29 @@
   {prefix}_TIMEOUT_S  응답을 기다리는 상한 (기본값은 부르는 쪽이 정한다). 재시도는 하지 않는다 (기다림이 길어지지 않게)
   API 키              GEMINI_API_KEY(또는 GOOGLE_API_KEY) / OPENAI_API_KEY. 요약 서버와 같은 이름
 
+폴백 모델 (서버만. add_fallback 을 부른 곳에서만 붙는다. 평가·손 시험 도구는 붙이지 않는다)
+  {prefix}_FALLBACK_PROVIDER    폴백 공급자. 모델과 함께 넣는다 (둘 다 비면 폴백 없음)
+  {prefix}_FALLBACK_MODEL       폴백 모델 이름
+  {prefix}_FALLBACK_COOLDOWN_S  기본 모델이 실패한 뒤 기본 모델을 건너뛰고 폴백만 부르는 시간 (기본 60초)
+
 모델·키·SDK 가 없으면 LLMConfigError 를 낸다. 서버는 그대로 뜨고 그 기능의 API 만 503 이다.
 공급자 SDK 의 예외는 LLMTimeout(시간 초과)·LLMError(그 밖) 로 바꿔서 던진다. 메시지에는 예외 이름만 넣는다.
 SDK: gemini 는 공용 requirements.txt 의 google-genai, openai(운영)는 shared/requirements.txt 의 openai.
 """
+import logging
 import re
-from dataclasses import dataclass
+import threading
+import time
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 PROVIDERS = ("fake", "gemini", "openai")
 DEFAULT_TIMEOUT_S = 30.0
+DEFAULT_COOLDOWN_S = 60.0
 _KEYS = {"gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"), "openai": ("OPENAI_API_KEY",)}
 _TIMEOUT_ERRORS = {"TimeoutException", "ReadTimeout", "ConnectTimeout", "APITimeoutError", "TimeoutError"}
+
+log = logging.getLogger("shared.llm")
 
 
 class LLMError(Exception):
@@ -37,6 +48,8 @@ class Reply:
     text: str
     input_tokens: int | None = None
     output_tokens: int | None = None          # 답 토큰. 추론 토큰이 따로 있으면 더한 값 (출력 요금 기준)
+    model: str | None = None                  # 실제로 답한 "공급자/모델". 폴백을 붙였을 때만 채운다
+    fallback: bool = False                    # 폴백 모델이 답했으면 True
 
 
 class LLM(Protocol):
@@ -139,17 +152,97 @@ def make_llm(env, prefix: str, timeout_key: str | None = None,
         raise LLMConfigError(f"{timeout_key} 는 숫자여야 함") from None
     if timeout_s <= 0:
         raise LLMConfigError(f"{timeout_key} 는 0보다 커야 함")
-    if provider == "fake":
-        return FakeLLM(), timeout_s
-
     model = (env.get(f"{prefix}_MODEL") or "").strip()
-    if not model:
+    if provider != "fake" and not model:
         raise LLMConfigError(f"{prefix}_PROVIDER={provider} 에는 {prefix}_MODEL 이 필요함")
+    return _build(provider, model, env), timeout_s
+
+
+def _build(provider, model, env) -> LLM:
+    """공급자·모델로 LLM 을 만든다 (이름 검사는 부르는 쪽이 한다). 키·SDK 가 없으면 LLMConfigError."""
+    if provider == "fake":
+        return FakeLLM()
     key = next((env[k] for k in _KEYS[provider] if env.get(k)), None)
     if not key:
         raise LLMConfigError(f"API 키가 없음 ({' 또는 '.join(_KEYS[provider])})")
     cls, package = (GeminiLLM, "google-genai") if provider == "gemini" else (OpenAILLM, "openai")
     try:
-        return cls(model, key), timeout_s
+        return cls(model, key)
     except ImportError:
         raise LLMConfigError(f"{provider} SDK({package}) 가 설치되지 않음") from None
+
+
+def label(llm) -> str:
+    """로그에 쓰는 "공급자/모델"."""
+    return f"{llm.name}/{llm.model}"
+
+
+class FallbackLLM:
+    """기본 모델 호출이 실패(LLMError: 연결 실패·시간 초과·429·5xx·빈 응답)하면 같은 입력으로 폴백 모델을 한 번 부른다.
+    기본 모델이 실패하면 cooldown_s 동안은 기본 모델을 건너뛰고 폴백만 부른다 (장애 중에 요청마다 시간 제한을 기다리지 않게).
+    그 시간이 지나면 기본 모델을 다시 부른다. 폴백도 실패하면 폴백의 예외를 그대로 던진다.
+    답을 받은 뒤의 검사 실패(근거 번호, 회의록 형식)는 호출이 성공한 것이라 폴백하지 않는다.
+    답변 API 는 여러 스레드에서 부르므로 건너뛰는 시각은 잠금 안에서 읽고 쓴다. 로그에는 모델 이름과 예외 이름만 남긴다."""
+
+    def __init__(self, primary: LLM, fallback: LLM, cooldown_s: float = DEFAULT_COOLDOWN_S, clock=time.monotonic):
+        self.primary, self.fallback, self.cooldown_s, self._clock = primary, fallback, cooldown_s, clock
+        self.name, self.model = primary.name, primary.model      # 설정상 기본 모델. 실제로 답한 모델은 Reply.model
+        self._down_until = None                                  # 이 시각까지 기본 모델을 건너뛴다. None 이면 정상
+        self._lock = threading.Lock()
+
+    def generate(self, system, user, timeout_s):
+        with self._lock:
+            skip = self._down_until is not None and self._clock() < self._down_until
+        if not skip:
+            try:
+                reply = self.primary.generate(system, user, timeout_s)
+            except LLMError as e:
+                with self._lock:
+                    self._down_until = self._clock() + self.cooldown_s
+                log.warning("기본 모델 실패, 폴백 모델로: primary=%s fallback=%s error=%s cooldown_s=%g",
+                            label(self.primary), label(self.fallback), e, self.cooldown_s)
+            else:
+                with self._lock:
+                    recovered, self._down_until = self._down_until is not None, None
+                if recovered:
+                    log.info("기본 모델 다시 정상: primary=%s", label(self.primary))
+                return replace(reply, model=label(self.primary))
+        reply = self.fallback.generate(system, user, timeout_s)
+        return replace(reply, model=label(self.fallback), fallback=True)
+
+
+def add_fallback(llm: LLM, env, prefix: str) -> LLM:
+    """{prefix}_FALLBACK_PROVIDER·{prefix}_FALLBACK_MODEL 이 있으면 llm 을 FallbackLLM 으로 감싼다.
+    둘 다 없으면 llm 을 그대로 돌려준다. 공급자와 모델은 함께 넣는다 (한쪽만 있으면 LLMConfigError).
+    폴백이 기본 모델과 같으면 감싸지 않는다 (회의록 초안이 RAG 폴백을 따라가다 자기 기본 모델과 겹칠 수 있다).
+    서버에서만 부른다. 평가·손 시험 도구는 부르지 않으므로 설정이 있어도 폴백하지 않는다."""
+    p_key, m_key, c_key = f"{prefix}_FALLBACK_PROVIDER", f"{prefix}_FALLBACK_MODEL", f"{prefix}_FALLBACK_COOLDOWN_S"
+    provider = (env.get(p_key) or "").strip()
+    model = (env.get(m_key) or "").strip()
+    if not provider and not model:
+        return llm
+    if not provider:
+        raise LLMConfigError(f"{m_key} 는 {p_key} 와 함께 넣어야 함")
+    if provider not in PROVIDERS:
+        raise LLMConfigError(f"지원하지 않는 {p_key}: {provider} (가능: {', '.join(PROVIDERS)})")
+    if provider != "fake" and not model:
+        raise LLMConfigError(f"{p_key}={provider} 에는 {m_key} 이 필요함")
+    raw = env.get(c_key, DEFAULT_COOLDOWN_S)
+    try:
+        cooldown_s = float(raw)
+    except (TypeError, ValueError):
+        raise LLMConfigError(f"{c_key} 는 숫자여야 함") from None
+    if cooldown_s < 0:
+        raise LLMConfigError(f"{c_key} 는 0 이상이어야 함")
+    fallback = _build(provider, model, env)
+    if label(fallback) == label(llm):
+        log.info("폴백 모델이 기본 모델과 같아 폴백 없이 씀: %s (%s_*)", label(llm), f"{prefix}_FALLBACK")
+        return llm
+    return FallbackLLM(llm, fallback, cooldown_s)
+
+
+def describe(llm: LLM) -> str:
+    """시작 로그용. 폴백이 있으면 "openai/a, 폴백 openai/b (건너뛰기 60초)"."""
+    if isinstance(llm, FallbackLLM):
+        return f"{label(llm.primary)}, 폴백 {label(llm.fallback)} (건너뛰기 {llm.cooldown_s:g}초)"
+    return label(llm)

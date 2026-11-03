@@ -214,7 +214,7 @@ class FallbackLLM:
 def add_fallback(llm: LLM, env, prefix: str) -> LLM:
     """{prefix}_FALLBACK_PROVIDER·{prefix}_FALLBACK_MODEL 이 있으면 llm 을 FallbackLLM 으로 감싼다.
     둘 다 없으면 llm 을 그대로 돌려준다. 공급자와 모델은 함께 넣는다 (한쪽만 있으면 LLMConfigError).
-    폴백이 기본 모델과 같으면 감싸지 않는다 (회의록 초안이 RAG 폴백을 따라가다 자기 기본 모델과 겹칠 수 있다).
+    폴백이 기본 모델과 같으면 감싸지 않는다 (같은 모델을 두 번 부르지 않게).
     서버에서만 부른다. 평가·손 시험 도구는 부르지 않으므로 설정이 있어도 폴백하지 않는다."""
     p_key, m_key, c_key = f"{prefix}_FALLBACK_PROVIDER", f"{prefix}_FALLBACK_MODEL", f"{prefix}_FALLBACK_COOLDOWN_S"
     provider = (env.get(p_key) or "").strip()

@@ -1,5 +1,7 @@
 """초안 접수 주소와 런타임 시험 (시험 DB 필요). 작은 앱에 라우터만 붙인다.
 rag/tests/test_api.py 와 이름이 겹치지 않게 따로 이름을 붙였다."""
+import logging
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -111,7 +113,7 @@ def test_대기열_표가_없으면_503(conn, caplog):
 
 def test_런타임은_주소를_붙이고_작업자를_띄웠다가_멈춘다(conn):
     env = {"MINUTES_DATABASE_URL": database_url_for_tests(), "MINUTES_CALLBACK_ALLOWED_HOSTS": "minutes-service:8084",
-           "RAG_LLM_PROVIDER": "fake"}
+           "MINUTES_LLM_PROVIDER": "fake"}
     app = FastAPI()
     runtime = setup(app, env)
     runtime.start()
@@ -124,10 +126,16 @@ def test_런타임은_주소를_붙이고_작업자를_띄웠다가_멈춘다(co
     assert not runtime.thread.is_alive()
 
 
-def test_런타임은_AI_설정이_틀리면_작업자를_띄우지_않고_503(conn):
-    env = {"MINUTES_DATABASE_URL": database_url_for_tests(), "RAG_LLM_PROVIDER": "nope"}
+@pytest.mark.parametrize("llm_env, log_word", [
+    ({"MINUTES_LLM_PROVIDER": "nope"}, "지원하지 않는 MINUTES_LLM_PROVIDER"),
+    ({"RAG_LLM_PROVIDER": "fake"}, "MINUTES_LLM_PROVIDER 가 없음"),          # RAG 설정만 있으면 따르지 않는다
+])
+def test_런타임은_AI_설정이_없거나_틀리면_작업자를_띄우지_않고_503(conn, caplog, llm_env, log_word):
+    env = {"MINUTES_DATABASE_URL": database_url_for_tests(), **llm_env}
     app = FastAPI()
-    runtime = setup(app, env)
+    with caplog.at_level(logging.ERROR, logger="minutes.runtime"):
+        runtime = setup(app, env)
+    assert f"회의록 초안 설정 오류: {log_word}" in caplog.text
     runtime.start()
     try:
         assert runtime.thread is None

@@ -1,7 +1,7 @@
 """회의록 초안을 손으로 시험하는 도구. 요청 JSON 을 넣고 칸별 글을 본다. 서버는 띄우지 않는다.
 
   .venv/bin/python -m minutes.try_draft                          합성 요청, 가짜 AI
-  .venv/bin/python -m minutes.try_draft --real                   합성 요청, 실제 AI (MINUTES_LLM_* 없으면 RAG_LLM_*, 그리고 API 키)
+  .venv/bin/python -m minutes.try_draft --real                   합성 요청, 실제 AI (MINUTES_LLM_* 와 API 키)
   .venv/bin/python -m minutes.try_draft --file 요청.json --real   다른 요청 파일
   .venv/bin/python -m minutes.try_draft --real --json            결과 JSON 전체도 출력
   .venv/bin/python -m minutes.try_draft --file minutes/tests/fixtures/relayout_request.json --real
@@ -12,7 +12,7 @@
                                                                  처음 초안 → 그 줄을 새 양식으로 다시 배치 (AI 2번)
 
 가짜 AI 는 모든 재료를 첫 칸에 넣는다. 흐름이 도는지만 본다.
-실제 AI 는 RAG 답변과 같은 설정으로 연결한다 (환경변수가 있으면 그것, 없으면 저장소 루트 .env). 키 값은 출력하지 않는다.
+실제 AI 는 서버와 같은 회의록 초안 설정(MINUTES_LLM_*)으로 연결한다 (환경변수가 있으면 그것, 없으면 저장소 루트 .env). 키 값은 출력하지 않는다.
 실제 회의 데이터는 레포 밖에 두고 --file 로 경로만 넘긴다.
 """
 import argparse
@@ -70,11 +70,11 @@ def show_io(calls):
 def real_llm():
     env = local_env()
     try:
-        llm, _, source = make_minutes_llm(env)     # 시간 제한은 이 도구의 --timeout 을 쓴다
+        llm, _ = make_minutes_llm(env)             # 시간 제한은 이 도구의 --timeout 을 쓴다
     except LLMConfigError as e:
         sys.exit(f"실제 AI 설정 오류: {e}")
     if llm.name == "fake":
-        sys.exit(f"{source}_PROVIDER 가 fake 다. .env 에 gemini 나 openai 를 넣어야 실제 AI 로 돈다")
+        sys.exit("MINUTES_LLM_PROVIDER 가 fake 다. .env 에 gemini 나 openai 를 넣어야 실제 AI 로 돈다")
     return llm
 
 

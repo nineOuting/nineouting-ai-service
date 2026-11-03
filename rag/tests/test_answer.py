@@ -9,7 +9,7 @@ from _helpers import OTHER_WS, WS, doc, put
 from rag import answer as answer_mod
 from rag.answer import (NO_ANSWER, Answerer, Prompt, PromptError, answer, answer_prompt, build_prompt, load_prompt,
                         parse_refs, prompt_versions)
-from shared.llm import FakeLLM, LLMConfigError, LLMError, LLMTimeout, Reply, make_llm
+from shared.llm import FakeLLM, FallbackLLM, LLMConfigError, LLMError, LLMTimeout, Reply, make_llm
 from rag.search import Hit
 
 QUERY = "1분기 예산은 얼마로 하기로 했어?"
@@ -147,6 +147,42 @@ def test_LLM_오류는_llm_failed(two_hits):
     assert run(ScriptLLM(error=RuntimeError("감싸지 못한 예외")))["errorCode"] == "llm_failed"
 
 
+# ---- 폴백 모델 (shared/llm.py FallbackLLM) ----
+
+class NamedLLM(ScriptLLM):
+    def __init__(self, model, reply=None, error=None):
+        super().__init__(reply, error)
+        self.model = model
+
+
+def test_기본_모델이_실패하면_폴백이_답하고_로그에_실제_모델이_남음(two_hits, caplog):
+    caplog.set_level(logging.INFO, logger="rag")
+    spare = NamedLLM("spare", "답 [2].")
+    r = run(FallbackLLM(NamedLLM("main", error=LLMTimeout("APITimeoutError")), spare))
+    assert r["status"] == "answered" and [c["ref"] for c in r["citations"]] == [2]
+    assert len(spare.calls) == 1
+    assert "llm=script/main" in caplog.text and "answered_by=script/spare fallback=1" in caplog.text
+
+
+def test_기본_모델이_답하면_로그에_기본_모델이_남음(two_hits, caplog):
+    caplog.set_level(logging.INFO, logger="rag")
+    spare = NamedLLM("spare", "답 [2].")
+    assert run(FallbackLLM(NamedLLM("main", "답 [1]."), spare))["status"] == "answered"
+    assert spare.calls == [] and "answered_by=script/main" in caplog.text and "fallback=1" not in caplog.text
+
+
+@pytest.mark.parametrize("reply, status", [("답 [9].", "failed"), (NO_ANSWER, "no_result"), ("번호 없는 답.", "no_result")])
+def test_답을_받은_뒤의_판정에는_폴백하지_않음(two_hits, reply, status):
+    spare = NamedLLM("spare", "답 [1].")
+    assert run(FallbackLLM(NamedLLM("main", reply), spare))["status"] == status
+    assert spare.calls == []
+
+
+def test_둘_다_실패하면_폴백의_오류_코드(two_hits):
+    llm = FallbackLLM(NamedLLM("main", error=LLMError("RateLimitError")), NamedLLM("spare", error=LLMTimeout()))
+    assert run(llm)["errorCode"] == "llm_timeout"
+
+
 def test_가짜_LLM은_시험용_표시를_붙이고_찾은_조각을_모두_근거로(two_hits):
     r = run(FakeLLM())
     assert r["status"] == "answered" and r["answer"].startswith(FakeLLM.MARK)
@@ -182,6 +218,26 @@ def test_LLM_설정_기본값은_가짜_30초():
 def test_LLM_설정_오류(env):
     with pytest.raises(LLMConfigError):
         make_llm(env, "RAG_LLM")
+
+
+class _Runtime:
+    embedder = None
+
+
+def test_서버는_폴백_설정이_있으면_붙임():
+    from rag.runtime import make_answerer
+    pytest.importorskip("openai")
+    env = {"OPENAI_API_KEY": "k" * 20, "RAG_LLM_FALLBACK_PROVIDER": "openai", "RAG_LLM_FALLBACK_MODEL": "spare"}
+    answerer = make_answerer(_Runtime(), env)
+    assert answerer.config_error is None and isinstance(answerer.llm, FallbackLLM)
+    assert answerer.llm.fallback.model == "spare"
+
+
+def test_서버는_폴백_설정이_틀리면_답변만_503():
+    from rag.runtime import make_answerer
+    answerer = make_answerer(_Runtime(), {"RAG_LLM_FALLBACK_MODEL": "spare"})
+    assert "RAG_LLM_FALLBACK_PROVIDER 와 함께" in answerer.config_error
+    assert answerer.not_ready_reason().startswith("답변 설정 오류")
 
 
 # ---- 지시문 파일 ----

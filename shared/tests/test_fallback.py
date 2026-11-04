@@ -72,6 +72,22 @@ def test_폴백은_같은_입력과_시간_제한으로_부름():
     assert seen == [("지시문", "입력", 7.5)]
 
 
+def test_생각하는_양은_줄_때만_두_모델에_넘김():
+    seen = []
+
+    class Spy(Stub):
+        def generate(self, system, user, timeout_s, **kw):
+            seen.append(kw)
+            if self.model == "main":
+                raise LLMError("x")
+            return OK
+
+    llm = FallbackLLM(Spy("openai", "main", OK), Spy("openai", "spare", OK))
+    llm.generate("s", "u", 1, effort="low")
+    llm.generate("s", "u", 1)                    # 건너뛰는 동안이라 폴백만
+    assert seen == [{"effort": "low"}, {"effort": "low"}, {}]
+
+
 def test_건너뛰는_동안은_기본_모델을_부르지_않고_시간이_지나면_다시_부름(caplog):
     llm, primary, fallback, clock = pair([LLMError("x"), OK])
     llm.generate("s", "u", 5)

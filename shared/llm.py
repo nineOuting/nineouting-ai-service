@@ -56,7 +56,9 @@ class LLM(Protocol):
     name: str
     model: str
 
-    def generate(self, system: str, user: str, timeout_s: float) -> Reply: ...
+    def generate(self, system: str, user: str, timeout_s: float, effort: str | None = None) -> Reply: ...
+    # effort: 생각하는 양 ("low" 등). None 이면 모델 기본값. OpenAI 만 쓰고(reasoning_effort) 나머지는 무시한다.
+    # 부르는 쪽은 effort 가 있을 때만 넘긴다 (시험용 가짜 AI 가 이 인자를 몰라도 되게)
 
 
 def _wrap(e):
@@ -75,7 +77,7 @@ class FakeLLM:
     MARK = "[시험용 답변]"
     _CHUNK = re.compile(r"^\[(\d+)\] \(", re.M)        # answer.build_prompt 의 조각 머리 "[n] (제목, 위치)"
 
-    def generate(self, system, user, timeout_s):
+    def generate(self, system, user, timeout_s, effort=None):
         refs = self._CHUNK.findall(user)
         if not refs:
             return Reply("NO_ANSWER")
@@ -96,7 +98,8 @@ class GeminiLLM:
                                   http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
         self._client = client
 
-    def generate(self, system, user, timeout_s):
+    def generate(self, system, user, timeout_s, effort=None):
+        """effort 는 쓰지 않는다 (Gemini 는 생각 설정 방식이 달라 모델 기본값 그대로)."""
         from google.genai import types
         try:
             r = self._client.models.generate_content(
@@ -123,10 +126,13 @@ class OpenAILLM:
             client = OpenAI(api_key=api_key, max_retries=0)
         self._client = client
 
-    def generate(self, system, user, timeout_s):
+    def generate(self, system, user, timeout_s, effort=None):
+        """effort 가 있으면 reasoning_effort 로 넘긴다. 이 값을 받지 않는 모델이면 호출 오류(LLMError)가 된다."""
+        extra = {"reasoning_effort": effort} if effort else {}
         try:
             r = self._client.with_options(timeout=timeout_s).chat.completions.create(
-                model=self.model, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+                model=self.model, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                **extra)
         except Exception as e:
             raise _wrap(e) from None
         text = r.choices[0].message.content if r.choices else None
@@ -190,12 +196,13 @@ class FallbackLLM:
         self._down_until = None                                  # 이 시각까지 기본 모델을 건너뛴다. None 이면 정상
         self._lock = threading.Lock()
 
-    def generate(self, system, user, timeout_s):
+    def generate(self, system, user, timeout_s, effort=None):
+        extra = {"effort": effort} if effort else {}           # 받은 그대로 두 모델에 넘긴다
         with self._lock:
             skip = self._down_until is not None and self._clock() < self._down_until
         if not skip:
             try:
-                reply = self.primary.generate(system, user, timeout_s)
+                reply = self.primary.generate(system, user, timeout_s, **extra)
             except LLMError as e:
                 with self._lock:
                     self._down_until = self._clock() + self.cooldown_s
@@ -207,7 +214,7 @@ class FallbackLLM:
                 if recovered:
                     log.info("기본 모델 다시 정상: primary=%s", label(self.primary))
                 return replace(reply, model=label(self.primary))
-        reply = self.fallback.generate(system, user, timeout_s)
+        reply = self.fallback.generate(system, user, timeout_s, **extra)
         return replace(reply, model=label(self.fallback), fallback=True)
 
 

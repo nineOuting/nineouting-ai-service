@@ -34,7 +34,8 @@ DEFAULT_LLM_TIMEOUT_S = 60.0
 
 class Worker:
     def __init__(self, conn, llm, callback, timeout_s=DEFAULT_LLM_TIMEOUT_S, prompt=None, relayout_prompt=None,
-                 max_attempts=MAX_ATTEMPTS, retry_delays_s=RETRY_DELAYS_S, connect=None, table_prompt=None):
+                 max_attempts=MAX_ATTEMPTS, retry_delays_s=RETRY_DELAYS_S, connect=None, table_prompt=None,
+                 correction_prompt=None):
         """connect 를 주면 conn 이 없거나 끊겼을 때 run() 이 그것으로 다시 접속한다 (conn=None 으로 시작해도 됨)."""
         self.conn = conn
         self.llm = llm
@@ -43,6 +44,7 @@ class Worker:
         self.prompt = prompt
         self.relayout_prompt = relayout_prompt
         self.table_prompt = table_prompt
+        self.correction_prompt = correction_prompt
         self.max_attempts = max_attempts
         self.retry_delays_s = tuple(retry_delays_s)
         self._connect = connect
@@ -61,7 +63,8 @@ class Worker:
         else:
             try:
                 result = make_draft(job.payload, self.llm, timeout_s=self.timeout_s, prompt=self.prompt,
-                                    relayout_prompt=self.relayout_prompt, table_prompt=self.table_prompt)
+                                    relayout_prompt=self.relayout_prompt, table_prompt=self.table_prompt,
+                                    correction_prompt=self.correction_prompt)
             except Exception as e:                    # 일시 실패로 본다
                 if job.attempts < self.max_attempts:
                     delay = self.retry_delays_s[min(job.attempts, len(self.retry_delays_s)) - 1]
@@ -117,11 +120,12 @@ class Worker:
             self.conn = None
 
 
-def from_env(env=None, llm=None, prompt=None, relayout_prompt=None, table_prompt=None):
+def from_env(env=None, llm=None, prompt=None, relayout_prompt=None, table_prompt=None, correction_prompt=None):
     """환경변수로 작업자를 만든다. llm 을 주지 않으면 llm_config 의 설정으로 만든다 (설정이 틀리면 LLMConfigError).
     DB 에는 여기서 접속하지 않는다. run() 이 처음 돌 때 접속하고, 끊기면 다시 접속한다 (DB 가 늦게 떠도 서버는 뜬다)."""
     from functools import partial
 
+    from .correction import CORRECTION_KIND
     from .db import connect
     from .placement import RELAYOUT_KIND, load_prompt
     from .table import TABLE_KIND
@@ -140,9 +144,12 @@ def from_env(env=None, llm=None, prompt=None, relayout_prompt=None, table_prompt
     prompt = prompt or load_prompt(env.get("MINUTES_PROMPT_VERSION") or None)
     relayout_prompt = relayout_prompt or load_prompt(env.get("MINUTES_RELAYOUT_PROMPT_VERSION") or None, RELAYOUT_KIND)
     table_prompt = table_prompt or load_prompt(env.get("MINUTES_TABLE_PROMPT_VERSION") or None, TABLE_KIND)
+    correction_prompt = correction_prompt or load_prompt(env.get("MINUTES_CORRECTION_PROMPT_VERSION") or None,
+                                                         CORRECTION_KIND)
     timeout_s = float(env.get("MINUTES_LLM_TIMEOUT_S", DEFAULT_LLM_TIMEOUT_S))
     return Worker(None, llm, CallbackSender(allowed=allowed), timeout_s=timeout_s, prompt=prompt,
-                  relayout_prompt=relayout_prompt, connect=connect_db, table_prompt=table_prompt)
+                  relayout_prompt=relayout_prompt, connect=connect_db, table_prompt=table_prompt,
+                  correction_prompt=correction_prompt)
 
 
 def start_in_thread(worker, stop=None):
@@ -160,8 +167,9 @@ def main():
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
-    log.info("작업자 시작 (지시문 %s, %s, %s, 시간 제한 %.0f초)", worker.prompt.version, worker.relayout_prompt.version,
-             worker.table_prompt.version, worker.timeout_s)
+    log.info("작업자 시작 (지시문 %s, %s, %s, %s, 시간 제한 %.0f초)", worker.prompt.version,
+             worker.relayout_prompt.version, worker.table_prompt.version, worker.correction_prompt.version,
+             worker.timeout_s)
     worker.run(stop)
     log.info("작업자 멈춤")
 

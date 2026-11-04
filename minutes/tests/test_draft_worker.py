@@ -25,7 +25,7 @@ class Boom:
     """예상하지 못한 예외를 내는 AI (LLMError 가 아니라 다시 시도 대상)."""
     name = model = "boom"
 
-    def generate(self, system, user, timeout_s):
+    def generate(self, system, user, timeout_s, effort=None):
         raise RuntimeError("bug")
 
 

@@ -18,13 +18,15 @@ log = logging.getLogger("minutes.runtime")
 
 
 class MinutesRuntime:
-    def __init__(self, pool, env, llm=None, prompt=None, relayout_prompt=None, table_prompt=None):
+    def __init__(self, pool, env, llm=None, prompt=None, relayout_prompt=None, table_prompt=None,
+                 correction_prompt=None):
         self.pool = pool
         self.env = env
         self.llm = llm                          # None 이면 AI 설정 오류. 작업자를 띄우지 않는다
         self.prompt = prompt
         self.relayout_prompt = relayout_prompt
         self.table_prompt = table_prompt
+        self.correction_prompt = correction_prompt
         self.worker = None
         self.thread = None
         self.stop_event = None
@@ -39,10 +41,11 @@ class MinutesRuntime:
             return
         from .worker import from_env, start_in_thread
         self.worker = from_env(self.env, llm=self.llm, prompt=self.prompt, relayout_prompt=self.relayout_prompt,
-                               table_prompt=self.table_prompt)
+                               table_prompt=self.table_prompt, correction_prompt=self.correction_prompt)
         self.thread, self.stop_event = start_in_thread(self.worker)
-        log.info("회의록 초안 작업자 시작 (지시문 %s, %s, %s, 시간 제한 %.0f초)", self.prompt.version,
-                 self.relayout_prompt.version, self.table_prompt.version, self.worker.timeout_s)
+        log.info("회의록 초안 작업자 시작 (지시문 %s, %s, %s, %s, 시간 제한 %.0f초)", self.prompt.version,
+                 self.relayout_prompt.version, self.table_prompt.version, self.worker.correction_prompt.version,
+                 self.worker.timeout_s)
 
     def stop(self, timeout_s=90):
         """처리 중인 작업을 마칠 때까지 기다린다. AI 응답 시간 제한(기본 60초)보다 길게 둔다."""
@@ -60,6 +63,7 @@ def setup(app, env) -> MinutesRuntime:
     from shared.callback import allowed_hosts_from_env
     from shared.llm import FallbackLLM, LLMConfigError, describe
 
+    from .correction import CORRECTION_KIND
     from .llm_config import make_minutes_llm
     from .placement import RELAYOUT_KIND, load_prompt
     from .table import TABLE_KIND
@@ -73,20 +77,21 @@ def setup(app, env) -> MinutesRuntime:
     if allowed is None:
         log.warning("MINUTES_CALLBACK_ALLOWED_HOSTS 가 비어 있어 모든 콜백 주소를 허용함 (개발용)")
 
-    llm, config_error, prompt, relayout_prompt, table_prompt = None, None, None, None, None
+    llm, config_error, prompt, relayout_prompt, table_prompt, correction_prompt = None, None, None, None, None, None
     try:
         llm, _ = make_minutes_llm(env, fallback=True)              # 폴백 모델은 서버에서만
         prompt = load_prompt(env.get("MINUTES_PROMPT_VERSION") or None)
         relayout_prompt = load_prompt(env.get("MINUTES_RELAYOUT_PROMPT_VERSION") or None, RELAYOUT_KIND)
         table_prompt = load_prompt(env.get("MINUTES_TABLE_PROMPT_VERSION") or None, TABLE_KIND)
+        correction_prompt = load_prompt(env.get("MINUTES_CORRECTION_PROMPT_VERSION") or None, CORRECTION_KIND)
     except (LLMConfigError, ValueError) as e:                 # 지시문 오류(PromptError)도 ValueError
         llm, config_error = None, str(e)
         log.error("회의록 초안 설정 오류: %s", e)
     else:
-        log.info("회의록 초안 AI %s%s, 지시문 %s, %s, %s", describe(llm),
+        log.info("회의록 초안 AI %s%s, 지시문 %s, %s, %s, %s", describe(llm),
                  "" if isinstance(llm, FallbackLLM) else " (폴백 없음)", prompt.version,
-                 relayout_prompt.version, table_prompt.version)
+                 relayout_prompt.version, table_prompt.version, correction_prompt.version)
 
     app.include_router(make_router(pool, allowed, env.get("MINUTES_REQUEST_ID_HEADER", REQUEST_ID_HEADER),
                                    env.get("MINUTES_API_PREFIX", PREFIX), config_error=config_error))
-    return MinutesRuntime(pool, env, llm, prompt, relayout_prompt, table_prompt)
+    return MinutesRuntime(pool, env, llm, prompt, relayout_prompt, table_prompt, correction_prompt)

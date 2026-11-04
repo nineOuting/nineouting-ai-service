@@ -1,0 +1,302 @@
+{
+ "requestId": "0d7c3b1e-5a2f-4e8b-9c61-7f2a4d9e1b30",
+ "minutesId": 61,
+ "meetingId": 51,
+ "title": "인프라 점검 회의 (합성 시험 데이터, STT 오인식 사례)",
+ "meetingStartAt": "2026-11-02T10:00:00",
+ "attendees": [
+  {
+   "userId": 21,
+   "name": "박민수"
+  },
+  {
+   "userId": 22,
+   "name": "최지은"
+  }
+ ],
+ "template": {
+  "items": [
+   "안건별 논의",
+   "결정 사항",
+   "미결 안건",
+   "할 일"
+  ]
+ },
+ "agendas": [
+  {
+   "agendaId": 601,
+   "title": "배포 환경",
+   "decisionPoints": [
+    {
+     "decisionPointId": 61,
+     "position": 1,
+     "text": "쿠버네티스 배포 방식"
+    },
+    {
+     "decisionPointId": 64,
+     "position": 2,
+     "text": "ArgoCD 도입 여부"
+    }
+   ]
+  },
+  {
+   "agendaId": 602,
+   "title": "그라파나 모니터링",
+   "decisionPoints": [
+    {
+     "decisionPointId": 62,
+     "position": 1,
+     "text": "알림 기준"
+    },
+    {
+     "decisionPointId": 65,
+     "position": 2,
+     "text": "AWS 비용 한도"
+    }
+   ]
+  },
+  {
+   "agendaId": 603,
+   "title": "회의 운영",
+   "decisionPoints": [
+    {
+     "decisionPointId": 63,
+     "position": 1,
+     "text": "회의록 담당"
+    }
+   ]
+  }
+ ],
+ "summary": {
+  "meetingId": 51,
+  "agendas": [
+   {
+    "agendaId": 601,
+    "status": "DECIDED",
+    "statusReason": {
+     "text": "결정할 사항 1개가 모두 결정됨",
+     "evidenceSeqs": [
+      10,
+      12
+     ]
+    },
+    "decisionPoints": [
+     {
+      "decisionPointId": 61,
+      "status": "DECIDED",
+      "decisionText": "배포 설정은 저장소 하나로 관리하기로 함",
+      "evidenceSeqs": [
+       10,
+       12
+      ],
+      "edited": false,
+      "needsCheck": false
+     }
+    ],
+    "summary": [
+     {
+      "id": "s601-1",
+      "text": "「쿠버내티스」 클러스터는 지금 노드 「다섯 개」로 충분하다는 이야기가 나옴",
+      "evidenceSeqs": [
+       3,
+       4
+      ],
+      "edited": false,
+      "needsCheck": false
+     },
+     {
+      "id": "s601-2",
+      "text": "빌드는 「젠킨수」 대신 「깃헙 액선」을 쓰자는 제안이 나옴 (Jenkins 라이선스 문제)",
+      "evidenceSeqs": [
+       6,
+       7
+      ],
+      "edited": false,
+      "needsCheck": false
+     },
+     {
+      "id": "s601-3",
+      "text": "「핼름」 차트 값은 「헬름」 저장소 하나에 모으자는 이야기가 나옴",
+      "evidenceSeqs": [
+       8,
+       9
+      ],
+      "edited": false,
+      "needsCheck": false
+     }
+    ],
+    "opinions": [
+     {
+      "id": "o601-1",
+      "text": "쿠버내티스 버전을 먼저 올려야 한다는 우려",
+      "kind": "CONCERN",
+      "evidenceSeqs": [
+       14
+      ],
+      "edited": true,
+      "needsCheck": false
+     },
+     {
+      "id": "o601-2",
+      "text": "노드는 여섯 개까지 늘릴 수 있어야 한다는 의견",
+      "kind": "OPINION",
+      "evidenceSeqs": [
+       15
+      ],
+      "edited": false,
+      "needsCheck": false
+     }
+    ],
+    "todos": [
+     {
+      "id": "t601-1",
+      "task": "쿠버내티스 설정 파일 정리",
+      "assigneeName": "박민수",
+      "assigneeStatus": "MATCHED",
+      "assigneeUserId": 21,
+      "dueText": "금요일까지",
+      "evidenceSeqs": [
+       16
+      ],
+      "edited": false,
+      "needsCheck": false,
+      "unclear": false
+     },
+     {
+      "id": "t601-2",
+      "task": "깃허브 액션 배포 스크립트 작성",
+      "assigneeName": "최지은",
+      "assigneeStatus": "MATCHED",
+      "assigneeUserId": 22,
+      "dueText": "다음 주까지",
+      "evidenceSeqs": [
+       17
+      ],
+      "edited": false,
+      "needsCheck": false,
+      "unclear": false
+     }
+    ]
+   },
+   {
+    "agendaId": 602,
+    "status": "UNDECIDED",
+    "statusReason": {
+     "text": "결정할 사항 1개가 결정되지 않음",
+     "evidenceSeqs": [
+      24
+     ]
+    },
+    "decisionPoints": [
+     {
+      "decisionPointId": 62,
+      "status": "UNDECIDED",
+      "decisionText": "알림 기준은 다음 회의에서 정하기로 함",
+      "evidenceSeqs": [
+       24
+      ],
+      "edited": false,
+      "needsCheck": false
+     }
+    ],
+    "summary": [
+     {
+      "id": "s602-1",
+      "text": "지표는 프로메테우스로 모으고, 알림은 「얼러트 매니져」로 보낸다는 설명이 나옴",
+      "evidenceSeqs": [
+       20,
+       21
+      ],
+      "edited": false,
+      "needsCheck": false
+     },
+     {
+      "id": "s602-2",
+      "text": "프로메테오스 보관 기간을 늘리면 저장 비용이 커지고, 배포는 「알고 시디」로 하자는 이야기가 나옴",
+      "evidenceSeqs": [
+       22,
+       23
+      ],
+      "edited": false,
+      "needsCheck": false
+     }
+    ],
+    "opinions": [
+     {
+      "id": "o602-1",
+      "text": "얼러트 매니저 설정이 복잡하다는 우려",
+      "kind": "CONCERN",
+      "evidenceSeqs": [
+       21
+      ],
+      "edited": false,
+      "needsCheck": false
+     },
+     {
+      "id": "o602-2",
+      "text": "에이더블유에스 비용은 월 한도를 넘지 않게 해야 한다는 의견",
+      "kind": "OPINION",
+      "evidenceSeqs": [
+       26
+      ],
+      "edited": false,
+      "needsCheck": false
+     }
+    ],
+    "todos": [
+     {
+      "id": "t602-1",
+      "task": "그라파냐 대시보드 정리",
+      "assigneeName": "최지은",
+      "assigneeStatus": "MATCHED",
+      "assigneeUserId": 22,
+      "dueText": "다음 주까지",
+      "evidenceSeqs": [
+       25
+      ],
+      "edited": false,
+      "needsCheck": false,
+      "unclear": false
+     }
+    ]
+   },
+   {
+    "agendaId": 603,
+    "status": "DECIDED",
+    "statusReason": {
+     "text": "결정할 사항 1개가 모두 결정됨",
+     "evidenceSeqs": [
+      31
+     ]
+    },
+    "decisionPoints": [
+     {
+      "decisionPointId": 63,
+      "status": "DECIDED",
+      "decisionText": "회의록은 돌아가며 쓰기로 함",
+      "evidenceSeqs": [
+       31
+      ],
+      "edited": false,
+      "needsCheck": false
+     }
+    ],
+    "summary": [
+     {
+      "id": "s603-1",
+      "text": "다음 회의는 3층 회의실에서 하자는 이야기가 나옴",
+      "evidenceSeqs": [
+       30
+      ],
+      "edited": false,
+      "needsCheck": false
+     }
+    ],
+    "opinions": [],
+    "todos": []
+   }
+  ]
+ },
+ "previousLines": [],
+ "callbackUrl": "http://minutes-service:8084/internal/minutes/61/draft-result"
+}

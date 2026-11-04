@@ -127,7 +127,9 @@ def test_표는_열_개수와_행_수를_본다(case):
 
 def test_버전은_모자란_쪽이_마지막_값을_쓴다():
     assert variants_of(["v8", "v9"], ["v2"], ["v1"]) == [
-        {"placement": "v8", "relayout": "v2", "table": "v1"}, {"placement": "v9", "relayout": "v2", "table": "v1"}]
+        {"placement": "v8", "relayout": "v2", "table": "v1", "correction": None},
+        {"placement": "v9", "relayout": "v2", "table": "v1", "correction": None}]
+    assert [v["correction"] for v in variants_of(["v9"], ["v3"], ["v1"], ["v1", "v2"])] == ["v1", "v2"]
 
 
 def test_판마다_돌리고_호출과_채점을_남긴다(case, tmp_path):
@@ -136,10 +138,11 @@ def test_판마다_돌리고_호출과_채점을_남긴다(case, tmp_path):
     out = run_case(case, llm, 2, [{"placement": "v8", "relayout": "v2", "table": "v1"}], tmp_path, progress=lambda s: None)
     runs = [json.loads(line) for line in (out / "runs.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [(r["run"], r["score"]["ok"]) for r in runs] == [(1, False), (2, True)]
-    assert runs[0]["calls"][0]["kind"] == "placement" and runs[0]["calls"][0]["input_tokens"] == 100
-    assert (out / "calls.csv").read_text(encoding="utf-8").count("\n") == 3              # 머리 + 호출 2번
+    assert [c["kind"] for c in runs[0]["calls"]] == ["correction", "placement"]         # 교정을 먼저 한다
+    assert runs[0]["calls"][1]["input_tokens"] == 100
+    assert (out / "calls.csv").read_text(encoding="utf-8").count("\n") == 5              # 머리 + 판마다 교정·배치
     text = summarize(out)
-    assert "| 배치 | placement-v8 relayout-v2 table-v1 | 1/2 | 1 | 0 | 0 | 4/8 | 2 |" in text     # 기준 없음 = 묶지 않음 (결정·미결만 맞음)
+    assert "| 배치 | placement-v8 relayout-v2 table-v1 | 1/2 | 1 | 0 | 0 | 4/8 | - | 4 |" in text     # 기준 없음 = 묶지 않음 (결정·미결만 맞음)
     assert '- 배치 / placement-v8 relayout-v2 table-v1: [103, "opinion", "k3f9a1-20"] → (넣지 않음) (1번)' in text
 
 
@@ -175,3 +178,44 @@ def test_묶는_기준은_칸_고르기와_따로_세고_틀린_필드를_남긴
     text = summarize(out)
     assert "| 2/2 | 0 | 0 | 0 | 7/8 |" in text
     assert "묶기 안건별 논의 → 종류 (1번)" in text
+
+
+# ---- 오인식 교정 채점
+
+def _stt_answer(t):
+    titles = ["안건별 논의", "결정 사항", "미결 안건", "할 일"]
+    return {"placements": [{"m": m.ref, "section": titles.index(e["in"][0]) + 1}
+                           for m, e in zip(sent_materials(t["body"]), t["expect"])], "unplaced": []}
+
+
+@pytest.fixture
+def stt():
+    return load_case(CASE.parent / "eval_stt.json")["tasks"][0]
+
+
+def test_교정_채점은_바뀐_쌍과_바뀌면_안_되는_교정을_센다(stt):
+
+    right = {"fixes": [{"wrong": "쿠버내티스", "right": "쿠버네티스"}, {"wrong": "프로메테오스", "right": "프로메테우스"},
+                       {"wrong": "그라파냐", "right": "그라파나"}, {"wrong": "얼러트 매니져", "right": "얼러트 매니저"},
+                       {"wrong": "깃헙 액선", "right": "깃허브 액션"},
+                       {"wrong": "알고 시디", "right": "ArgoCD", "reading": "아르고 시디"}]}
+    result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[right]))
+    s = score(result, stt["expect"], fixes=stt["fixes"])
+    assert s["ok"] and s["fixes"] == {"want": 6, "hit": 6, "missed": [], "extra": [], "touched": 0, "ok": True}
+
+    partial = {"fixes": [{"wrong": "쿠버내티스", "right": "쿠버네티스"}, {"wrong": "회의실", "right": "회의록"}]}
+    result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[partial]))
+    x = score(result, stt["expect"], fixes=stt["fixes"])["fixes"]
+    assert (x["hit"], x["missed"], x["extra"], x["ok"]) == (1, ["프로메테오스", "그라파냐", "얼러트 매니져", "깃헙 액선", "알고 시디"], ["회의실"], False)
+    assert x["touched"] == 0                                    # 사람이 고친 의견에는 붙지 않는다
+
+
+def test_교정_사례는_정답표와_재료가_맞물린다(stt):
+    assert check_expect(sent_materials(stt["body"]), stt["expect"]) == []
+
+
+def test_낱말마다_나눠_고친_교정도_맞음으로_센다(stt):
+    split = {"fixes": [{"wrong": "깃헙", "right": "깃허브"}, {"wrong": "액선", "right": "액션"}]}
+    result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[split]))
+    x = score(result, stt["expect"], fixes=stt["fixes"])["fixes"]
+    assert x["hit"] == 1 and x["extra"] == [] and "깃헙 액선" not in x["missed"]

@@ -35,11 +35,13 @@ _MATERIAL = re.compile(r"^(m\d+) \[", re.M)
 
 
 class PlaceAllFakeLLM:
-    """시험용. 모든 재료를 1번 칸에 넣는다."""
+    """시험용. 모든 재료를 1번 칸에 넣는다. 오인식 교정에는 "찾은 것 없음"으로 답한다."""
     name = "fake"
     model = "place-all"
 
-    def generate(self, system, user, timeout_s):
+    def generate(self, system, user, timeout_s, effort=None):
+        if "<칸>" not in user:                          # 칸 목록이 없으면 교정 호출이다
+            return Reply(json.dumps({"fixes": []}), None, None)
         placements = [{"m": ref, "section": 1} for ref in _MATERIAL.findall(user)]
         return Reply(json.dumps({"placements": placements, "unplaced": []}, ensure_ascii=False), None, None)
 
@@ -51,16 +53,18 @@ class Recorder:
         self.llm, self.calls = llm, []
         self.name, self.model = llm.name, llm.model
 
-    def generate(self, system, user, timeout_s):
-        reply = self.llm.generate(system, user, timeout_s)
+    def generate(self, system, user, timeout_s, **kw):
+        reply = self.llm.generate(system, user, timeout_s, **kw)
         self.calls.append((system, user, reply))
         return reply
 
 
 def show_io(calls):
+    shown = set()
     for i, (system, user, reply) in enumerate(calls, 1):
         print(f"\n========== AI 호출 {i}번 ==========")
-        if i == 1:
+        if system not in shown:                         # 지시문은 종류마다 처음 한 번만 (교정·칸 고르기·표)
+            shown.add(system)
             print(f"--- 지시문 (system)\n{system}")
         print(f"--- 입력 (user)\n{user}")
         print(f"--- AI 답 (원래 글)\n{reply.text}")

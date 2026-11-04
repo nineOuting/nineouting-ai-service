@@ -3,6 +3,7 @@
   .venv/bin/python -m minutes.eval_draft minutes/tests/fixtures/eval_basic.json --dry-run
   .venv/bin/python -m minutes.eval_draft minutes/tests/fixtures/eval_basic.json --runs 20
   .venv/bin/python -m minutes.eval_draft 사례.json --runs 20 --prompt v8 v9 --relayout-prompt v2 v3
+  .venv/bin/python -m minutes.eval_draft minutes/tests/fixtures/eval_stt.json --runs 10 --correction-prompt v1
   .venv/bin/python -m minutes.eval_draft --summary data/eval/minutes/eval_basic-20261102-101500
 
 --dry-run 은 AI 를 부르지 않는다. 사례의 정답표가 AI 에 가는 재료와 하나씩 맞물리는지만 본다.
@@ -19,6 +20,7 @@ AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수,
                          {"text": "고객사 로고는", "in": ["할 일", "고객 요청"]}],
               "tables": [{"field": "할 일", "columns": 4, "rows": 3}],
               "grouping": {"안건별 논의": ["안건"], "할 일": ["담당자", "안건"]},
+              "fixes": {"want": [["쿠버내티스", "쿠버네티스"]], "keep": ["젠킨수"], "untouched": [[601, "opinion", "o1"]]},
               "then": {"name": "배치-다시배치", "relayoutTo": ["결정 사항", "할 일"], "expect": [...]}}]}
 
   source  요약 항목 출처 [안건 id, 종류, 항목 id 또는 결정할 사항 id]. 결과 줄의 sources 로 찾는다
@@ -28,12 +30,18 @@ AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수,
   tables  표 필드의 열 개수(columns)와 행 수(rows). null 이면 보지 않는다
   grouping  글 필드마다 맞다고 볼 묶는 기준 (명세 7.2). 줄이 들어간 필드만 센다. AI 가 기준을 주지 않은 필드는 "묶지 않음".
           칸 고르기 채점(맞음)과 따로 센다
+  fixes   오인식 교정 (명세 7.7). 칸 고르기 채점(맞음)과 따로 센다
+          want       [잘못 적힌 말, 맞는 표기]. 결과 글에 "맞는 표기(STT: 잘못 적힌 말)" 이 있으면 맞음.
+                     낱말마다 나눠 고친 모양("깃허브(STT: 깃헙) 액션(STT: 액선)")도 맞음
+          keep       바뀌면 안 되는 말. 결과 글에 "(STT: 그 말)" 이 있으면 틀림. want 에 없는 교정도 틀림으로 센다
+          untouched  교정이 붙으면 안 되는 줄의 출처 (사람이 고친 항목 등)
   then    처음 초안의 줄로 양식을 바꿔 다시 배치한다 (try_draft --relayout-to 와 같은 흐름). 처음이 실패하면 건너뛴다.
           addLines 에 줄(previousLines 모양)을 주면 이전 줄 뒤에 붙인다 (작성자가 직접 쓴 줄)
 """
 import argparse
 import csv
 import json
+import re
 import statistics
 import sys
 import time
@@ -42,6 +50,7 @@ from pathlib import Path
 
 from shared.llm import Reply
 
+from .correction import CORRECTION_KIND, read_fixes
 from .draft import make_draft
 from .materials import build_materials
 from .models import NO_GROUPING, TABLE
@@ -54,6 +63,7 @@ REPO = Path(__file__).resolve().parent.parent
 OUT_ROOT = REPO / "data" / "eval" / "minutes"
 NONE = "(넣지 않음)"
 TIMEOUT_S = 60.0                  # 운영 기본값 (MINUTES_LLM_TIMEOUT_S)
+_FIXED = re.compile(r"\(STT: ([^)]+)\)")
 
 
 # ---------- 사례 ----------
@@ -115,11 +125,11 @@ def placed(result: dict) -> list[tuple]:
 
 
 def score(result: dict, expect: list[dict], tables: list[dict] = (), grouping: dict | None = None,
-          chosen: dict | None = None) -> dict:
-    """grouping 은 사례의 필드별 정답 기준, chosen 은 AI 가 고른 필드별 기준 (필드 이름 → 기준)."""
+          chosen: dict | None = None, fixes: dict | None = None) -> dict:
+    """grouping 은 사례의 필드별 정답 기준, chosen 은 AI 가 고른 필드별 기준 (필드 이름 → 기준), fixes 는 교정 정답."""
     if result["status"] != "SUCCEEDED":
         return {"ok": False, "failed": result["error"]["code"], "wrong": None, "serious": 0, "items": {}, "tables": [],
-                "grouping": {}}
+                "grouping": {}, "fixes": None}
     where = placed(result)
     items, wrong, serious = {}, 0, 0
     for e in expect:
@@ -131,7 +141,23 @@ def score(result: dict, expect: list[dict], tables: list[dict] = (), grouping: d
     table_scores = [_score_table(result, t) for t in tables]
     ok = wrong == 0 and all(t["ok"] for t in table_scores)
     return {"ok": ok, "failed": None, "wrong": wrong, "serious": serious, "items": items, "tables": table_scores,
-            "grouping": _score_grouping(result, grouping or {}, chosen or {})}
+            "grouping": _score_grouping(result, grouping or {}, chosen or {}),
+            "fixes": _score_fixes(result, fixes) if fixes else None}
+
+
+def _score_fixes(result, want: dict) -> dict:
+    """교정 채점. hit: 바뀐 want 쌍 수, extra: want 에 없는 교정(keep 포함), touched: 교정이 붙은 untouched 줄 수."""
+    lines = [(line_key(line), line.get("sentence") or " | ".join(line.get("cells", [])))
+             for s in result["sections"] for line in s.get("evidence", [])]
+    text = "\n".join(t for _, t in lines)
+    pairs = [tuple(p) for p in want.get("want", ())]
+    hit = [w for w, r in pairs if any(form in text for form in _fixed_forms(w, r))]
+    wanted = {w for w, _ in pairs} | {wp for w, r in pairs for wp, _ in _word_pairs(w, r)}
+    extra = sorted({w for w in _FIXED.findall(text) if w not in wanted})
+    untouched = {tuple(u) for u in want.get("untouched", ())}
+    touched = sum(1 for key, t in lines if key in untouched and _FIXED.search(t))
+    return {"want": len(pairs), "hit": len(hit), "missed": [w for w, _ in pairs if w not in hit], "extra": extra,
+            "touched": touched, "ok": len(hit) == len(pairs) and not extra and not touched}
 
 
 def _score_grouping(result, want: dict, chosen: dict) -> dict:
@@ -144,6 +170,21 @@ def _score_grouping(result, want: dict, chosen: dict) -> dict:
     return out
 
 
+def _word_pairs(wrong: str, right: str) -> list[tuple[str, str]]:
+    """낱말 수가 같으면 낱말끼리 짝 (깃헙 액선 / 깃허브 액션 → 깃헙/깃허브, 액선/액션)."""
+    w, r = wrong.split(), right.split()
+    return [(a, b) for a, b in zip(w, r) if a != b] if len(w) == len(r) > 1 else []
+
+
+def _fixed_forms(wrong: str, right: str) -> list[str]:
+    """교정된 글의 모양. 통째로 바꾼 것, 또는 낱말마다 나눠 바꾼 것 (AI 가 쌍을 낱말로 나눠 내기도 한다)."""
+    forms = [f"{right}(STT: {wrong})"]
+    w, r = wrong.split(), right.split()
+    if len(w) == len(r) > 1:
+        forms.append(" ".join(b if a == b else f"{b}(STT: {a})" for a, b in zip(w, r)))
+    return forms
+
+
 def _score_table(result, want):
     sec = next((s for s in result["sections"] if s["title"] == want["field"]), None) or {}
     columns = sec.get("columns") or []
@@ -154,17 +195,17 @@ def _score_table(result, want):
 
 # ---------- 실행 ----------
 class Recorder:
-    """AI 호출을 감싸 호출마다 종류(배치·다시 배치·표)·시간·토큰·오류를 남긴다."""
+    """AI 호출을 감싸 호출마다 종류(교정·배치·다시 배치·표)·시간·토큰·오류를 남긴다."""
 
     def __init__(self, llm, kinds: dict[str, str]):
         self.llm, self.kinds, self.calls = llm, kinds, []
         self.name, self.model = llm.name, llm.model
 
-    def generate(self, system, user, timeout_s):
+    def generate(self, system, user, timeout_s, **kw):
         rec = {"kind": self.kinds.get(system, "?"), "error": ""}
         t0 = time.monotonic()
         try:
-            reply = self.llm.generate(system, user, timeout_s)
+            reply = self.llm.generate(system, user, timeout_s, **kw)
         except Exception as e:
             rec.update(ms=_ms(t0), error=type(e).__name__)
             self.calls.append(rec)
@@ -173,25 +214,30 @@ class Recorder:
         if rec["kind"] in (PROMPT_KIND, RELAYOUT_KIND):           # 칸 고르기 답의 묶는 기준 (칸 번호 → 기준 이름뿐)
             data = parse_reply(reply.text)
             rec["grouping"] = data.get("grouping") if isinstance(data, dict) else None
+        if rec["kind"] == CORRECTION_KIND:                       # 교정 답의 쌍 (검사 전). 놓친 교정이 AI 탓인지 검사 탓인지 본다
+            rec["fixes"] = read_fixes(parse_reply(reply.text))[0]
         self.calls.append(rec)
         return reply
 
 
-def variants_of(placement: list[str], relayout: list[str], table: list[str]) -> list[dict]:
-    n = max(len(placement), len(relayout), len(table))
+def variants_of(placement: list[str], relayout: list[str], table: list[str], correction: list[str] = (None,)) -> list[dict]:
+    n = max(len(placement), len(relayout), len(table), len(correction))
     pick = lambda vs, i: vs[min(i, len(vs) - 1)]                                     # noqa: E731
-    return [{"placement": pick(placement, i), "relayout": pick(relayout, i), "table": pick(table, i)} for i in range(n)]
+    return [{"placement": pick(placement, i), "relayout": pick(relayout, i), "table": pick(table, i),
+             "correction": pick(correction, i)} for i in range(n)]
 
 
 def label(v: dict) -> str:
-    return f"placement-{v['placement']} relayout-{v['relayout']} table-{v['table']}"
+    tail = f" correction-{v['correction']}" if v.get("correction") else ""
+    return f"placement-{v['placement']} relayout-{v['relayout']} table-{v['table']}{tail}"
 
 
 def run_case(case: dict, llm, runs: int, variants: list[dict], out_dir: Path, timeout_s: float = TIMEOUT_S,
              progress=print) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     loaded = [{"placement": load_prompt(v["placement"]), "relayout": load_prompt(v["relayout"], RELAYOUT_KIND),
-               "table": load_prompt(v["table"], TABLE_KIND)} for v in variants]
+               "table": load_prompt(v["table"], TABLE_KIND),
+               "correction": load_prompt(v.get("correction"), CORRECTION_KIND)} for v in variants]
     kinds = {p.text: kind for prompts in loaded for kind, p in prompts.items()}
     rec = Recorder(llm, kinds)
     meta = {"about": case.get("about"), "model": f"{llm.name}/{llm.model}", "runs": runs,
@@ -213,7 +259,8 @@ def run_case(case: dict, llm, runs: int, variants: list[dict], out_dir: Path, ti
 
 
 def _run_task(task, rec, prompts, variant, n, timeout_s, writer, runs_out):
-    kw = {"prompt": prompts["placement"], "relayout_prompt": prompts["relayout"], "table_prompt": prompts["table"]}
+    kw = {"prompt": prompts["placement"], "relayout_prompt": prompts["relayout"], "table_prompt": prompts["table"],
+          "correction_prompt": prompts["correction"]}
     first = _one(task["name"], task["body"], task, rec, kw, variant, n, timeout_s, writer, runs_out)
     then = task.get("then")
     if then and first["status"] == "SUCCEEDED":
@@ -233,7 +280,8 @@ def _one(name, body, spec, rec, kw, variant, n, timeout_s, writer, runs_out):
     calls = rec.calls[start:]
     for c in calls:
         writer.writerow({"variant": variant, "task": name, "run": n, **c})
-    sc = score(result, spec["expect"], spec.get("tables", ()), spec.get("grouping"), chosen_grouping(body, calls))
+    sc = score(result, spec["expect"], spec.get("tables", ()), spec.get("grouping"), chosen_grouping(body, calls),
+               spec.get("fixes"))
     runs_out.write(json.dumps({"variant": variant, "task": name, "run": n, "ms": _ms(t0), "calls": calls,
                                "score": sc, "result": result}, ensure_ascii=False) + "\n")
     return result
@@ -258,9 +306,9 @@ def summarize(out_dir: Path) -> str:
     groups = {}
     for r in rows:
         groups.setdefault((r["task"], r["variant"]), []).append(r)
-    out = ["| 작업 | 지시문 | 맞음 | 틀린 항목 합 | 큰 실수 | 실패 | 묶기 맞음 (필드) | 호출 | 시간 중앙/최대(초) |"
-           " 토큰 입력/출력 (판당 평균) |",
-           "|---|---|---|---|---|---|---|---|---|---|"]
+    out = ["| 작업 | 지시문 | 맞음 | 틀린 항목 합 | 큰 실수 | 실패 | 묶기 맞음 (필드) | 교정 맞음 (판) | 호출 |"
+           " 시간 중앙/최대(초) | 토큰 입력/출력 (판당 평균) |",
+           "|---|---|---|---|---|---|---|---|---|---|---|"]
     misses = []
     for (task, variant), rs in groups.items():
         ok = sum(r["score"]["ok"] for r in rs)
@@ -269,11 +317,13 @@ def summarize(out_dir: Path) -> str:
         failed = sum(bool(r["score"]["failed"]) for r in rs)
         grouped = [g for r in rs for g in r["score"].get("grouping", {}).values()]
         grouping = f"{sum(g['ok'] for g in grouped)}/{len(grouped)}" if grouped else "-"
+        fixed = [r["score"]["fixes"] for r in rs if r["score"].get("fixes")]
+        fixes = f"{sum(x['ok'] for x in fixed)}/{len(fixed)}" if fixed else "-"
         calls = [c for r in rs for c in r["calls"]]
         secs = [r["ms"] / 1000 for r in rs]
         tin = sum(c.get("input_tokens") or 0 for c in calls) / len(rs)
         tout = sum(c.get("output_tokens") or 0 for c in calls) / len(rs)
-        out.append(f"| {task} | {variant} | {ok}/{len(rs)} | {wrong} | {serious} | {failed} | {grouping} | {len(calls)} |"
+        out.append(f"| {task} | {variant} | {ok}/{len(rs)} | {wrong} | {serious} | {failed} | {grouping} | {fixes} | {len(calls)} |"
                    f" {statistics.median(secs):.1f} / {max(secs):.1f} | {tin:.0f} / {tout:.0f} |")
         counts = {}
         for r in rs:
@@ -285,6 +335,13 @@ def summarize(out_dir: Path) -> str:
                 if not g["ok"]:
                     k = (f"묶기 {title}", g["got"])
                     counts[k] = counts.get(k, 0) + 1
+            x = r["score"].get("fixes")
+            for w in (x or {}).get("missed", ()):
+                counts[(f"교정 {w}", "안 바뀜")] = counts.get((f"교정 {w}", "안 바뀜"), 0) + 1
+            for w in (x or {}).get("extra", ()):
+                counts[(f"교정 {w}", "바뀌면 안 되는데 바뀜")] = counts.get((f"교정 {w}", "바뀌면 안 되는데 바뀜"), 0) + 1
+            if x and x["touched"]:
+                counts[("교정", "사람이 고친 줄에 붙음")] = counts.get(("교정", "사람이 고친 줄에 붙음"), 0) + 1
             for t in r["score"]["tables"]:
                 if not t["ok"]:
                     k = (f"표 {t['field']}", f"열 {len(t['columns'])}개 행 {t['rows']}개")
@@ -345,7 +402,7 @@ class _Fixed:
     def __init__(self, text):
         self.text = text
 
-    def generate(self, system, user, timeout_s):
+    def generate(self, system, user, timeout_s, effort=None):
         return Reply(self.text, None, None)
 
 
@@ -356,6 +413,7 @@ def main(argv=None):
     p.add_argument("--prompt", nargs="+", default=[None], help="배치 지시문 버전 (예: v8 v9). 없으면 가장 큰 번호")
     p.add_argument("--relayout-prompt", nargs="+", default=[None])
     p.add_argument("--table-prompt", nargs="+", default=[None])
+    p.add_argument("--correction-prompt", nargs="+", default=[None])
     p.add_argument("--timeout", type=float, default=TIMEOUT_S)
     p.add_argument("--dry-run", action="store_true", help="AI 없이 정답표와 재료가 맞물리는지만 본다")
     p.add_argument("--summary", type=Path, metavar="결과폴더", help="저장된 결과로 요약만 다시 낸다")
@@ -372,8 +430,9 @@ def main(argv=None):
     llm = real_llm()
     variants = [{k: _resolved(v, kind) for k, v, kind in (("placement", x["placement"], "placement"),
                                                           ("relayout", x["relayout"], RELAYOUT_KIND),
-                                                          ("table", x["table"], TABLE_KIND))}
-                for x in variants_of(args.prompt, args.relayout_prompt, args.table_prompt)]
+                                                          ("table", x["table"], TABLE_KIND),
+                                                          ("correction", x["correction"], CORRECTION_KIND))}
+                for x in variants_of(args.prompt, args.relayout_prompt, args.table_prompt, args.correction_prompt)]
     out_dir = OUT_ROOT / f"{args.case.stem}-{datetime.now():%Y%m%d-%H%M%S}"
     print(f"사례: {args.case.name} / AI: {llm.name} ({llm.model}) / {args.runs}판 / " + ", ".join(map(label, variants)),
           flush=True)

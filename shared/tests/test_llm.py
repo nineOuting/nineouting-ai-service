@@ -179,6 +179,14 @@ def test_openai_답과_토큰과_시간_제한():
     assert client.calls[0]["messages"] == [{"role": "system", "content": "시스템"}, {"role": "user", "content": "사용자"}]
 
 
+def test_openai_생각하는_양은_줄_때만_넘긴다():
+    client = FakeOpenAI(openai_reply("답"))
+    llm = OpenAILLM("gpt-test", "k", client=client)
+    llm.generate("s", "u", 1)
+    llm.generate("s", "u", 1, effort="low")
+    assert "reasoning_effort" not in client.calls[0] and client.calls[1]["reasoning_effort"] == "low"
+
+
 @pytest.mark.parametrize("error, timeout", [(APITimeoutError("느림"), True), (RuntimeError("RateLimit 흉내"), False)])
 def test_openai_예외_변환(error, timeout):
     with pytest.raises(LLMError) as e:

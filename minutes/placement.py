@@ -176,15 +176,18 @@ def place(items: list[Field | str], materials: list[Material], llm, timeout_s: f
                lambda data: check(data, materials, len(items)), llm, timeout_s, max_retries, call_retries)
 
 
-def ask(prompt: Prompt, make_user, check_reply, llm, timeout_s: float, max_retries: int, call_retries: int) -> Outcome:
-    """AI 에 묻고 답을 검사하는 반복. 배치와 표 채우기(table.py)가 같이 쓴다.
+def ask(prompt: Prompt, make_user, check_reply, llm, timeout_s: float, max_retries: int, call_retries: int,
+        effort: str | None = None) -> Outcome:
+    """AI 에 묻고 답을 검사하는 반복. 배치, 표 채우기(table.py), 오인식 교정(correction.py)이 같이 쓴다.
+    effort 는 생각하는 양 (shared/llm.py). 있을 때만 넘긴다. 배치·표 채우기는 넘기지 않는다 (모델 기본값으로 평가했음).
     make_user(문제 목록) → AI 입력, check_reply(읽은 JSON) → (결과, 문제 목록). 결과는 Outcome.placement 에 담긴다."""
+    extra = {"effort": effort} if effort else {}
     problems, attempts, tokens_in, tokens_out = [], 0, 0, 0
     checks = call_failures = fallbacks = 0
     while checks <= max_retries:
         attempts += 1
         try:
-            reply = llm.generate(prompt.text, make_user(problems), timeout_s)
+            reply = llm.generate(prompt.text, make_user(problems), timeout_s, **extra)
         except LLMError as e:                                # LLMTimeout 도 여기에 걸린다
             call_failures += 1
             if call_failures > call_retries:

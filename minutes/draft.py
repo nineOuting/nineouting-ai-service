@@ -9,7 +9,8 @@
 양식 필드 (명세 v0.7): AI 에는 AI 가 채우는 필드만 칸 목록으로 넘기고, 돌아온 칸 번호를 양식 필드 위치로 되돌린다.
 사용자가 채우는 필드·머리글·바닥글은 받은 그대로 돌려준다. v0.6 요청(template.items)은 결과도 v0.6 모양이다.
 STT 오인식 교정 (명세 7.7): 처음 초안에서 재료를 만든 뒤 칸을 고르기 전에 AI 를 한 번 더 불러 "잘못 적힌 말 → 맞는 표기" 쌍만 받고,
-  코드가 검사해 통과한 것만 재료 글에 반영한다 (correction.py). 교정이 실패해도 교정 없이 초안을 만든다. 다시 배치에서는 하지 않는다
+  코드가 검사해 통과한 것만 재료 글에 반영한다 (correction.py). 교정이 실패해도 교정 없이 초안을 만든다. 다시 배치에서는 하지 않는다.
+  correction=False 면 부르지 않는다 (배포 설정 MINUTES_CORRECTION=0)
 AI 가 채우는 표 필드 (명세 7.6): 배치 뒤 재료가 놓인 표 필드마다 AI 를 한 번 더 불러 열과 칸을 정한다 (table.py).
   표 하나라도 실패하면 초안 전체가 실패한다 (그 표만 비워 보내면 사용자가 모르고 빈 표를 받으므로)
   재료가 상한 초과  AI 를 부르지 않고 FAILED / INPUT_TOO_LONG (AI 에 넘길 재료 수. 다시 배치는 이전 줄 수)
@@ -47,7 +48,7 @@ MESSAGES = {                                    # 실패 설명. 요약·초안 
 
 def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, prompt: Prompt | None = None,
                call_retries: int = 1, relayout_prompt: Prompt | None = None, table_prompt: Prompt | None = None,
-               correction_prompt: Prompt | None = None) -> dict:
+               correction_prompt: Prompt | None = None, correction: bool = True) -> dict:
     """결과 콜백 본문(명세 3.1·3.2)을 돌려준다. 다시 배치에는 relayout_prompt, 표 채우기에는 table_prompt,
     오인식 교정에는 correction_prompt 를 쓴다 (없으면 각 종류의 가장 큰 번호)."""
     t0 = time.monotonic()
@@ -81,10 +82,13 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
         prompt = relayout_prompt or load_prompt(kind=RELAYOUT_KIND)
     else:
         prompt = prompt or load_prompt()
-        correction_prompt = correction_prompt or load_prompt(kind=CORRECTION_KIND)
-        fixed = correct(materials, body["agendas"], body["summary"], llm, timeout_s, correction_prompt, call_retries)
-        materials = fixed.materials
-        tag += _correction_tag(correction_prompt, fixed)
+        if correction:
+            correction_prompt = correction_prompt or load_prompt(kind=CORRECTION_KIND)
+            fixed = correct(materials, body["agendas"], body["summary"], llm, timeout_s, correction_prompt, call_retries)
+            materials = fixed.materials
+            tag += _correction_tag(correction_prompt, fixed)
+        else:
+            tag += " correction=off"
     outcome = place(items, materials, llm, timeout_s, max_retries, prompt, call_retries)
     tag += (f" prompt={prompt.version} attempts={outcome.attempts}"
             f" in_tokens={outcome.input_tokens} out_tokens={outcome.output_tokens}")

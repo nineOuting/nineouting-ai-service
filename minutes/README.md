@@ -61,6 +61,7 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 | `MINUTES_LLM_FALLBACK_PROVIDER`, `MINUTES_LLM_FALLBACK_MODEL` | 폴백 모델. 기본 모델 호출이 실패하면(호출 오류 전부: 연결 실패, 시간 초과, 빈 응답, 429·5xx, 404·401 같은 설정 오류도. 실패마다 경고 로그가 남는다) 같은 입력으로 한 번 더 부른다. **공급자와 모델은 함께 넣는다.** 넣지 않으면 폴백 없이 쓴다 (RAG 폴백 설정은 따르지 않는다. 시작 로그에 `(폴백 없음)`). 폴백이 기본 모델과 같으면 폴백 없이 쓴다. 틀리면 초안 주소만 503. 서버와 따로 띄운 작업자에서만 쓰고 평가·손 시험 도구는 폴백하지 않는다. 형식 검사 실패에는 폴백하지 않는다. 폴백이 답하면 로그에 `fallback_calls=N` | 없음 (폴백 없음) |
 | `MINUTES_LLM_FALLBACK_COOLDOWN_S` | 기본 모델이 실패한 뒤 기본 모델을 건너뛰고 폴백만 부르는 시간(초) | 60 |
 | `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION`, `MINUTES_TABLE_PROMPT_VERSION`, `MINUTES_CORRECTION_PROMPT_VERSION` | 처음 초안·다시 배치·표 채우기·오인식 교정 지시문 버전 (예: `v10`, `v4`, `v1`, `v1`). v7·v1 은 결정 문장을 다듬던 때의 글이라 지금 코드와 맞지 않는다 (답의 글은 버린다) | 가장 큰 번호 |
+| `MINUTES_CORRECTION` | `0` 이면 STT 오인식 교정(명세 7.7)을 하지 않는다. 초안마다 AI 호출이 1번 준다 (실제 회의에서 교정 호출이 20~30초 걸렸다, 2026-11-04 측정). 요약 단계가 오인식을 충분히 잡게 되면 끈다. `0`·`1` 말고 다른 값이면 서버는 뜨고 시작 로그에 `회의록 초안 설정 오류` 가 남고 초안 주소만 503 | `1` (켬) |
 | `MINUTES_WORKER_IN_PROCESS` | `0` 이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker` 로 따로) | `1` |
 | `MINUTES_DB_POOL_MAX`, `MINUTES_DB_POOL_TIMEOUT_S` | 접수 주소의 DB 연결 수, 연결을 기다리는 초 | 3, 5 |
 | `MINUTES_DB_STATEMENT_TIMEOUT_MS`, `MINUTES_DB_IDLE_TX_TIMEOUT_MS`, `MINUTES_DB_CONNECT_TIMEOUT_S` | DB 시간 제한 | 30000, 60000, 10 |

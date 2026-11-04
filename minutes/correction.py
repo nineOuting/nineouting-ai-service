@@ -26,6 +26,9 @@
   실패              호출 실패, 시간 초과, 읽을 수 없는 답은 다시 시키지 않고 교정 없이 간다. 교정 때문에 초안이 실패하지 않게 한다.
                     예상하지 못한 예외(코드 버그 등)도 교정만 건너뛴다 (CORRECTION_ERROR, 로그에는 예외 이름만)
 
+끄기              MINUTES_CORRECTION=0 (enabled_from_env). 요약 단계가 오인식을 충분히 잡게 되면 배포 설정만으로 끈다.
+                    없거나 1 이면 켠다. 그 밖의 값은 설정 오류다 (끄려던 값이 조용히 켜진 채 돌지 않게)
+
 다시 배치(명세 8장)에서는 하지 않는다. 이전 줄은 이미 교정된 글이거나 사람이 고친 글이다.
 AI 에 보내는 글과 쌍에는 회의 내용이 들어가므로 로그에는 개수만 남긴다 (draft.py).
 """
@@ -39,6 +42,7 @@ from .placement import Prompt, _one_line, _quote, ask, load_prompt
 
 CORRECTION_KIND = "correction"
 CORRECTION_ERROR = "CORRECTION_ERROR"
+SWITCH_KEY = "MINUTES_CORRECTION"
 log = logging.getLogger("minutes.correction")
 MIN_SIMILARITY = 0.5
 MIN_SIMILARITY_GAP = 0.6                # 글자 수가 다를 때
@@ -65,6 +69,14 @@ class Correction:
     input_tokens: int = 0
     output_tokens: int = 0
     fallback_calls: int = 0
+
+
+def enabled_from_env(env) -> bool:
+    """MINUTES_CORRECTION: 없거나 "1" 이면 켬, "0" 이면 끔. 그 밖은 ValueError (서버는 설정 오류로 초안 주소만 503)."""
+    raw = (env.get(SWITCH_KEY) or "1").strip()
+    if raw not in ("0", "1"):
+        raise ValueError(f"{SWITCH_KEY} 는 0 이나 1 이어야 함")
+    return raw == "1"
 
 
 def correct(materials: list[Material], agendas: list[dict], summary: dict, llm, timeout_s: float,

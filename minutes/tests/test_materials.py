@@ -178,3 +178,41 @@ def test_STT_불확실_표시가_있는_글도_그대로(request_body, text):
 
 def agenda(body, i=0):
     return body["summary"]["agendas"][i]
+
+
+def opinion_ids(body):
+    return [m.item_id for m in by_kind(materials_of(body), "opinion")]
+
+
+def test_요약_문장이_담은_의견은_재료에서_뺀다(request_body):
+    agenda(request_body)["opinions"][0]["evidenceSeqs"] = [38]              # 요약 문장 근거(38, 39) 안
+    assert opinion_ids(request_body) == ["k3f9a1-20"]
+
+
+def test_근거_줄이_여러_요약_문장에_나뉘어_있어도_합쳐서_본다(request_body):
+    a = agenda(request_body)
+    a["summary"].append(dict(a["summary"][0], id="s2", evidenceSeqs=[41]))
+    a["opinions"][0]["evidenceSeqs"] = [39, 41]
+    assert opinion_ids(request_body) == ["k3f9a1-20"]
+
+
+def test_근거_줄이_하나라도_요약_밖이면_남긴다(request_body):
+    agenda(request_body)["opinions"][0]["evidenceSeqs"] = [38, 41]
+    assert opinion_ids(request_body) == ["k3f9a1-7", "k3f9a1-20"]
+
+
+def test_다른_안건의_요약_문장은_보지_않는다(request_body):
+    agenda(request_body)["opinions"][0]["evidenceSeqs"] = [86]              # 안건 102 요약의 근거
+    assert opinion_ids(request_body) == ["k3f9a1-7", "k3f9a1-20"]
+
+
+def test_사람이_고친_의견과_근거_없는_의견은_남긴다(request_body):
+    o = agenda(request_body)["opinions"][0]
+    o["evidenceSeqs"], o["edited"] = [38], True
+    assert opinion_ids(request_body) == ["k3f9a1-7", "k3f9a1-20"]
+    o["evidenceSeqs"], o["edited"] = [], False
+    assert opinion_ids(request_body) == ["k3f9a1-7", "k3f9a1-20"]
+
+
+def test_요약_문장이_없는_안건의_의견은_남긴다(request_body):
+    assert "k3f9a1-20" in opinion_ids(request_body)                         # 안건 103 은 요약 문장이 없다

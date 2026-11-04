@@ -10,6 +10,10 @@
   opinion         의견 하나                            원래 글 그대로
   todo            할 일 하나                           글: {할 일} ({담당자}, {기한}[, 할 일 확인 필요])
 
+의견은 같은 안건의 요약 문장이 이미 담은 것이면 재료로 쓰지 않는다 (opinion_covered). 실제 회의 요약에서는 요약 문장이
+안건의 줄을 넓게 덮고 의견이 그 안의 한두 줄을 다시 짚어, 둘 다 넣으면 같은 말이 논의 칸에 되풀이됐다
+(2026-11-03 녹음 19분: 의견 24개 모두 근거 줄이 요약 문장 근거 안에 있었고, 개발 기간 "2주"가 3번 적힘).
+
 결정·미결 줄은 안건마다가 아니라 결정할 사항마다 만든다 (명세 v0.8). 회의 끝 요약이 결정을 사항마다 판정하고,
 한 안건 안에 결정된 사항과 미결 사항이 섞일 수 있기 때문이다. 안건의 status·statusReason 은 보지 않는다
 (statusReason 은 "3개 중 1개가 결정됨" 같은 개수 문장이다).
@@ -47,7 +51,10 @@ def build_materials(agendas: list[dict], summary: dict) -> list[Material]:
         drafts += _point_items(ai, agenda, info)
         for i, item in enumerate(agenda.get("summary") or []):
             drafts.append(_item(ai, "summary", i, item, "요약", item["text"], (("문장", item["text"]),)))
+        covered = summary_seqs(agenda)
         for i, item in enumerate(agenda.get("opinions") or []):
+            if opinion_covered(item, covered):
+                continue
             drafts.append(_item(ai, "opinion", i, item, OPINION_LABELS.get(item.get("kind"), "의견"), item["text"],
                                 (("문장", item["text"]),)))
         for i, item in enumerate(agenda.get("todos") or []):
@@ -60,6 +67,18 @@ def build_materials(agendas: list[dict], summary: dict) -> list[Material]:
         parts = (("안건", title), ("종류", fields["label"]), *fields.pop("parts"))
         materials.append(Material(ref=f"m{n}", agenda_id=agenda_id, agenda_title=title, parts=parts, **fields))
     return materials
+
+
+def summary_seqs(agenda: dict) -> set:
+    """안건 요약 문장들의 근거 줄을 합친 것."""
+    return {s for item in agenda.get("summary") or [] for s in item.get("evidenceSeqs") or ()}
+
+
+def opinion_covered(opinion: dict, covered: set) -> bool:
+    """요약 문장이 이미 담은 의견인가. 근거 줄이 모두 같은 안건 요약 문장의 근거 줄 안에 있으면 그렇다고 본다.
+    사람이 고친 의견, 근거 줄이 없는 의견은 남긴다."""
+    seqs = set(opinion.get("evidenceSeqs") or ())
+    return bool(seqs) and not opinion.get("edited") and seqs <= covered
 
 
 def todo_text(todo: dict) -> str:

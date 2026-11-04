@@ -61,7 +61,7 @@ class SumRecorder:
 
     def __call__(self, user):
         self.calls += 1
-        self.in_chars += len(asum.AGENDA_SYSTEM_PROMPT) + len(user)
+        self.in_chars += len(asum.system_prompt(PROMPT_VERSION)) + len(user)
         return asum.echo_llm(user) if self.dry else self.inner(user)
 
 
@@ -74,6 +74,7 @@ def load_keypoints(path, use_draft):
 
 
 MIN_NEW_LINES = None          # --min-new-lines: 새 줄이 이만큼 쌓여야 요약한다 (None 이면 서비스 기본값)
+PROMPT_VERSION = "v1"          # --prompt: 안건 요약 프롬프트 버전 (v1 현행, v2 맥락 교정)
 
 
 def replay(lines, batches, agendas_msg, gold, mode, provider, model, dry):
@@ -85,7 +86,7 @@ def replay(lines, batches, agendas_msg, gold, mode, provider, model, dry):
     if mode == "gold":                                      # 사람이 확정한 분류를 고정하고 분류 모델은 부르지 않는다
         cls.apply_corrections([{"seq": s, "agenda_id": a, "rev": 1} for s, a in gold.items()])
         cls.halted = "평가: 사람이 확정한 분류만 사용"
-    scfg = asum.SummarizeCfg(provider=provider, model=model, **({"min_new_lines": MIN_NEW_LINES} if MIN_NEW_LINES else {}))
+    scfg = asum.SummarizeCfg(provider=provider, model=model, prompt_version=PROMPT_VERSION, **({"min_new_lines": MIN_NEW_LINES} if MIN_NEW_LINES else {}))
     srec = SumRecorder(asum.make_llm(scfg), dry)
     summ = asum.AgendaSummarizer(cls, scfg, llm=srec, id_prefix="e")
     for b in batches:
@@ -172,11 +173,13 @@ def main():
     ap.add_argument("--paid-ok", action="store_true", help="유료 호출 허용 (기준과 비용을 확인한 뒤에만)")
     ap.add_argument("--use-draft", action="store_true", help="확정 전 핵심 내용·라벨 초안을 쓴다 (점검용)")
     ap.add_argument("--min-new-lines", type=int, help="새 줄이 이만큼 쌓이면 바로 요약 (기본은 서비스 설정). 비용을 줄이는 평가용 설정이며 결과 JSON에 기록된다. 기존 결과와 직접 비교하지 않는다")
+    ap.add_argument("--prompt", default="v1", choices=asum.PROMPT_VERSIONS, help="안건 요약 프롬프트 버전 (v1 현행, v2 맥락 교정). 결과 JSON에 기록된다")
     ap.add_argument("--out", help="결과 JSON 경로 (유료 실행은 이미 있으면 거부)")
     ap.add_argument("--grading-out", help="사람이 채점할 표(TSV) 경로. 이미 있으면 거부")
     a = ap.parse_args()
-    global MIN_NEW_LINES
+    global MIN_NEW_LINES, PROMPT_VERSION
     MIN_NEW_LINES = a.min_new_lines
+    PROMPT_VERSION = a.prompt
 
     paid = a.provider != "echo" and not a.dry_run
     if paid:
@@ -201,7 +204,7 @@ def main():
     keypoints, kp_confirmed = load_keypoints(a.keypoints, a.use_draft)
     dry = a.dry_run or a.provider == "echo"
     result = {"provider": a.provider, "model": a.model, "dryRun": dry, "labels": len(gold), "keypointsConfirmed": kp_confirmed,
-              "minNewLines": a.min_new_lines or asum.SummarizeCfg().min_new_lines, "criteria": CRITERIA, "modes": {}}
+              "minNewLines": a.min_new_lines or asum.SummarizeCfg().min_new_lines, "promptVersion": PROMPT_VERSION, "criteria": CRITERIA, "modes": {}}
     total = {"usd": 0.0, "krw": 0, "calls": 0}
     graded = {}
     for mode in modes:

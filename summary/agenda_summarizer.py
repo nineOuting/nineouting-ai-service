@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 import threading
@@ -35,7 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from meeting_summary import (SYSTEM_PROMPT, build_input, validate_items, call_llm, parse_llm_json, mmss)  # noqa: E402
+from meeting_summary import (SYSTEM_PROMPT, build_input, validate_items, call_llm, parse_llm_json, mmss, squash)  # noqa: E402
 from meeting_live_summary_v2 import echo_llm, window_range  # noqa: E402
 from agenda_classifier import _clean  # noqa: E402
 from agenda_leftover import build_leftover  # noqa: E402
@@ -59,6 +60,132 @@ AGENDA_ADDENDUM = """
 AGENDA_SYSTEM_PROMPT = SYSTEM_PROMPT.replace("\n\n출력은 JSON만.", AGENDA_ADDENDUM + "\n\n출력은 JSON만.")
 assert AGENDA_SYSTEM_PROMPT != SYSTEM_PROMPT, "시스템 프롬프트에 추가 규칙을 끼워 넣지 못함 (meeting_summary.py 버전 확인)"
 
+# ---- 프롬프트 v2: 맥락 교정 (설계: claude/summary-text-quality-design-v1.md) ----
+# v1 = 현행(받아쓰기 오류를 고쳐 쓰지 않는다), v2 = 앞뒤 줄의 맥락으로 고쳐 쓰고 정정 목록(corrections)을 함께 낸다.
+# 평가를 통과하기 전에는 SummarizeCfg 기본값이 v1이다. 공유 원문(SYSTEM_PROMPT)은 바꾸지 않고 안건 요약용 문자열에서만 바꾼다.
+PROMPT_VERSIONS = ("v1", "v2")
+
+_V2_RULES = {
+    4: '''4. 전사는 STT 원본이라 받아쓰기 오류가 있어. ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 앞뒤 줄의 맥락으로 뜻이 분명한 오류는 맞는 말로 고쳐 쓰고, 고친 말은 모두 corrections에 적어(규칙 14). 맥락으로도 뜻을 정할 수 없는 말은 짐작하지 말고 text에 쓰지 마.''',
+    5: '''5. 숫자(규칙 6)가 아니면 「」 인용을 쓰지 말고 자연스러운 문장으로 풀어 써. 인용을 쓸 때는 입력 원문과 똑같이 쓰고(⟨ ⟩ 기호는 빼) 인용 안에서는 단어를 고치지 마.''',
+    14: '''14. 받아쓰기 오류(영문 약어를 한글 발음대로 받아쓴 것, 잘못 들은 단어 등)가 앞뒤 줄의 맥락으로 분명하면 맞는 말로 고쳐 써. 고칠 때마다 corrections에 {"from": 받아쓴 말, "to": 고친 말, "line": 그 말이 있는 줄 번호}를 적고, from은 그 줄에 있는 글자 그대로 써. corrections에 적지 않고 몰래 고치지 마. 숫자, 금액, 날짜, 사람 이름은 절대 고치지 마. 일번, 이번, 삼번 같은 말은 숫자로 바꿔 쓰지 말고 「」로 원문 그대로 인용해. 맥락으로도 하나로 정할 수 없는 말은 고치지 말고 text에 쓰지 마. 그 말을 빼도 문장이 성립하면 빼고, 성립하지 않으면 그 내용은 문장으로 만들지 마(근거 줄에는 달아도 돼). 이미 맞는 단어는 고치지 마.''',
+    17: '''17. text에는 근거 줄에 없는 단어를 쓰지 마. 줄에 없는 사실, 자격증 이름, 직무명, 기술 용어를 덧붙이지 마. 단, corrections의 to에 적은 고친 말은 써도 돼.''',
+    24: '''24. 숫자 인용에 STT 불확실 글자가 들어 있으면 본문에 "STT 불확실"이라고 꼭 적어. 숫자는 뒤에 이어지는 글자까지 빼지 말고 끝까지 인용해.''',
+}
+_V2_RULE_26 = '''26. corrections는 고친 말이 없으면 빈 목록으로 줘. line은 이 전사의 줄 번호이고 그 항목의 근거 구간 안에 있어야 해.'''
+_V2_FORMAT_OLD = '"evidence": [[첫, 끝], [첫, 끝]]}]}'
+_V2_FORMAT_NEW = '"evidence": [[첫, 끝], [첫, 끝]], "corrections": [{"from": "받아쓴 말", "to": "고친 말", "line": 줄번호}]}]}'
+
+
+def _swap_rule(prompt, num, new):
+    pat = re.compile(r"(?m)^%d\. .*$" % num)
+    assert len(pat.findall(prompt)) == 1, f"규칙 {num}을 찾지 못함 (meeting_summary.py 버전 확인)"
+    return pat.sub(lambda m: new, prompt)
+
+
+def _build_v2_prompt():
+    p = AGENDA_SYSTEM_PROMPT
+    for n, t in _V2_RULES.items():
+        p = _swap_rule(p, n, t)
+    assert p.count("\n\n출력은 JSON만.") == 1 and p.count(_V2_FORMAT_OLD) == 1, "프롬프트 끝 모양이 달라짐 (meeting_summary.py 버전 확인)"
+    p = p.replace("\n\n출력은 JSON만.", "\n" + _V2_RULE_26 + "\n\n출력은 JSON만.")
+    return p.replace(_V2_FORMAT_OLD, _V2_FORMAT_NEW)
+
+
+AGENDA_SYSTEM_PROMPT_V2 = _build_v2_prompt()
+
+
+def system_prompt(version):
+    if version == "v1":
+        return AGENDA_SYSTEM_PROMPT
+    if version == "v2":
+        return AGENDA_SYSTEM_PROMPT_V2
+    raise ValueError(f"알 수 없는 프롬프트 버전: {version}")
+
+
+# ---- 정정 목록 검사 (v2 전용, validate_items 는 주기 요약도 쓰므로 고치지 않고 따로 둔다) ----
+_NUMBER_LIKE = re.compile(r"[영일이삼사오육칠팔구십백천만\d,.\s]+(원|번|명|개|시|분|초|월|일|주|년|차|회)?")
+_WARN_WORD_HEADS = ("근거 줄에 없는 단어 후보", "전사 전체에도 없는 단어 후보")
+
+
+def _number_like(s):
+    """숫자·금액·날짜처럼 보이는 말인가(고치면 안 되는 말). 아라비아 숫자가 있거나, 한글 숫자 낱말로만 이루어진 말(이번, 이십오만 원 등).
+    '사이', '오이'처럼 숫자 글자로만 된 보통 낱말도 막히지만, 안전한 쪽으로 틀리는 것이라 그대로 둔다."""
+    s = s.strip()
+    return bool(re.search(r"\d", s)) or bool(_NUMBER_LIKE.fullmatch(s))
+
+
+def _drop_corrected_warns(warns, tos):
+    """'전사에 없는 단어' 경고에서 정정 목록의 고친 말을 뺀다. 고친 말은 전사에 없는 것이 당연하다."""
+    out = []
+    for w in warns:
+        if w.startswith(_WARN_WORD_HEADS) and ": " in w:
+            head, words = w.split(": ", 1)
+            rest = [x for x in words.split(", ") if not any(t and (x.lower() in t or t in x.lower()) for t in tos)]
+            if not rest:
+                continue
+            w = head + ": " + ", ".join(rest)
+        out.append(w)
+    return out
+
+
+def check_corrections(results, kept):
+    """v2: validate_items 의 결과 [(item, errs, warns, spans)]를 받아 정정 목록(corrections)을 검사하고 같은 모양으로 돌려준다.
+    - 어긋난 정정이 있으면 그 항목은 오류(errs)로 탈락한다(기존 탈락·재요청 경로를 그대로 쓴다).
+    - 통과한 정정은 item["_corr"] 에 [{"from", "to", "seq"}]로 담는다(seq 는 전사 줄 id).
+    - 정정 목록에 있는 고친 말은 '전사에 없는 단어' 경고에서 빼고, 근거 줄의 STT 불확실 글자가 문장에 그대로 남았으면 경고를 더한다.
+    한계: 원문 단어의 존재와 숫자·금액 표현만 본다. 날짜·이름을 바꾼 것, 그럴듯하게 틀린 교정, 정정 목록에 안 적은 교정은 못 잡는다(평가에서 사람이 본다)."""
+    out = []
+    for it, errs, warns, spans in results:
+        errs, warns = list(errs), list(warns)
+        text = it.get("text") if isinstance(it.get("text"), str) else ""
+        sq_text = squash(text)
+        sq_outside = squash(re.sub(r"「.*?」", " ", text))
+        raw = it.get("corrections")
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list):
+            errs.append("corrections가 목록이 아님")
+            raw = []
+        clean, tos = [], []
+        for c in raw:
+            ok = (isinstance(c, dict) and all(isinstance(c.get(k), str) and c.get(k).strip() for k in ("from", "to"))
+                  and isinstance(c.get("line"), int) and not isinstance(c.get("line"), bool))
+            if not ok:
+                errs.append("정정 목록의 형식이 올바르지 않음(from, to는 글자, line은 정수)")
+                continue
+            f, t, n = squash(c["from"]), squash(c["to"]), c["line"]
+            if f == t:
+                errs.append(f"정정 목록의 from과 to가 같음: {c['from']}")
+            elif _number_like(c["from"]) or _number_like(c["to"]):
+                errs.append(f"숫자·금액·날짜 표현은 고칠 수 없음: {c['from']} -> {c['to']}")
+            elif not any(a <= n <= b for a, b in spans):
+                errs.append(f"정정의 줄 번호 {n}이 항목의 근거 구간 밖임")
+            elif f not in squash(kept[n - 1]["text_marked"].replace("⟨", "").replace("⟩", "")):
+                errs.append(f"정정 전 단어가 {n}번 줄에 없음: {c['from']}")
+            elif t not in sq_text:
+                errs.append(f"고친 말이 문장에 없음: {c['to']}")
+            elif len(f) >= 2 and f in sq_outside:
+                errs.append(f"정정했다는 받아쓴 말이 문장에 그대로 남아 있음: {c['from']}")
+            else:
+                clean.append({"from": c["from"], "to": c["to"], "seq": kept[n - 1]["id"]})
+                tos.append(t.lower())
+        it["_corr"] = clean
+        warns = _drop_corrected_warns(warns, tos)
+        if spans:
+            left = []
+            for a, b in spans:
+                for k in range(a, b + 1):
+                    for seg in re.findall(r"⟨(.*?)⟩", kept[k - 1]["text_marked"]):
+                        seg = squash(seg)
+                        if len(seg) >= 2 and seg in sq_outside and seg not in left:
+                            left.append(seg)
+            if left:
+                warns.append("근거 줄의 STT 불확실 글자가 문장에 그대로 있음(고치지 못한 말을 쓴 것인지 확인): " + ", ".join(left))
+        out.append((it, errs, warns, spans))
+    return out
+
+
 
 class SummarizeCfg:
     """안건 요약 설정. 값은 모두 제안이며 평가 뒤에 다시 정한다."""
@@ -71,16 +198,20 @@ class SummarizeCfg:
         self.max_sentences = 3        # 안건당 문장 수 (사람이 고친 문장이 먼저 자리를 차지)
         self.max_calls = 300          # 회의당 모델 호출 상한 (비용을 추정한 뒤 정한다)
         self.max_lines = 200          # 한 번에 모델에 주는 줄 수 (넘으면 가장 최근 줄)
+        self.prompt_version = "v1"     # v1: 현행(받아쓰기 오류를 고쳐 쓰지 않음), v2: 맥락 교정 + 정정 목록. 평가를 통과하기 전에는 v1
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError(f"알 수 없는 설정: {k}")
             setattr(self, k, v)
+        if self.prompt_version not in PROMPT_VERSIONS:
+            raise ValueError(f"알 수 없는 프롬프트 버전: {self.prompt_version}")
 
 
 def make_llm(cfg):
     if cfg.provider == "echo":
         return echo_llm
-    return lambda user: call_llm(cfg.provider, cfg.model, AGENDA_SYSTEM_PROMPT, user, task=TASK)
+    system = system_prompt(cfg.prompt_version)
+    return lambda user: call_llm(cfg.provider, cfg.model, system, user, task=TASK)
 
 
 def _h(s):
@@ -313,6 +444,8 @@ class AgendaSummarizer:
                 cur_user = user + f"\n\n[이전 출력]\n{raw}\n\n[오류]\nJSON 해석 실패({type(e).__name__}). 형식에 맞게 JSON만 다시 출력해."
                 continue
             res = validate_items(items, job["lines"])
+            if self.cfg.prompt_version == "v2":
+                res = check_corrections(res, job["lines"])      # 정정 목록 검사: 어긋나면 그 항목은 탈락
             bad = [(i, r) for i, r in enumerate(res, 1) if r[1]]
             if items and len(bad) == len(res) and attempt == 1:       # 쓸 수 있는 항목이 0개: 오류를 알려 주고 1회 더 요청
                 msg = "\n".join(f"- 항목 {i}: " + " / ".join(r[1]) for i, r in bad)
@@ -351,7 +484,7 @@ class AgendaSummarizer:
             self.serial += 1
             new_items.append({"id": f"{self.prefix}-{self.serial}", "text": it["text"], "evidence": ids,
                               "edited": False, "needs_check": False, "sig": None, "ack": frozenset(),
-                              "warns": len(warns)})            # 검증기의 경고(근거에 없는 단어 후보 등). 거르지는 않고 개수만 센다
+                              "warns": len(warns), "corrections": list(it.get("_corr", []))})            # 검증기의 경고(근거에 없는 단어 후보 등). 거르지는 않고 개수만 센다
         old_ai = [it for it in st["items"] if not it["edited"]]
         if rejected and len(new_items) < len(old_ai):
             # 이번 결과가 검증에서 탈락해 이전보다 줄었으면, 근거 줄이 아직 있는 이전 문장을 지우지 않고 둔다
@@ -829,6 +962,119 @@ def selftest():
     b = s.take_board(status_info={k: {"status": v["status"], "reason": v["reason"]} for k, v in with_pts.items()}, leftover=lf2(7, with_pts))
     assert board_of(b, "a1")["decisionPoints"] == [], "판정기가 사항을 주지 않으면 빈 배열"
     json.dumps(b)
+
+    # 17-5) 맥락 교정(프롬프트 v2): 프롬프트, 정정 목록 검사, 경고 정리, 요약기 연결 (모두 비용 0원)
+    assert SummarizeCfg().prompt_version == "v1", "평가를 통과하기 전에는 기본값이 v1이다"
+    assert system_prompt("v1") is AGENDA_SYSTEM_PROMPT and system_prompt("v2") is AGENDA_SYSTEM_PROMPT_V2
+    for bad_v in ("v9", None):
+        try:
+            SummarizeCfg(prompt_version=bad_v)
+            raise AssertionError("알 수 없는 프롬프트 버전을 받음")
+        except ValueError:
+            pass
+    try:
+        system_prompt("v9")
+        raise AssertionError("알 수 없는 프롬프트 버전을 받음")
+    except ValueError:
+        pass
+    old14 = "STT가 틀린 것 같은 단어를 네가 맞는 단어로 고쳐 쓰지 마"
+    assert old14 in AGENDA_SYSTEM_PROMPT and old14 not in AGENDA_SYSTEM_PROMPT_V2, "v1은 그대로, v2에서는 교정 금지 문구가 빠져야 함"
+    for need in ('"corrections": [{"from"', "고친 말은 모두 corrections에 적어", "그 말을 빼도 문장이 성립하면 빼고", "숫자, 금액, 날짜, 사람 이름은 절대 고치지 마",
+                 "단, corrections의 to에 적은 고친 말은 써도 돼", "26. corrections는 고친 말이 없으면"):
+        assert need in AGENDA_SYSTEM_PROMPT_V2 and need not in AGENDA_SYSTEM_PROMPT, need
+    old4 = "뜻을 네가 짐작해 고쳐 쓰지 마"
+    assert old4 in AGENDA_SYSTEM_PROMPT and old4 not in AGENDA_SYSTEM_PROMPT_V2, "v2 규칙 4에 교정 금지 문구가 남으면 규칙 14와 부딪힌다"
+    assert "앞뒤 줄의 맥락으로 뜻이 분명한 오류는 맞는 말로 고쳐 쓰고" in AGENDA_SYSTEM_PROMPT_V2
+    assert "corrections" not in AGENDA_SYSTEM_PROMPT and "corrections" not in SYSTEM_PROMPT, "현행(v1)과 공유 원문에는 정정 목록 문구가 없어야 함"
+    assert "18. 지금 주는 전사는" in AGENDA_SYSTEM_PROMPT_V2 and "25. 전사에 없는 명사나" in AGENDA_SYSTEM_PROMPT_V2 and "출력은 JSON만." in AGENDA_SYSTEM_PROMPT_V2
+    for num in (4, 5, 14, 17, 24):
+        assert len(re.findall(r"(?m)^%d\. " % num, AGENDA_SYSTEM_PROMPT_V2)) == 1, f"규칙 {num}이 하나여야 함"
+    # 시스템 프롬프트는 설정의 버전을 따른다 (모델 호출을 가짜로 바꿔 어느 프롬프트가 갔는지 본다. 끝나면 원래대로 되돌린다)
+    got_sys = []
+    real_call = globals()["call_llm"]
+
+    def spy_call(provider, model, system, user, task=None):
+        got_sys.append(system)
+        return echo_llm(user)
+    globals()["call_llm"] = spy_call
+    try:
+        make_llm(SummarizeCfg(provider="gemini", prompt_version="v2"))("u")
+        make_llm(SummarizeCfg(provider="gemini"))("u")
+    finally:
+        globals()["call_llm"] = real_call
+    assert globals()["call_llm"] is real_call, "시험용 바꿔치기를 원래대로 되돌렸다"
+    assert got_sys == [AGENDA_SYSTEM_PROMPT_V2, AGENDA_SYSTEM_PROMPT], "설정의 프롬프트 버전대로 시스템 프롬프트가 가야 함"
+
+    # 정정 목록 검사
+    kl = [ln(1, 0, "에스티티 모델을 레그로 바꾸자"), ln(2, 4000, "비용은 이십오만 원이에요")]
+    good = {"text": "STT 모델을 RAG 방식으로 바꾸자는 의견이 나옴", "topic": None, "evidence": [[1, 1]],
+            "corrections": [{"from": "에스티티", "to": "STT", "line": 1}, {"from": "레그", "to": "RAG", "line": 1}]}
+
+    def chk(item, lines=None):
+        L = lines or kl
+        return check_corrections(validate_items([item], L), L)[0]
+    r = chk(good)
+    assert not r[1], r[1]
+    assert good["_corr"] == [{"from": "에스티티", "to": "STT", "seq": 1}, {"from": "레그", "to": "RAG", "seq": 1}], good["_corr"]
+    assert not any("rag" in w.lower() for w in r[2]), "정정 목록에 있는 고친 말은 '전사에 없는 단어' 경고에서 빠져야 함"
+    kl3 = [ln(11, 0, "에스티티 모델을 바꾸자")]
+    it3 = {"text": "STT 모델을 바꾸자는 의견이 나옴", "topic": None, "evidence": [[1, 1]], "corrections": [{"from": "에스티티", "to": "STT", "line": 1}]}
+    assert not chk(it3, kl3)[1] and it3["_corr"] == [{"from": "에스티티", "to": "STT", "seq": 11}], "seq 는 줄 번호가 아니라 전사 줄 id"
+    r0 = chk(dict(good, corrections=[]))
+    assert not r0[1] and any("rag" in w.lower() for w in r0[2]), "정정 목록이 없으면 경고가 남아야 함(위 검사가 의미 있는지 확인)"
+    assert not chk({"text": "모델을 바꾸자는 의견이 나옴", "topic": None, "evidence": [[1, 1]]})[1], "corrections 칸이 없어도 된다"
+
+    def bad(corr, expect, text=None, ev=None):
+        it = dict(good, corrections=corr)
+        if text is not None:
+            it["text"] = text
+        if ev is not None:
+            it["evidence"] = ev
+        errs = chk(it)[1]
+        assert any(expect in e for e in errs), (expect, errs)
+    bad([{"from": "없는말", "to": "STT", "line": 1}], "번 줄에 없음")
+    bad([{"from": "에스티티", "to": "STT", "line": 2}], "근거 구간 밖", ev=[[1, 1]])
+    bad([{"from": "에스티티", "to": "엠엘", "line": 1}], "문장에 없음")
+    bad([{"from": "에스티티", "to": "에스티티", "line": 1}], "같음")
+    bad([{"from": "에스티티", "to": "STT", "line": 1}], "그대로 남아 있음", text="에스티티 모델을 STT로 바꾸자는 의견이 나옴")
+    bad([{"from": "에스티티", "to": "STT"}], "형식")
+    bad([{"from": "에스티티", "to": "STT", "line": True}], "형식")
+    bad([{"from": "", "to": "STT", "line": 1}], "형식")
+    bad("STT", "목록이 아님")
+    bad([{"from": "이십오만 원", "to": "삼십만 원", "line": 2}], "숫자", text="비용은 「이십오만 원」(250,000원으로 읽힘)이라는 말이 나옴", ev=[[2, 2]])
+    bad([{"from": "이번", "to": "다음", "line": 1}], "숫자")
+    bad([{"from": "에스티티", "to": "2번", "line": 1}], "숫자")
+    bad([{"from": "에스티티", "to": "3분기", "line": 1}], "숫자")
+    # 근거 줄의 STT 불확실 글자가 문장에 그대로 남으면 경고(거르지는 않는다). 고쳐 썼으면 경고가 없다
+    kl2 = [dict(ln(1, 0, "레그를 붙이자"), text_marked="⟨레그⟩를 붙이자")]
+    r = chk({"text": "레그를 붙이자는 의견이 나옴", "topic": None, "evidence": [[1, 1]]}, kl2)
+    assert not r[1] and any("그대로 있음" in w for w in r[2]), r
+    r = chk({"text": "RAG를 붙이자는 의견이 나옴", "topic": None, "evidence": [[1, 1]], "corrections": [{"from": "레그", "to": "RAG", "line": 1}]}, kl2)
+    assert not r[1] and not any("그대로 있음" in w for w in r[2]), r
+    r = chk({"text": "붙이자는 의견이 나옴", "topic": None, "evidence": [[1, 1]]}, kl2)
+    assert not r[1] and not any("그대로 있음" in w for w in r[2]), "빼서 쓰지 않은 말은 경고가 없다"
+
+    # 요약기 연결: v2는 정정 목록이 어긋나면 오류를 알려 주고 다시 부른다. 통과한 정정은 항목에 보관하되 보드에는 내지 않는다
+    seen_calls = []
+
+    def fake_corr(user):
+        seen_calls.append(user)
+        corr = [{"from": "없는말", "to": "STT", "line": 2}] if len(seen_calls) == 1 else [{"from": "에스티티", "to": "STT", "line": 2}]
+        return json.dumps({"summary": [{"text": "STT 정확도가 낮다는 의견이 나옴", "topic": None, "evidence": [[1, 2]], "corrections": corr}]}, ensure_ascii=False)
+    corr_lines = [ln(1, 0, "기밀단어 배포 일정 이야기"), ln(2, 4000, "배포 에스티티 정확도가 낮아요")]
+    c, s = fresh(sum_kw={"prompt_version": "v2"}, llm=fake_corr)
+    feed(c, corr_lines, 5000)
+    assert s.process() == 2 and "[검증 오류]" in seen_calls[1] and "번 줄에 없음" in seen_calls[1], "정정이 어긋나면 오류를 알려 주고 다시 부름"
+    item = s.ag["a1"]["items"][0]
+    assert item["corrections"] == [{"from": "에스티티", "to": "STT", "seq": 2}], item
+    b = s.take_board()
+    entry = board_of(b, "a1")["summary"][0]
+    assert entry["text"] == "STT 정확도가 낮다는 의견이 나옴" and set(entry) == {"id", "text", "evidenceSeqs", "edited", "needsCheck"}, entry
+    assert "corrections" not in json.dumps(b, ensure_ascii=False), "정정 목록은 보드에 내지 않는다"
+    seen_calls.clear()
+    c, s = fresh(llm=fake_corr)                                  # v1(기본)은 정정 목록을 검사하지도 보관하지도 않는다
+    feed(c, corr_lines, 5000)
+    assert s.process() == 1 and s.ag["a1"]["items"][0]["corrections"] == [], "v1은 정정 목록을 쓰지 않는다"
 
     # 18) 로그에는 전사, 안건 제목, 요약 문장이 남지 않는다
     logging.getLogger("ai-service").removeHandler(h)

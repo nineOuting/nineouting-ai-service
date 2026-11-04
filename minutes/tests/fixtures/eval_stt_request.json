@@ -290,6 +290,15 @@
       ],
       "edited": false,
       "needsCheck": false
+     },
+     {
+      "id": "s603-2",
+      "text": "회의 정리는 「머지 리퀘스드」에 같이 올려 두자는 이야기가 나옴",
+      "evidenceSeqs": [
+       32
+      ],
+      "edited": false,
+      "needsCheck": false
      }
     ],
     "opinions": [],

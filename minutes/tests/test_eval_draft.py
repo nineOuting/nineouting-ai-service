@@ -198,15 +198,16 @@ def test_교정_채점은_바뀐_쌍과_바뀌면_안_되는_교정을_센다(st
     right = {"fixes": [{"wrong": "쿠버내티스", "right": "쿠버네티스"}, {"wrong": "프로메테오스", "right": "프로메테우스"},
                        {"wrong": "그라파냐", "right": "그라파나"}, {"wrong": "얼러트 매니져", "right": "얼러트 매니저"},
                        {"wrong": "깃헙 액선", "right": "깃허브 액션"},
-                       {"wrong": "알고 시디", "right": "ArgoCD", "reading": "아르고 시디"}]}
+                       {"wrong": "알고 시디", "right": "ArgoCD", "reading": "아르고 시디"},
+                       {"wrong": "머지 리퀘스드", "right": "머지 리퀘스트"}]}
     result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[right]))
     s = score(result, stt["expect"], fixes=stt["fixes"])
-    assert s["ok"] and s["fixes"] == {"want": 6, "hit": 6, "missed": [], "extra": [], "touched": 0, "ok": True}
+    assert s["ok"] and s["fixes"] == {"want": 7, "hit": 7, "missed": [], "extra": [], "touched": 0, "ok": True}
 
     partial = {"fixes": [{"wrong": "쿠버내티스", "right": "쿠버네티스"}, {"wrong": "회의실", "right": "회의록"}]}
     result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[partial]))
     x = score(result, stt["expect"], fixes=stt["fixes"])["fixes"]
-    assert (x["hit"], x["missed"], x["extra"], x["ok"]) == (1, ["프로메테오스", "그라파냐", "얼러트 매니져", "깃헙 액선", "알고 시디"], ["회의실"], False)
+    assert (x["hit"], x["missed"], x["extra"], x["ok"]) == (1, ["프로메테오스", "그라파냐", "얼러트 매니져", "깃헙 액선", "알고 시디", "머지 리퀘스드"], ["회의실"], False)
     assert x["touched"] == 0                                    # 사람이 고친 의견에는 붙지 않는다
 
 
@@ -219,3 +220,9 @@ def test_낱말마다_나눠_고친_교정도_맞음으로_센다(stt):
     result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[split]))
     x = score(result, stt["expect"], fixes=stt["fixes"])["fixes"]
     assert x["hit"] == 1 and x["extra"] == [] and "깃헙 액선" not in x["missed"]
+
+
+def test_바뀌어도_되는_말은_바뀌어도_틀림으로_세지_않는다(stt):
+    guess = {"fixes": [{"wrong": "젠킨수", "right": "젠킨스"}, {"wrong": "회의실", "right": "회의록"}]}
+    result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[guess]))
+    assert score(result, stt["expect"], fixes=stt["fixes"])["fixes"]["extra"] == ["회의실"]

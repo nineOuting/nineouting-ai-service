@@ -124,6 +124,8 @@ flowchart LR
 | `LLM_FALLBACK_PROVIDER` | 폴백 모델의 공급자 (`gemini`, `anthropic`, `openai`) | 기본 모델과 같음 |
 | `LLM_FALLBACK_COOLDOWN_SEC` | 기본 모델이 실패한 뒤 이 시간 동안은 기본 모델을 건너뛰고 폴백만 부름. 끝나면 한 번 다시 시험 | 60 |
 | `LLM_TIMEOUT_SEC`, `LLM_MAX_RETRIES` | OpenAI 요청 제한 시간(초)과 SDK 자동 재시도 횟수. 안 넣으면 SDK 기본값(제한 시간 10분, 재시도 2번)이라 폴백까지 오래 걸림. 폴백을 쓰면 제한 시간 60, 재시도 1 정도를 권장 | SDK 기본값 |
+| `LLM_REASONING_EFFORT`, `LLM_REASONING_EFFORT_<작업>` | OpenAI 추론 강도(`reasoning_effort`). 안 넣으면 모델 기본값(gpt-6-luna는 medium). 작업별 값(예: `LLM_REASONING_EFFORT_AGENDA_STATUS`, 작업 이름은 대문자)이 공통 값보다 우선. 폴백 모델에는 넣지 않음. 모델이 받는 값인지 먼저 시험할 것 | 모델 기본값 |
+| `AGENDA_PARALLEL` | `1`이면 분류를 마친 직후의 안건 단계(상태 판정, 안건 요약, 의견, 할 일, 주제 변경)를 동시에 돌리고, 모두 끝난 뒤에 미결 안건과 보드를 한 번만 보냄. 단계들이 서로의 결과를 읽지 않아 결과는 같고 묶음당 처리 시간만 줄어듦. 동시에 나가는 모델 호출이 회의당 최대 5개라 API 속도 제한을 확인할 것. `0` 또는 안 넣으면 지금처럼 차례로 | `0` |
 | `WINDOW_SEC` | 요약 구간 길이(초) | 120 |
 | `REFRESH_SEC` | 구간 갱신 주기(초) | 60 |
 | `MAX_CALLS_PER_MEETING` | 회의당 모델 호출 상한 | 60 |

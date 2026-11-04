@@ -43,9 +43,9 @@ class MinutesRuntime:
         self.worker = from_env(self.env, llm=self.llm, prompt=self.prompt, relayout_prompt=self.relayout_prompt,
                                table_prompt=self.table_prompt, correction_prompt=self.correction_prompt)
         self.thread, self.stop_event = start_in_thread(self.worker)
-        log.info("회의록 초안 작업자 시작 (지시문 %s, %s, %s, %s, 시간 제한 %.0f초)", self.prompt.version,
+        log.info("회의록 초안 작업자 시작 (지시문 %s, %s, %s, %s, 오인식 교정 %s, 시간 제한 %.0f초)", self.prompt.version,
                  self.relayout_prompt.version, self.table_prompt.version, self.worker.correction_prompt.version,
-                 self.worker.timeout_s)
+                 "켬" if self.worker.correction else "끔", self.worker.timeout_s)
 
     def stop(self, timeout_s=90):
         """처리 중인 작업을 마칠 때까지 기다린다. AI 응답 시간 제한(기본 60초)보다 길게 둔다."""
@@ -63,7 +63,7 @@ def setup(app, env) -> MinutesRuntime:
     from shared.callback import allowed_hosts_from_env
     from shared.llm import FallbackLLM, LLMConfigError, describe
 
-    from .correction import CORRECTION_KIND
+    from .correction import CORRECTION_KIND, enabled_from_env
     from .llm_config import make_minutes_llm
     from .placement import RELAYOUT_KIND, load_prompt
     from .table import TABLE_KIND
@@ -84,6 +84,7 @@ def setup(app, env) -> MinutesRuntime:
         relayout_prompt = load_prompt(env.get("MINUTES_RELAYOUT_PROMPT_VERSION") or None, RELAYOUT_KIND)
         table_prompt = load_prompt(env.get("MINUTES_TABLE_PROMPT_VERSION") or None, TABLE_KIND)
         correction_prompt = load_prompt(env.get("MINUTES_CORRECTION_PROMPT_VERSION") or None, CORRECTION_KIND)
+        enabled_from_env(env)                                 # 틀린 값이면 설정 오류 (작업자는 from_env 에서 다시 읽는다)
     except (LLMConfigError, ValueError) as e:                 # 지시문 오류(PromptError)도 ValueError
         llm, config_error = None, str(e)
         log.error("회의록 초안 설정 오류: %s", e)

@@ -129,6 +129,7 @@ def test_런타임은_주소를_붙이고_작업자를_띄웠다가_멈춘다(co
 @pytest.mark.parametrize("llm_env, log_word", [
     ({"MINUTES_LLM_PROVIDER": "nope"}, "지원하지 않는 MINUTES_LLM_PROVIDER"),
     ({"RAG_LLM_PROVIDER": "fake"}, "MINUTES_LLM_PROVIDER 가 없음"),          # RAG 설정만 있으면 따르지 않는다
+    ({"MINUTES_LLM_PROVIDER": "fake", "MINUTES_CORRECTION": "off"}, "MINUTES_CORRECTION 는 0 이나 1"),
 ])
 def test_런타임은_AI_설정이_없거나_틀리면_작업자를_띄우지_않고_503(conn, caplog, llm_env, log_word):
     env = {"MINUTES_DATABASE_URL": database_url_for_tests(), **llm_env}

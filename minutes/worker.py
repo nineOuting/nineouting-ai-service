@@ -35,7 +35,7 @@ DEFAULT_LLM_TIMEOUT_S = 60.0
 class Worker:
     def __init__(self, conn, llm, callback, timeout_s=DEFAULT_LLM_TIMEOUT_S, prompt=None, relayout_prompt=None,
                  max_attempts=MAX_ATTEMPTS, retry_delays_s=RETRY_DELAYS_S, connect=None, table_prompt=None,
-                 correction_prompt=None):
+                 correction_prompt=None, correction=True):
         """connect 를 주면 conn 이 없거나 끊겼을 때 run() 이 그것으로 다시 접속한다 (conn=None 으로 시작해도 됨)."""
         self.conn = conn
         self.llm = llm
@@ -45,6 +45,7 @@ class Worker:
         self.relayout_prompt = relayout_prompt
         self.table_prompt = table_prompt
         self.correction_prompt = correction_prompt
+        self.correction = correction                  # False 면 오인식 교정을 하지 않는다 (MINUTES_CORRECTION=0)
         self.max_attempts = max_attempts
         self.retry_delays_s = tuple(retry_delays_s)
         self._connect = connect
@@ -64,7 +65,7 @@ class Worker:
             try:
                 result = make_draft(job.payload, self.llm, timeout_s=self.timeout_s, prompt=self.prompt,
                                     relayout_prompt=self.relayout_prompt, table_prompt=self.table_prompt,
-                                    correction_prompt=self.correction_prompt)
+                                    correction_prompt=self.correction_prompt, correction=self.correction)
             except Exception as e:                    # 일시 실패로 본다
                 if job.attempts < self.max_attempts:
                     delay = self.retry_delays_s[min(job.attempts, len(self.retry_delays_s)) - 1]
@@ -125,7 +126,7 @@ def from_env(env=None, llm=None, prompt=None, relayout_prompt=None, table_prompt
     DB 에는 여기서 접속하지 않는다. run() 이 처음 돌 때 접속하고, 끊기면 다시 접속한다 (DB 가 늦게 떠도 서버는 뜬다)."""
     from functools import partial
 
-    from .correction import CORRECTION_KIND
+    from .correction import CORRECTION_KIND, enabled_from_env
     from .db import connect
     from .placement import RELAYOUT_KIND, load_prompt
     from .table import TABLE_KIND
@@ -146,10 +147,11 @@ def from_env(env=None, llm=None, prompt=None, relayout_prompt=None, table_prompt
     table_prompt = table_prompt or load_prompt(env.get("MINUTES_TABLE_PROMPT_VERSION") or None, TABLE_KIND)
     correction_prompt = correction_prompt or load_prompt(env.get("MINUTES_CORRECTION_PROMPT_VERSION") or None,
                                                          CORRECTION_KIND)
+    correction = enabled_from_env(env)                 # 틀린 값이면 ValueError (따로 띄운 작업자는 뜨지 않는다)
     timeout_s = float(env.get("MINUTES_LLM_TIMEOUT_S", DEFAULT_LLM_TIMEOUT_S))
     return Worker(None, llm, CallbackSender(allowed=allowed), timeout_s=timeout_s, prompt=prompt,
                   relayout_prompt=relayout_prompt, connect=connect_db, table_prompt=table_prompt,
-                  correction_prompt=correction_prompt)
+                  correction_prompt=correction_prompt, correction=correction)
 
 
 def start_in_thread(worker, stop=None):
@@ -167,9 +169,9 @@ def main():
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
-    log.info("작업자 시작 (지시문 %s, %s, %s, %s, 시간 제한 %.0f초)", worker.prompt.version,
+    log.info("작업자 시작 (지시문 %s, %s, %s, %s, 오인식 교정 %s, 시간 제한 %.0f초)", worker.prompt.version,
              worker.relayout_prompt.version, worker.table_prompt.version, worker.correction_prompt.version,
-             worker.timeout_s)
+             "켬" if worker.correction else "끔", worker.timeout_s)
     worker.run(stop)
     log.info("작업자 멈춤")
 

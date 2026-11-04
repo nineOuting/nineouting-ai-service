@@ -3,6 +3,8 @@ rag/tests/test_worker.py 와 이름이 겹치지 않게 따로 이름을 붙였�
 import logging
 import threading
 
+import pytest
+
 from minutes.draft import INTERNAL_ERROR
 from minutes.jobs import ACCEPTED, submit
 from minutes.placement import load_prompt
@@ -42,6 +44,13 @@ def put(conn, trace="t-1"):
     body = load_request()
     submit(conn, body, trace_id=trace)
     return body
+
+
+def test_교정을_끈_작업자는_교정_AI를_부르지_않는다(conn):
+    put(conn)
+    llm, cb = ScriptLLM(GOOD), FakeCallback()
+    assert worker(conn, llm, cb, correction=False).process_one() is True
+    assert cb.sent[0]["body"]["status"] == "SUCCEEDED" and llm.correction_calls == []
 
 
 def test_꺼낼_것이_없으면_False(conn):
@@ -131,6 +140,10 @@ def test_환경변수로_작업자를_만든다():
     assert w.prompt.version == "placement-v3"
     assert w.callback.allowed == frozenset({"minutes-service:8084"})
     assert from_env({}, llm=ScriptLLM()).prompt == load_prompt()          # 버전을 안 주면 가장 큰 번호
+    assert from_env({}, llm=ScriptLLM()).correction is True                 # 오인식 교정은 기본으로 켬
+    assert from_env({"MINUTES_CORRECTION": "0"}, llm=ScriptLLM()).correction is False
+    with pytest.raises(ValueError):
+        from_env({"MINUTES_CORRECTION": "off"}, llm=ScriptLLM())
 
 
 class StopAfterFirstWait(threading.Event):

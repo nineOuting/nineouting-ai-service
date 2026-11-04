@@ -244,3 +244,28 @@ def test_교정이_실패하면_로그에_오류_코드를_남긴다(body, mater
     caplog.set_level(logging.INFO, logger="minutes.draft")
     make_draft(body, ScriptLLM(answer(materials), corrections=[LLMTimeout("t"), LLMTimeout("t")]))
     assert "correction_error=LLM_TIMEOUT" in caplog.text and "초안 완료" in caplog.text
+
+
+# ---- 끄는 설정 (MINUTES_CORRECTION)
+
+@pytest.mark.parametrize("env, on", [({}, True), ({"MINUTES_CORRECTION": "1"}, True), ({"MINUTES_CORRECTION": " 0 "}, False),
+                                     ({"MINUTES_CORRECTION": ""}, True)])
+def test_교정은_기본으로_켜고_0이면_끈다(env, on):
+    from minutes.correction import enabled_from_env
+    assert enabled_from_env(env) is on
+
+
+@pytest.mark.parametrize("raw", ["off", "false", "2", "yes"])
+def test_교정_설정이_0이나_1이_아니면_설정_오류(raw):
+    from minutes.correction import enabled_from_env
+    with pytest.raises(ValueError, match="MINUTES_CORRECTION 는 0 이나 1"):
+        enabled_from_env({"MINUTES_CORRECTION": raw})
+
+
+def test_교정을_끄면_AI를_부르지_않고_글은_그대로다(body, materials, caplog):
+    caplog.set_level(logging.INFO, logger="minutes.draft")
+    llm = ScriptLLM(answer(materials), corrections=[RIGHT])
+    result = make_draft(body, llm, correction=False)
+    assert result["status"] == SUCCEEDED and llm.correction_calls == []
+    assert all("STT:" not in s["content"] for s in result["sections"])
+    assert "correction=off" in caplog.text and "correction_prompt" not in caplog.text

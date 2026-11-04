@@ -301,10 +301,12 @@ def _call_once(provider, model, system, user, mock_file=None, task=None):
         from openai import OpenAI
         client = OpenAI(**_openai_client_options())   # OPENAI_API_KEY 환경변수
 
+        extra = _openai_reasoning_options(model, task)
+
         def invoke():
             return client.chat.completions.create(
                 model=model, response_format={"type": "json_object"},
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}], **extra)
 
         def response_text(r):
             return r.choices[0].message.content
@@ -324,6 +326,20 @@ def _openai_client_options():
     if os.environ.get("LLM_MAX_RETRIES"):
         opts["max_retries"] = int(os.environ["LLM_MAX_RETRIES"])
     return opts
+
+
+def _openai_reasoning_options(model, task):
+    """추론 강도. LLM_REASONING_EFFORT_<TASK 대문자>(작업별)가 있으면 그것을, 없으면 LLM_REASONING_EFFORT 를 쓴다.
+    둘 다 없으면 아무것도 넣지 않는다(모델 기본값). 폴백 모델에는 넣지 않는다(모델마다 받는 값이 다를 수 있다)."""
+    fb = os.environ.get("LLM_FALLBACK_MODEL")
+    if fb and model == fb and model != os.environ.get("LLM_MODEL"):
+        return {}
+    names = ([f"LLM_REASONING_EFFORT_{task.upper()}"] if task else []) + ["LLM_REASONING_EFFORT"]
+    for n in names:
+        v = (os.environ.get(n) or "").strip()
+        if v:
+            return {"reasoning_effort": v}
+    return {}
 
 
 log = logging.getLogger("ai-service")
@@ -776,6 +792,33 @@ def run(args):
     return summary, snapshot, input_text
 
 
+def _selftest_reasoning_options():
+    """추론 강도: 안 정하면 비어 있음, 작업별 값이 공통 값보다 우선, 폴백 모델에는 안 넣음"""
+    keys = ("LLM_REASONING_EFFORT", "LLM_REASONING_EFFORT_AGENDA_STATUS", "LLM_MODEL", "LLM_FALLBACK_MODEL")
+    saved = {k: os.environ.get(k) for k in keys}
+    try:
+        for k in keys:
+            os.environ.pop(k, None)
+        assert _openai_reasoning_options("m", "agenda_status") == {}
+        os.environ["LLM_REASONING_EFFORT"] = " low "
+        assert _openai_reasoning_options("m", "agenda_status") == {"reasoning_effort": "low"}
+        assert _openai_reasoning_options("m", None) == {"reasoning_effort": "low"}
+        os.environ["LLM_REASONING_EFFORT_AGENDA_STATUS"] = "none"
+        assert _openai_reasoning_options("m", "agenda_status") == {"reasoning_effort": "none"}
+        assert _openai_reasoning_options("m", "agenda_summary") == {"reasoning_effort": "low"}
+        os.environ["LLM_REASONING_EFFORT_AGENDA_STATUS"] = "  "
+        assert _openai_reasoning_options("m", "agenda_status") == {"reasoning_effort": "low"}
+        os.environ.update({"LLM_MODEL": "main", "LLM_FALLBACK_MODEL": "fb"})
+        assert _openai_reasoning_options("fb", "agenda_summary") == {}
+        assert _openai_reasoning_options("main", "agenda_summary") == {"reasoning_effort": "low"}
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def _selftest_fallback():
     """기본 모델 실패 -> 폴백, 쿨다운 동안 기본 모델 건너뜀, 평가처럼 모델을 직접 지정하면 폴백 안 함"""
     global _call_once, FALLBACK_ENABLED
@@ -915,6 +958,7 @@ def selftest():
     finally:
         USAGE_HOOK = None
     assert got == [("openai", "m", "live_summary", 9, 4)], got
+    _selftest_reasoning_options()
     _selftest_fallback()
     print("자체 시험 통과 (전송 규격 처리, 한글 숫자 변환, 검증기, 토큰 사용량, 폴백 모델)")
 

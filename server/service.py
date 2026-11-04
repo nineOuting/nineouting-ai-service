@@ -193,6 +193,16 @@ def offtopic_cfg_from_env(env=None, cfg=None):
     return OffTopicCfg(**kw)
 
 
+def parallel_from_env(env=None):
+    """환경변수 AGENDA_PARALLEL -> 안건 단계(상태, 안건 요약, 의견, 할 일, 주제 변경)를 동시에 돌릴지. 기본 0(차례로).
+    분류를 마친 직후의 이 단계들은 서로의 결과를 읽지 않고 분류기 상태만 읽으므로 동시에 불러도 결과는 같다. 모델 호출 시간이 겹쳐 묶음당 처리 시간이 줄어든다."""
+    env = os.environ if env is None else env
+    v = (env.get("AGENDA_PARALLEL") or "0").strip()
+    if v not in ("0", "1"):
+        raise ConfigError(f"AGENDA_PARALLEL 은 0 또는 1 이어야 함: {v}")
+    return v == "1"
+
+
 class MeetingState:
     def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None, summarize_cfg=None, summarize_llm=None,
                  status_cfg=None, status_llm=None, opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None,
@@ -222,6 +232,7 @@ class MeetingState:
         self.warnings = 0
         self.counts = {"batches": 0, "lines": 0, "edits": 0}
         self.errors = 0
+        self.err_lock = threading.Lock()     # 단계를 동시에 돌릴 때 errors 를 안전하게 올린다
         self.version = 0                    # 백엔드로 보낸 요약의 마지막 version
         self.last_sig = None                # 마지막으로 보낸 요약의 내용 (같으면 다시 보내지 않음)
 
@@ -229,7 +240,8 @@ class MeetingState:
 class Registry:
     def __init__(self, cfg, llm=None, publisher=None, env=None, classify_cfg=None, classify_llm=None,
                  summarize_cfg=None, summarize_llm=None, status_cfg=None, status_llm=None,
-                 opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None, offtopic_cfg=None, offtopic_llm=None):
+                 opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None, offtopic_cfg=None, offtopic_llm=None,
+                 parallel=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
         self.publisher = publisher
@@ -246,6 +258,7 @@ class Registry:
         self.todo_llm = todo_llm            # 시험용: 안건 할 일 추출에서 모델 호출 대신 쓸 함수
         self.offtopic_cfg = offtopic_cfg or offtopic_cfg_from_env(self.env, cfg)
         self.offtopic_llm = offtopic_llm    # 시험용: 새 안건 제목 만들기에서 모델 호출 대신 쓸 함수
+        self.parallel = parallel_from_env(self.env) if parallel is None else bool(parallel)   # 안건 단계를 동시에 돌릴지
         self.shutting_down = False
         self.meetings = {}
         self.lock = threading.Lock()
@@ -482,17 +495,21 @@ class Registry:
             try:
                 # 요약과 안건 분류는 서로 실패해도 영향을 주지 않는다
                 if kind == "batch":
-                    self._step(m, "batch", lambda: (m.summarizer.receive(payload), self._maybe_publish(m, final=False)))
-                    self._step(m, "classify", lambda: self._classify(m, batch=payload))
-                    self._agenda_steps(m)
+                    def classify_and_steps():
+                        self._step(m, "classify", lambda: self._classify(m, batch=payload))
+                        self._agenda_steps(m)
+                    self._with_live(m, "batch", lambda: (m.summarizer.receive(payload), self._maybe_publish(m, final=False)),
+                                    classify_and_steps)
                 elif kind == "end":
                     def finish_summary():
                         m.summarizer.now_ms = max(m.summarizer.now_ms, payload["at_ms"])
                         m.summarizer.finish()
                         self._maybe_publish(m, final=True)
-                    self._step(m, "end", finish_summary)
-                    self._step(m, "classify", lambda: self._classify(m, end_ms=payload["at_ms"], final=True))
-                    self._agenda_steps(m, final=True)
+
+                    def classify_and_steps():
+                        self._step(m, "classify", lambda: self._classify(m, end_ms=payload["at_ms"], final=True))
+                        self._agenda_steps(m, final=True)
+                    self._with_live(m, "end", finish_summary, classify_and_steps)
                 elif kind in ("tick", "flush"):
                     flush = m.leftover.take_flush() if kind == "flush" else False   # 종료 버튼: 대기를 건너뛰고 한 번 돌린다 (AI-07)
                     self._step(m, "classify", lambda: self._classify(m, flush=flush))
@@ -500,12 +517,28 @@ class Registry:
             finally:
                 m.queue.task_done()
 
+    def _with_live(self, m, name, live_fn, rest_fn):
+        """회의 중 요약(live_fn)과 안건 쪽 처리(rest_fn: 분류 -> 안건 단계 -> 보드)를 하나씩 처리한다.
+        self.parallel 이면 둘을 동시에 돌리고 둘 다 끝나야 다음 묶음으로 간다. 회의 중 요약은 분류기와 안건 단계를 읽지 않고
+        자기 상태만 쓰며, 백엔드로 보내는 길(publisher.submit)은 락으로 지킨다."""
+        if not self.parallel:
+            self._step(m, name, live_fn)
+            rest_fn()
+            return
+        t = threading.Thread(target=self._step, args=(m, name, live_fn), name=f"meeting-{m.meeting_id}-live", daemon=True)
+        t.start()
+        try:
+            rest_fn()
+        finally:
+            t.join()
+
     @staticmethod
     def _step(m, name, fn):
         try:
             fn()
         except Exception as e:                                  # 한 건이 실패해도 일꾼은 계속 돈다
-            m.errors += 1
+            with m.err_lock:
+                m.errors += 1
             log.error("처리 실패 meeting=%s kind=%s error=%s", m.meeting_id, name, type(e).__name__)
 
     def _classify(self, m, batch=None, end_ms=None, final=False, flush=False):
@@ -531,12 +564,24 @@ class Registry:
     def _agenda_steps(self, m, final=False, flush=False):
         """분류를 마친 직후 같은 흐름에서 상태 판정 -> 안건 요약 -> 의견 -> 할 일 -> 주제 변경 -> 미결 안건 -> 보드 전송 순서로 돈다.
         단계마다 따로 가둬서, 한 단계가 실패하거나 멈춰도 다른 단계와 보드 전송은 계속된다.
-        flush: 종료 버튼을 눌렀을 때. 상태 판정과 안건 요약은 새 줄이 1개일 때 기다리는 규칙을 건너뛴다(종료 확정은 아니다). 의견·할 일은 이월하지 않아 건너뛰지 않는다."""
-        self._step(m, "agenda_status", lambda: m.status_judge.process(final=final, flush=flush))
-        self._step(m, "agenda_summary", lambda: m.agenda_summarizer.process(final=final or flush))
-        self._step(m, "agenda_opinions", lambda: m.opinions.process(final=final))
-        self._step(m, "agenda_todos", lambda: m.todos.process(final=final))
-        self._step(m, "agenda_offtopic", lambda: m.offtopic.process(final=final))
+        flush: 종료 버튼을 눌렀을 때. 상태 판정과 안건 요약은 새 줄이 1개일 때 기다리는 규칙을 건너뛴다(종료 확정은 아니다). 의견·할 일은 이월하지 않아 건너뛰지 않는다.
+        self.parallel 이면 앞의 다섯 단계(상태 ~ 주제 변경)를 동시에 돌리고 모두 끝난 뒤에 미결 안건과 보드 전송을 한다(회의 중 요약은 _with_live 가 분류와 함께 돌린다).
+        다섯 단계는 서로의 결과를 읽지 않고 분류기 상태만 복사해 읽으므로(각자 _view) 순서가 바뀌어도 결과는 같다."""
+        steps = [("agenda_status", lambda: m.status_judge.process(final=final, flush=flush)),
+                 ("agenda_summary", lambda: m.agenda_summarizer.process(final=final or flush)),
+                 ("agenda_opinions", lambda: m.opinions.process(final=final)),
+                 ("agenda_todos", lambda: m.todos.process(final=final)),
+                 ("agenda_offtopic", lambda: m.offtopic.process(final=final))]
+        if self.parallel:
+            threads = [threading.Thread(target=self._step, args=(m, name, fn), name=f"meeting-{m.meeting_id}-{name}", daemon=True)
+                       for name, fn in steps]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()                                         # 보드는 모든 단계가 끝난 뒤에 한 번만 만든다
+        else:
+            for name, fn in steps:
+                self._step(m, name, fn)
         self._step(m, "agenda_leftover", lambda: m.leftover.process(final=final))
         self._step(m, "agenda_board", lambda: self._publish_board(m))
 
@@ -546,7 +591,8 @@ class Registry:
         try:
             return fn()
         except Exception as e:
-            m.errors += 1
+            with m.err_lock:
+                m.errors += 1
             log.error("보드 값 읽기 실패 meeting=%s kind=%s error=%s", m.meeting_id, name, type(e).__name__)
             return None
 

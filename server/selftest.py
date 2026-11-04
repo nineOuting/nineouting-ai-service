@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .service import Registry, ConfigError, AdapterError, BatchOutOfOrder, NotReady, cfg_from_env, HERE
@@ -1762,6 +1763,213 @@ def test_api_decision_edits():
         main.registry.shutting_down = False
 
 
+def test_parallel_config():
+    """AGENDA_PARALLEL: 기본은 차례로, 0/1만 받음, 인자가 환경변수보다 먼저"""
+    from .service import parallel_from_env
+    assert parallel_from_env({}) is False and parallel_from_env({"AGENDA_PARALLEL": "0"}) is False
+    assert parallel_from_env({"AGENDA_PARALLEL": " 1 "}) is True and parallel_from_env({"AGENDA_PARALLEL": ""}) is False
+    for bad in ("2", "true", "yes", "-1"):
+        try:
+            parallel_from_env({"AGENDA_PARALLEL": bad})
+            raise SystemExit(f"잘못된 설정을 못 잡음: {bad}")
+        except ConfigError:
+            pass
+    assert Registry(cfg_from_env({}), env={}).parallel is False
+    assert Registry(cfg_from_env({}), env={"AGENDA_PARALLEL": "1"}).parallel is True
+    assert Registry(cfg_from_env({}), env={"AGENDA_PARALLEL": "1"}, parallel=False).parallel is False
+    assert Registry(cfg_from_env({}), env={}, parallel=True).parallel is True
+
+
+def _normalize_board(x):
+    """시각이나 무작위 값이 들어간 칸(항목 id, version, 감지 시각)을 빼서 두 번의 실행을 비교할 수 있게 한다"""
+    if isinstance(x, dict):
+        return {k: _normalize_board(v) for k, v in x.items() if k not in ("id", "version", "detectedAt")}
+    if isinstance(x, list):
+        return [_normalize_board(v) for v in x]
+    return x
+
+
+def _run_boards(parallel, scenario):
+    """같은 입력을 차례로/동시에 처리했을 때 백엔드로 나간 보드를 모두 모은다 (모델 호출 없음)"""
+    from agenda_classifier import ClassifyCfg
+    from agenda_opinions import OpinionCfg
+    from agenda_todos import TodoCfg
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+    reg = Registry(cfg_from_env({}), publisher=pub, parallel=parallel, classify_cfg=ClassifyCfg(refresh_sec=0),
+                   opinion_cfg=OpinionCfg(min_new_lines=2), todo_cfg=TodoCfg(min_new_lines=2))
+    mid = 41
+    path = "41"
+    reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
+    if scenario == "items":
+        reg.receive_agendas(path, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
+        batches, end_ms = item_batches(mid, extra=3), 90000
+    else:
+        reg.receive_agendas(path, dict(load("agendas-put.json"), meetingId=mid))
+        batches, end_ms = agenda_batches(mid, minutes=4)[0], 240000
+    assert reg.wait_idle(path) and pub.wait_idle()
+    for b in batches:
+        reg.receive_batch(path, b)
+        assert reg.wait_idle(path) and pub.wait_idle()
+    reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": end_ms})
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert reg.status(path)["errors"] == 0
+    out = {}
+    for u, p in sent:                                    # 백엔드로 나간 모든 종류(회의 중 요약, 안건 분류, 안건 보드)를 종류별로 모은다
+        out.setdefault(u.rsplit("/", 1)[1], []).append(_normalize_board(p))
+    return out
+
+
+def test_parallel_same_result():
+    """동시에 처리해도 백엔드로 나가는 보드가 차례로 처리한 것과 모두 같다 (모델 호출 없음)"""
+    for scenario in ("items", "summary"):
+        seq_all, par_all = _run_boards(False, scenario), _run_boards(True, scenario)
+        assert set(seq_all) == {"live-summary", "agenda-classification", "agenda-board"} or scenario == "items", set(seq_all)
+        assert seq_all == par_all, f"{scenario}: 동시 처리 결과가 차례 처리와 다름"
+        seq = seq_all["agenda-board"]
+        assert len(seq) >= 4, f"{scenario}: 보드가 너무 적어서 비교가 의미 없음 ({len(seq)})"
+        if scenario == "summary":
+            assert len(seq_all["live-summary"]) >= 2, "회의 중 요약이 거의 없으면 비교가 약함"
+        last = seq[-1]["agendas"]
+        if scenario == "items":
+            assert last[0]["opinions"] and last[0]["todos"], "의견과 할 일이 비어 있으면 비교가 약함"
+        else:
+            assert any(a["summary"] for a in last), "요약이 비어 있으면 비교가 약함"
+
+
+STAGE_ATTRS = (("status_judge", "agenda_status"), ("agenda_summarizer", "agenda_summary"), ("opinions", "agenda_opinions"),
+               ("todos", "agenda_todos"), ("offtopic", "agenda_offtopic"))
+
+
+def _stub_stages(reg, m, log, hook=None, fail=()):
+    """다섯 단계의 process 를 기록만 하는 것으로 바꾼다. 미결 안건 처리와 보드 만들기도 기록한다"""
+    for attr, name in STAGE_ATTRS:
+        def run(final=False, flush=False, _name=name):
+            log.append(("start", _name))
+            if hook:
+                hook(_name)
+            if _name in fail:
+                raise RuntimeError(f"{_name} down")
+            log.append(("end", _name))
+            return 0
+        getattr(m, attr).process = run
+    real_leftover = m.leftover.process
+    m.leftover.process = lambda final=False: (log.append(("start", "leftover")), real_leftover(final=final))[1]
+    reg._publish_board = lambda mm: log.append(("start", "board"))
+
+
+def test_parallel_runs_concurrently():
+    """동시 모드에서는 다섯 단계가 같은 시각에 돌고(장벽이 열려야 통과), 미결 안건과 보드는 모두 끝난 뒤에 한 번"""
+    reg = Registry(cfg_from_env({}), parallel=True)
+    mid = "m_par"
+    m = reg._get(mid)
+    log = []
+    barrier = threading.Barrier(5, timeout=5)
+    threads = set()
+
+    def hook(name):
+        threads.add(threading.current_thread().name)
+        barrier.wait()                                   # 다섯 단계가 모두 와야 열린다. 차례로 돌면 시간이 지나 BrokenBarrierError
+        if name == "agenda_todos":
+            time.sleep(0.3)                              # 한 단계를 일부러 늦게 끝낸다. 기다리지 않고 지나가면 미결 안건·보드가 먼저 시작한다
+    _stub_stages(reg, m, log, hook=hook)
+    reg.receive_batch(mid, empty_batch(mid, 1))
+    assert reg.wait_idle(mid, timeout=20)
+    assert reg.status(mid)["errors"] == 0, "다섯 단계가 동시에 돌지 않음"
+    assert len(threads) == 5, threads
+    kinds = [e for e in log]
+    ends = [i for i, e in enumerate(kinds) if e[0] == "end"]
+    assert len(ends) == 5
+    assert kinds.index(("start", "leftover")) > max(ends), "미결 안건 처리가 단계가 끝나기 전에 시작함"
+    assert kinds.index(("start", "board")) > kinds.index(("start", "leftover"))
+    assert kinds.count(("start", "board")) == 1, "보드는 한 번만"
+
+
+def test_live_runs_with_classify():
+    """동시 모드에서는 회의 중 요약과 분류가 같은 시각에 돌고, 둘 다 끝나야 다음으로 간다. 차례 모드에서는 요약이 먼저"""
+    for parallel in (True, False):
+        reg = Registry(cfg_from_env({}), parallel=parallel)
+        mid = "m_live"
+        m = reg._get(mid)
+        log = []
+        barrier = threading.Barrier(2, timeout=5)
+
+        def meet(name):
+            log.append(("start", name))
+            if parallel:
+                barrier.wait()                           # 요약과 분류가 모두 와야 열린다. 차례로 돌면 BrokenBarrierError
+                if name == "live":
+                    time.sleep(0.3)                      # 요약을 일부러 늦게 끝낸다. 기다리지 않고 지나가면 wait_idle 이 먼저 돌아온다
+            log.append(("end", name))
+        m.summarizer.receive = lambda payload: meet("live")
+        m.summarizer.finish = lambda: meet("live")
+        real_process = m.classifier.process
+        m.classifier.process = lambda final=False: (meet("classify"), real_process(final=final))[1]
+        reg._agenda_steps = lambda mm, final=False, flush=False: log.append(("start", "agenda_steps"))
+        reg.receive_batch(mid, empty_batch(mid, 1))
+        assert reg.wait_idle(mid, timeout=20)
+        assert reg.status(mid)["errors"] == 0, f"parallel={parallel}: 요약과 분류가 동시에 돌지 않음"
+        assert ("end", "live") in log, "wait_idle 이 돌아왔는데 회의 중 요약이 아직 안 끝남"
+        if parallel:
+            assert log.index(("start", "classify")) < log.index(("end", "live")) and log.index(("start", "live")) < log.index(("end", "classify"))
+        else:
+            assert log[:4] == [("start", "live"), ("end", "live"), ("start", "classify"), ("end", "classify")], log
+        assert log.index(("start", "agenda_steps")) > log.index(("end", "classify"))
+        # 끝날 때도 같다
+        log.clear()
+        barrier.reset()
+        reg.receive_event(mid, {"meetingId": mid, "event": "end", "atMs": 1000})
+        assert reg.wait_idle(mid, timeout=20)
+        assert reg.status(mid)["errors"] == 0 and ("end", "live") in log and ("end", "classify") in log, log
+
+
+def test_sequential_order_kept():
+    """차례 모드(기본)에서는 지금처럼 상태 -> 요약 -> 의견 -> 할 일 -> 주제 변경 -> 미결 -> 보드 순서, 한 번에 하나씩"""
+    reg = Registry(cfg_from_env({}))
+    mid = "m_seq"
+    m = reg._get(mid)
+    log = []
+    _stub_stages(reg, m, log)
+    reg.receive_batch(mid, empty_batch(mid, 1))
+    assert reg.wait_idle(mid, timeout=20)
+    assert log == [("start", "agenda_status"), ("end", "agenda_status"), ("start", "agenda_summary"), ("end", "agenda_summary"),
+                   ("start", "agenda_opinions"), ("end", "agenda_opinions"), ("start", "agenda_todos"), ("end", "agenda_todos"),
+                   ("start", "agenda_offtopic"), ("end", "agenda_offtopic"), ("start", "leftover"), ("start", "board")], log
+
+
+def test_parallel_isolated():
+    """동시 모드에서 단계가 실패해도 나머지 단계와 보드 전송은 계속되고, 실패 횟수는 정확히 센다"""
+    for fail in (("agenda_summary",), ("agenda_status", "agenda_opinions", "agenda_todos"), tuple(n for _, n in STAGE_ATTRS)):
+        reg = Registry(cfg_from_env({}), parallel=True)
+        mid = "m_pi"
+        m = reg._get(mid)
+        log = []
+        _stub_stages(reg, m, log, fail=fail)
+        for n in (1, 2, 3):
+            reg.receive_batch(mid, empty_batch(mid, n))
+        assert reg.wait_idle(mid, timeout=20)
+        assert reg.status(mid)["errors"] == 3 * len(fail), (fail, reg.status(mid)["errors"])
+        done = {name for kind, name in log if kind == "end"}
+        assert done == {n for _, n in STAGE_ATTRS} - set(fail), done
+        assert log.count(("start", "board")) == 3 and log.count(("start", "leftover")) == 3, "실패해도 미결 안건과 보드는 계속"
+    # 실제 처리 흐름에서도: 요약 단계가 계속 실패해도 분류와 다른 단계는 끝까지 돈다
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+    reg = Registry(cfg_from_env({}), publisher=pub, parallel=True, summarize_llm=lambda user: 1 / 0)
+    mid = "m_pi2"
+    reg.receive_event(mid, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(mid, dict(load("agendas-put.json"), meetingId=mid))
+    batches, total = agenda_batches(mid, minutes=3)
+    for b in batches:
+        reg.receive_batch(mid, b)
+        reg.wait_idle(mid)
+    reg.receive_event(mid, {"meetingId": mid, "event": "end", "atMs": 180000})
+    assert reg.wait_idle(mid) and pub.wait_idle()
+    cls = [p for u, p in sent if u.endswith("/agenda-classification")]
+    assert sorted(x["seq"] for p in cls for x in p["lines"]) == list(range(1, total + 1))
+    assert reg.status(mid)["agendaSummary"]["halted"] == "연속 실패"
+
+
 def main():
     cap = Capture()
     logging.getLogger("ai-service").addHandler(cap)
@@ -1777,6 +1985,12 @@ def main():
     test_agenda_summary_flow(cap)
     test_agenda_summary_end()
     test_agenda_summary_isolated()
+    test_parallel_config()
+    test_parallel_same_result()
+    test_parallel_runs_concurrently()
+    test_live_runs_with_classify()
+    test_sequential_order_kept()
+    test_parallel_isolated()
     test_publisher_board()
     test_classify_config()
     test_publisher_classification()

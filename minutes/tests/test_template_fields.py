@@ -158,3 +158,15 @@ def test_fields가_있으면_items는_보지_않는다():
     validate_request(body)
     result = make_draft(body, ScriptLLM({"placements": [{"m": f"m{i}", "section": 1} for i in range(1, 11)], "unplaced": []}))
     assert [s["title"] for s in result["sections"]] == ["결정 사항"]
+
+
+def test_묶는_기준은_AI_칸_번호에서_양식_필드_위치로_옮긴다():
+    """사용자 필드가 앞에 있으면 AI 의 칸 번호와 양식 필드 위치가 다르다."""
+    body = v07(load_request(), [user("참석자 메모"), *(ai(t) for t in ITEMS[:3]),
+                                {"title": "할 일", "type": "text", "aiFill": True}])
+    result = make_draft(body, ScriptLLM({**GOOD, "grouping": {"1": "안건", "4": "담당자"}}))
+    sections = {s["title"]: s["content"] for s in result["sections"]}
+    assert sections["참석자 메모"] == MEMO
+    assert sections["안건별 논의"].startswith("- 배포 일정\n  - ")
+    assert sections["할 일"].split("\n")[:2] == ["- 김철수", "  - 배포 일정: QA 일정표 공유 (김철수, 수요일까지)"]
+    assert sections["결정 사항"] == "- 배포 일정: 1차 배포를 10월 30일(목)로 정함"

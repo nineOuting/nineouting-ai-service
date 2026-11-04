@@ -1,8 +1,10 @@
 """AI 에게 칸 고르기를 묻고, 답을 검사한다. 명세 7.2·7.3
 
   AI 에게 주는 글   <칸> 번호 붙인 칸 이름(설명이 있으면 붙임), <재료> m 번호·안건·종류·글. 다시 배치의 새로 쓴 줄은 안건 없이 [직접 작성]
-  AI 의 답          {"placements": [{"m", "section"}], "unplaced": [...]}
+  AI 의 답          {"placements": [{"m", "section"}], "unplaced": [...], "grouping": {"칸 번호": "묶는 기준"}}
   검사              형식, 칸 번호, 재료 번호, 한 번만, 빠짐
+  묶는 기준         검사하지 않고 읽을 수 있는 것만 쓴다. 없거나 틀린 칸(없는 칸 번호, 목록에 없는 기준)은 묶지 않는다.
+                    틀려도 지금 모양(묶지 않음)과 같아 손해가 없으므로 다시 시키지 않는다 (명세 7.2)
   다시 시키기       검사에 걸리면 걸린 이유를 붙여 다시 묻는다 (max_retries 번). 넘으면 CHECK_FAILED
   호출 실패         같은 입력으로 call_retries 번(기본 1번) 다시 부른다. 그래도 실패하면 마지막 실패가
                     시간 초과면 LLM_TIMEOUT, 그 밖은 LLM_FAILED. 초안은 접수 후 콜백으로 알리므로
@@ -19,7 +21,7 @@ from pathlib import Path
 
 from shared.llm import LLMError, LLMTimeout
 
-from .models import Field, Material, Placement, Table
+from .models import GROUPINGS, Field, Material, Placement, Table
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 PROMPT_KIND = "placement"
@@ -150,7 +152,20 @@ def check(data, materials: list[Material], n_sections: int) -> tuple[Placement |
     problems += [f"{m.ref}가 placements에도 unplaced에도 없음" for m in materials if m.ref not in seen]
     if problems:
         return None, problems
-    return Placement(sections=sections, unplaced=tuple(r for r in unplaced)), []
+    return Placement(sections=sections, unplaced=tuple(r for r in unplaced),
+                     grouping=read_grouping(data.get("grouping"), n_sections)), []
+
+
+def read_grouping(raw, n_sections: int) -> dict[int, str]:
+    """답의 grouping → 칸 위치(0부터) → 기준. JSON 이라 칸 번호는 글자("1")로 온다. 읽을 수 없는 칸은 뺀다."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, by in raw.items():
+        n = int(key) if isinstance(key, str) and key.strip().isdigit() else None
+        if n is not None and 1 <= n <= n_sections and by in GROUPINGS:
+            out[n - 1] = by
+    return out
 
 
 def place(items: list[Field | str], materials: list[Material], llm, timeout_s: float, max_retries: int = 2,

@@ -139,7 +139,7 @@ def test_판마다_돌리고_호출과_채점을_남긴다(case, tmp_path):
     assert runs[0]["calls"][0]["kind"] == "placement" and runs[0]["calls"][0]["input_tokens"] == 100
     assert (out / "calls.csv").read_text(encoding="utf-8").count("\n") == 3              # 머리 + 호출 2번
     text = summarize(out)
-    assert "| 배치 | placement-v8 relayout-v2 table-v1 | 1/2 | 1 | 0 | 0 | 2 |" in text
+    assert "| 배치 | placement-v8 relayout-v2 table-v1 | 1/2 | 1 | 0 | 0 | 4/8 | 2 |" in text     # 기준 없음 = 묶지 않음 (결정·미결만 맞음)
     assert '- 배치 / placement-v8 relayout-v2 table-v1: [103, "opinion", "k3f9a1-20"] → (넣지 않음) (1번)' in text
 
 
@@ -159,3 +159,19 @@ def test_then_은_처음_초안의_줄로_다시_배치한다(case, tmp_path):
     runs = [json.loads(line) for line in (out / "runs.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [(r["task"], r["score"]["ok"]) for r in runs] == [("배치", True), ("배치-다시배치", True)]
     assert runs[1]["calls"][0]["kind"] == "relayout"
+
+
+def test_묶는_기준은_칸_고르기와_따로_세고_틀린_필드를_남긴다(case, tmp_path):
+    """사례 정답: 안건별 논의 안건, 결정·미결 안건 또는 묶지 않음, 할 일 담당자 또는 안건."""
+    case = dict(case, tasks=[task(case, "배치")])
+    good = {**moved(GOOD, "m9", 1), "grouping": {"1": "안건", "2": "묶지 않음", "4": "담당자"}}
+    bad = {**moved(GOOD, "m9", 1), "grouping": {"1": "종류", "4": "담당자"}}
+    out = run_case(case, ScriptLLM(good, bad), 2, [{"placement": "v8", "relayout": "v2", "table": "v1"}], tmp_path,
+                   progress=lambda s: None)
+    runs = [json.loads(line) for line in (out / "runs.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["score"]["ok"] for r in runs] == [True, True]                          # 칸 고르기는 둘 다 맞음
+    assert runs[1]["score"]["grouping"]["안건별 논의"] == {"got": "종류", "ok": False}
+    assert runs[1]["score"]["grouping"]["미결 안건"] == {"got": "묶지 않음", "ok": True}
+    text = summarize(out)
+    assert "| 2/2 | 0 | 0 | 0 | 7/8 |" in text
+    assert "묶기 안건별 논의 → 종류 (1번)" in text

@@ -4,6 +4,7 @@
   {
    "name": "섞인결정",
    "request": "eval_mixed_request.json",
+   "grouping": {"안건별 논의": ["안건"], "결정 사항": ["안건", "묶지 않음"], "미결 안건": ["안건", "묶지 않음"], "할 일": ["담당자", "안건"]},
    "expect": [
     {"source": [201, "decision", 2001], "in": ["결정 사항"]},
     {"source": [201, "undecided", 2002], "in": ["미결 안건"], "serious": ["결정 사항"]},
@@ -23,6 +24,7 @@
    ],
    "then": {
     "name": "섞인결정-다시배치",
+    "grouping": {"결정 사항": ["안건", "묶지 않음"], "할 일": ["담당자", "안건"], "고객 요청": ["안건", "묶지 않음"]},
     "relayoutTo": ["결정 사항", "할 일", "고객 요청"],
     "addLines": [
      {"title": "안건별 논의", "sentence": "다음 회의는 11월 10일(월) 오전 10시로 정함", "transcriptSeqs": [], "edited": false, "needsCheck": false, "sources": [], "draftEdited": true},

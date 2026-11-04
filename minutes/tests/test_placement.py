@@ -58,8 +58,8 @@ def test_지난_답의_문제를_붙인다(materials):
 
 
 def test_지시문을_읽는다():
-    assert load_prompt().version == "placement-v9"                  # 번호가 가장 큰 파일
-    for version in ("v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"):
+    assert load_prompt().version == "placement-v10"                 # 번호가 가장 큰 파일
+    for version in ("v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9"):
         prompt = load_prompt(version)
         assert prompt.version == f"placement-{version}"
         assert "JSON" in prompt.text and "결정 확인 필요" in prompt.text
@@ -90,6 +90,22 @@ def test_답에_글이_붙어_와도_쓰지_않는다(materials):
     answer = with_change(m1={"m": "m1", "section": 2, "text": "1차 배포를 10월 31일로 정했다."})
     result, problems = check(answer, materials, len(ITEMS))
     assert problems == [] and result.sections["m1"] == 1
+
+
+def test_묶는_기준을_0부터_센_칸_위치로_읽는다(materials):
+    result, problems = check({**GOOD, "grouping": {"1": "안건", "4": "담당자"}}, materials, len(ITEMS))
+    assert problems == [] and result.grouping == {0: "안건", 3: "담당자"}
+
+
+@pytest.mark.parametrize("grouping, expected", [
+    ({"9": "안건", "2": "날짜", "x": "안건", "3": "종류"}, {2: "종류"}),     # 없는 칸, 목록에 없는 기준, 칸 번호 아님
+    ("안건", {}),
+    (None, {}),
+])
+def test_읽을_수_없는_묶는_기준은_빼고_검사에_걸리지_않는다(materials, grouping, expected):
+    answer = dict(GOOD) if grouping is None else {**GOOD, "grouping": grouping}
+    result, problems = check(answer, materials, len(ITEMS))
+    assert problems == [] and result.grouping == expected
 
 
 @pytest.mark.parametrize("answer, expected", [

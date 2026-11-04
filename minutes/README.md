@@ -29,7 +29,7 @@
 | `request.py` | 요청 형식 검사 (명세 2.1, 7.5 상한) |
 | `materials.py` | 요약 항목·결정할 사항 → 재료 (명세 7.1). 줄 글을 코드가 정한다 |
 | `placement.py` | AI 에게 칸을 고르게 하고 결과를 코드로 검사, 걸리면 이유를 붙여 다시 시킴 (명세 7.2·7.3) |
-| `lines.py` | 필드별 줄 목록과 `content` 만들기. 사용자가 채우는 필드는 받은 글 그대로 |
+| `lines.py` | 필드별 줄 목록과 `content` 만들기 (AI 가 고른 기준으로 줄 묶기). 사용자가 채우는 필드는 받은 글 그대로 |
 | `draft.py` | 위를 묶어 결과 JSON 하나를 만든다 (`make_draft`) |
 | `jobs.py`, `worker.py` | 대기열 표와 작업자 |
 | `api.py`, `runtime.py` | 접수 주소와 `server/main.py` 에 붙이는 곳 |

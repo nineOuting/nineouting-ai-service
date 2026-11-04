@@ -4,6 +4,7 @@
   {
    "name": "배치",
    "request": "draft_request.json",
+   "grouping": {"안건별 논의": ["안건"], "결정 사항": ["안건", "묶지 않음"], "미결 안건": ["안건", "묶지 않음"], "할 일": ["담당자", "안건"]},
    "expect": [
     {"source": [101, "decision", 7], "in": ["결정 사항"]},
     {"source": [101, "summary", "k3f9a1-1"], "in": ["안건별 논의"]},
@@ -20,6 +21,7 @@
   {
    "name": "다시배치",
    "request": "relayout_request.json",
+   "grouping": {"결정 사항": ["안건", "묶지 않음"], "할 일": ["담당자", "안건"], "고객 요청": ["안건", "묶지 않음"]},
    "expect": [
     {"source": [101, "decision", 7], "in": ["결정 사항"]},
     {"source": [101, "todo", "k3f9a1-10"], "in": ["할 일"]},
@@ -35,6 +37,7 @@
   {
    "name": "표",
    "request": "table_request.json",
+   "grouping": {"안건별 논의": ["안건"], "결정 사항": ["안건", "묶지 않음"], "미결 안건": ["안건", "묶지 않음"]},
    "expect": [
     {"source": [101, "decision", 7], "in": ["결정 사항"]},
     {"source": [101, "summary", "k3f9a1-1"], "in": ["안건별 논의"]},

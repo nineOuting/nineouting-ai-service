@@ -4,6 +4,7 @@
   {
    "name": "표섞임",
    "request": "eval_table_mixed_request.json",
+   "grouping": {"논의 내용": ["안건"]},
    "expect": [
     {"source": [501, "decision", 5001], "in": ["결정·미결 현황"]},
     {"source": [501, "undecided", 5002], "in": ["결정·미결 현황"]},

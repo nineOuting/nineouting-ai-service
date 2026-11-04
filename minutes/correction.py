@@ -5,14 +5,13 @@
                     글을 다시 쓰지 않고 쌍만 낸다. 맞는 표기에 영어가 있으면 한글로 읽는 소리(reading)도 낸다
   쌍 검사           하나라도 걸리면 그 쌍만 버린다 (check_fix)
                     wrong   사람이 고치지 않은 재료 글에 있다
-                    right   출처에 글자 그대로 있다. 출처는 요청 요약 안의 모든 글(요약 문장, 의견, 할 일, 결정 내용)의
-                            「」 밖, 안건 제목, 결정할 사항 문구. 재료에서 빠진 의견(요약 문장이 담은 것, materials.py)도
-                            요청에 있는 글이라 출처다 (실제 회의 2026-11-03: 「」 밖의 "테라폼"이 빠진 의견에만 있었음).
-                            「」 안은 요약 쪽이 STT 를 확신하지 못해 원문 그대로 옮긴 글이라 출처로 쓰지 않는다
-                    영어    right 에 영어가 있으면 사용자가 쓴 안건 제목·결정할 사항에 글자 그대로 있을 때만 받는다
-                            (요약 글의 영어는 요약 단계가 쓴 표기라 출처로 쓰지 않는다). 소리는 reading 으로 비교하고,
-                            reading 이 wrong 과 같으면 오인식이 아니라 표기만 바꾸는 것이라 버린다 (에이더블유에스 → AWS).
-                            실제 회의 안건이 "AWS·Terraform", "Helm 차트" 처럼 영어로 적혀 있었다 (2026-11-04)
+                    right   요청 안에 없어도 받는다 (SCRUM-151). 실제 회의에서 오인식인데 맞는 표기가 요청 어디에도 없는
+                            경우가 많았다 (「어그 수정」 등). 바꾼 곳에는 원래 글이 남아 회의록을 보는 사람이 판단한다.
+                            요청 안에 있는지(has_source)는 세기만 한다 (로그의 guessed = 요청 안에 없던 쌍 수).
+                            요청 안이란 요약 글의 「」 밖(재료에서 빠진 의견 포함), 안건 제목, 결정할 사항 문구다.
+                            「」 안은 요약 쪽이 STT 를 확신하지 못해 원문 그대로 옮긴 글이라 세지 않는다
+                    영어    right 에 영어가 있으면 소리는 reading 으로 비교하고, reading 이 wrong 과 같으면 오인식이 아니라
+                            표기만 바꾸는 것이라 버린다 (에이더블유에스 → AWS). 요청 안에 있는지는 사용자가 쓴 안건 글에서만 센다
                     글자    wrong·reading 은 한글(띄어쓰기 포함)만, right 는 한글·영어·띄어쓰기만. 두 글자 이상, 서로 다르고
                             한쪽이 다른 쪽을 품지 않는다, 숫자·수 낱말이 없다
                     소리    자모로 풀어 비교한 비슷함이 글자 수가 같으면 MIN_SIMILARITY, 다르면(MAX_LENGTH_GAP 자까지)
@@ -63,6 +62,7 @@ class Correction:
     materials: list[Material]           # 교정이 반영된 재료 (바뀌지 않은 재료는 같은 객체)
     fixes: int = 0                      # 답에서 읽은 쌍 수
     applied: int = 0                    # 검사를 통과한 쌍 수
+    guessed: int = 0                    # 그중 맞는 표기가 요청 안에 없던 쌍 수 (앞뒤 글로 짐작한 것)
     changed: int = 0                    # 글이 바뀐 재료 수
     error_code: str | None = None       # 교정 없이 간 이유 (LLM_TIMEOUT · LLM_FAILED · CHECK_FAILED)
     attempts: int = 0
@@ -101,10 +101,11 @@ def _correct(materials, agendas, summary, llm, timeout_s, prompt, call_retries) 
     if outcome.placement is None:
         return Correction(materials, error_code=outcome.error_code, **usage)
     pairs = outcome.placement
-    accepted = [p[:2] for p in pairs if check_fix(*p, targets, sources, written)]
-    fixed = apply(materials, accepted)
+    passed = [p for p in pairs if check_fix(*p, targets)]
+    guessed = sum(not has_source(right, sources, written) for _, right, _ in passed)
+    fixed = apply(materials, [p[:2] for p in passed])
     changed = sum(a is not b for a, b in zip(materials, fixed))
-    return Correction(fixed, fixes=len(pairs), applied=len(accepted), changed=changed, **usage)
+    return Correction(fixed, fixes=len(pairs), applied=len(passed), guessed=guessed, changed=changed, **usage)
 
 
 def build_user(materials: list[Material], agendas: list[dict], summary: dict) -> str:
@@ -168,18 +169,14 @@ def agenda_text(agendas: list[dict]) -> str:
     return "\n".join(texts)
 
 
-def check_fix(wrong: str, right: str, reading: str | None, targets: list[Material], sources: str,
-              written: str) -> bool:
-    """sources 는 맞는 표기의 출처 전체(source_text), written 은 사용자가 쓴 안건 글(agenda_text)."""
-    english = bool(_LATIN.search(right))
-    if english:
+def check_fix(wrong: str, right: str, reading: str | None, targets: list[Material]) -> bool:
+    """출처는 보지 않는다 (has_source 로 세기만 한다). 소리·글자·숫자 검사만 한다."""
+    if _LATIN.search(right):
         if not (reading and _HANGUL.fullmatch(reading) and _WRITTEN.fullmatch(right)) or reading == wrong:
-            return False
-        if right not in written:
             return False
         heard = reading
     else:
-        if not _HANGUL.fullmatch(right) or right not in sources:
+        if not _HANGUL.fullmatch(right):
             return False
         heard = right
     if not _HANGUL.fullmatch(wrong) or not any(wrong in m.text for m in targets):
@@ -192,6 +189,11 @@ def check_fix(wrong: str, right: str, reading: str | None, targets: list[Materia
     if gap > MAX_LENGTH_GAP:
         return False
     return similarity(wrong, heard) >= (MIN_SIMILARITY if gap == 0 else MIN_SIMILARITY_GAP)
+
+
+def has_source(right: str, sources: str, written: str) -> bool:
+    """맞는 표기가 요청 안에 적혀 있는가. 영어가 든 표기는 사용자가 쓴 안건 글(written)에서만, 한글은 출처 전체에서 찾는다."""
+    return right in (written if _LATIN.search(right) else sources)
 
 
 def apply(materials: list[Material], pairs: list[tuple[str, str]]) -> list[Material]:

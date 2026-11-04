@@ -20,7 +20,8 @@ AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수,
                          {"text": "고객사 로고는", "in": ["할 일", "고객 요청"]}],
               "tables": [{"field": "할 일", "columns": 4, "rows": 3}],
               "grouping": {"안건별 논의": ["안건"], "할 일": ["담당자", "안건"]},
-              "fixes": {"want": [["쿠버내티스", "쿠버네티스"]], "keep": ["젠킨수"], "untouched": [[601, "opinion", "o1"]]},
+              "fixes": {"want": [["쿠버내티스", "쿠버네티스"]], "keep": ["다섯 개"], "allow": ["젠킨수"],
+                        "untouched": [[601, "opinion", "o1"]]},
               "then": {"name": "배치-다시배치", "relayoutTo": ["결정 사항", "할 일"], "expect": [...]}}]}
 
   source  요약 항목 출처 [안건 id, 종류, 항목 id 또는 결정할 사항 id]. 결과 줄의 sources 로 찾는다
@@ -32,8 +33,10 @@ AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수,
           칸 고르기 채점(맞음)과 따로 센다
   fixes   오인식 교정 (명세 7.7). 칸 고르기 채점(맞음)과 따로 센다
           want       [잘못 적힌 말, 맞는 표기]. 결과 글에 "맞는 표기(STT: 잘못 적힌 말)" 이 있으면 맞음.
+                     맞는 표기가 여럿이면 목록으로 쓴다 (예: ["머지 리퀘스트", "Merge Request"]).
                      낱말마다 나눠 고친 모양("깃허브(STT: 깃헙) 액션(STT: 액선)")도 맞음
-          keep       바뀌면 안 되는 말. 결과 글에 "(STT: 그 말)" 이 있으면 틀림. want 에 없는 교정도 틀림으로 센다
+          keep       바뀌면 안 되는 말. 결과 글에 "(STT: 그 말)" 이 있으면 틀림. want·allow 에 없는 교정도 틀림으로 센다
+          allow      바뀌어도 되고 안 바뀌어도 되는 말 (맞는 표기가 요청에 없어 짐작해야 하는 것 등)
           untouched  교정이 붙으면 안 되는 줄의 출처 (사람이 고친 항목 등)
   then    처음 초안의 줄로 양식을 바꿔 다시 배치한다 (try_draft --relayout-to 와 같은 흐름). 처음이 실패하면 건너뛴다.
           addLines 에 줄(previousLines 모양)을 주면 이전 줄 뒤에 붙인다 (작성자가 직접 쓴 줄)
@@ -150,9 +153,10 @@ def _score_fixes(result, want: dict) -> dict:
     lines = [(line_key(line), line.get("sentence") or " | ".join(line.get("cells", [])))
              for s in result["sections"] for line in s.get("evidence", [])]
     text = "\n".join(t for _, t in lines)
-    pairs = [tuple(p) for p in want.get("want", ())]
-    hit = [w for w, r in pairs if any(form in text for form in _fixed_forms(w, r))]
-    wanted = {w for w, _ in pairs} | {wp for w, r in pairs for wp, _ in _word_pairs(w, r)}
+    pairs = [(w, r if isinstance(r, list) else [r]) for w, r in want.get("want", ())]
+    hit = [w for w, rs in pairs if any(form in text for r in rs for form in _fixed_forms(w, r))]
+    wanted = {w for w, _ in pairs} | {wp for w, rs in pairs for r in rs for wp, _ in _word_pairs(w, r)}
+    wanted |= set(want.get("allow", ()))
     extra = sorted({w for w in _FIXED.findall(text) if w not in wanted})
     untouched = {tuple(u) for u in want.get("untouched", ())}
     touched = sum(1 for key, t in lines if key in untouched and _FIXED.search(t))

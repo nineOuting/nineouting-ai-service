@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from minutes.correction import (CORRECTION_KIND, agenda_text, apply, build_user, check_fix, correct, read_fixes,
-                                similarity, source_text)
+from minutes.correction import (CORRECTION_KIND, agenda_text, apply, build_user, check_fix, correct, has_source,
+                                read_fixes, similarity, source_text)
 from minutes.draft import SUCCEEDED, make_draft
 from minutes.materials import build_materials
 from minutes.placement import load_prompt
@@ -43,44 +43,43 @@ def by_ref(materials):
 
 def ok(body, materials, wrong, right, reading=None, targets=None):
     targets = [m for m in materials if not m.edited] if targets is None else targets
-    return check_fix(wrong, right, reading, targets, source_text(body["summary"], body["agendas"]),
-                     agenda_text(body["agendas"]))
+    return check_fix(wrong, right, reading, targets)
 
 
-@pytest.mark.parametrize("wrong, right", [("쿠버내티스", "쿠버네티스"), ("프로메테오스", "프로메테우스"), ("그라파냐", "그라파나"),
-                                         ("얼러트 매니져", "얼러트 매니저"),                   # 맞는 표기가 빠진 의견에만 있음
-                                         ("깃헙 액선", "깃허브 액션")])                       # 4자 → 5자, 0.77
-def test_맞는_표기가_요청에_있으면_받아들인다(materials, body, wrong, right):
-    assert ok(body, materials, wrong, right)
+def sourced(body, right):
+    return has_source(right, source_text(body["summary"], body["agendas"]), agenda_text(body["agendas"]))
 
 
-@pytest.mark.parametrize("wrong, right, why", [
-    ("젠킨수", "젠킨스", "맞는 표기가 요청에 없음"),
-    ("핼름", "헬름", "맞는 표기가 「」 안에만 있음"),
-    ("다섯 개", "여섯 개", "수 낱말"),
-    ("쿠버내티스", "쿠버네티스 클러스터", "한쪽이 다른 쪽을 품음"),
-    ("요고사항 문서", "요구사항", "글자 수가 다르고 비슷함이 0.6 아래 (0.57)"),
-    ("쿠버", "쿠버네티스", "한쪽이 다른 쪽을 품음"),
-    ("저장소", "프로메테우스", "글자 수가 3자 다름"),
-    ("없는말", "그라파나", "잘못 적힌 말이 재료에 없음"),
+@pytest.mark.parametrize("wrong, right, reading, source", [
+    ("쿠버내티스", "쿠버네티스", None, True),
+    ("프로메테오스", "프로메테우스", None, True),
+    ("그라파냐", "그라파나", None, True),
+    ("얼러트 매니져", "얼러트 매니저", None, True),          # 맞는 표기가 빠진 의견에만 있음
+    ("깃헙 액선", "깃허브 액션", None, True),                # 4자 → 5자, 0.77
+    ("알고 시디", "ArgoCD", "아르고 시디", True),             # 영어, 안건 글에 있음
+    ("젠킨수", "젠킨스", None, False),                       # 맞는 표기가 요청에 없음 → 짐작으로 받음
+    ("핼름", "헬름", None, False),                           # 「」 안에만 있음 → 짐작으로 받음
+    ("젠킨수", "Jenkins", "젠킨스", False),                  # 영어가 요약 글에만 있음 → 짐작으로 받음
 ])
-def test_검사에_걸리는_쌍은_버린다(materials, body, wrong, right, why):
-    assert not ok(body, materials, wrong, right), why
-
-
-def test_영어_표기는_안건_글에_있고_읽는_소리가_비슷하면_받아들인다(materials, body):
-    assert ok(body, materials, "알고 시디", "ArgoCD", "아르고 시디")                      # 0.80
+def test_소리가_비슷하면_받고_요청_안에_있는지는_따로_센다(materials, body, wrong, right, reading, source):
+    assert ok(body, materials, wrong, right, reading)
+    assert sourced(body, right) is source
 
 
 @pytest.mark.parametrize("wrong, right, reading, why", [
-    ("알고 시디", "ArgoCD", None, "읽는 소리가 없음"),
+    ("다섯 개", "여섯 개", None, "수 낱말"),
+    ("쿠버내티스", "쿠버네티스 클러스터", None, "한쪽이 다른 쪽을 품음"),
+    ("요고사항 문서", "요구사항", None, "글자 수가 다르고 비슷함이 0.6 아래 (0.57)"),
+    ("쿠버", "쿠버네티스", None, "한쪽이 다른 쪽을 품음"),
+    ("저장소", "프로메테우스", None, "글자 수가 3자 다름"),
+    ("없는말", "그라파나", None, "잘못 적힌 말이 재료에 없음"),
+    ("알고 시디", "ArgoCD", None, "영어인데 읽는 소리가 없음"),
     ("알고 시디", "ArgoCD", "ArgoCD", "읽는 소리가 한글이 아님"),
     ("알고 시디", "ArgoCD", "예산", "읽는 소리가 비슷하지 않음"),
-    ("젠킨수", "Jenkins", "젠킨스", "영어 표기가 요약 글에만 있고 안건 글에는 없음"),
     ("에이더블유에스", "AWS", "에이더블유에스", "맞게 읽은 소리를 영어로 바꾸는 것뿐 (오인식 아님)"),
     ("알고 시디", "ArgoCD 2", "아르고 시디 이", "숫자"),
 ])
-def test_검사에_걸리는_영어_쌍은_버린다(materials, body, wrong, right, reading, why):
+def test_검사에_걸리는_쌍은_버린다(materials, body, wrong, right, reading, why):
     assert not ok(body, materials, wrong, right, reading), why
 
 
@@ -94,8 +93,8 @@ def test_글자_수가_달라도_비슷함이_높으면_받아들인다():
     from minutes.models import Material
     m = Material(ref="m1", agenda_id=1, agenda_title="t", kind="summary", item_id="s", label="요약",
                  text="「기능면 시선」을 같이 봄", evidence_seqs=(), edited=False, needs_check=False, order=(0, 1, 0))
-    assert check_fix("기능면 시선", "기능 명세", None, [m], "기능 명세 문서", "")            # 5자 → 4자, 0.62
-    assert not check_fix("기능면 시선", "기능", None, [m], "기능", "")                     # 품음
+    assert check_fix("기능면 시선", "기능 명세", None, [m])                                # 5자 → 4자, 0.62
+    assert not check_fix("기능면 시선", "기능", None, [m])                                 # 품음
 
 
 def test_교정은_정해_둔_생각하는_양으로_부르고_칸_고르기는_넘기지_않는다(body, materials, monkeypatch):
@@ -181,10 +180,12 @@ def test_AI에는_사람이_고친_재료를_보내지_않는다(materials, body
 
 
 def test_교정은_통과한_쌍만_반영하고_개수를_돌려준다(materials, body):
-    reply = {"fixes": RIGHT["fixes"] + [{"wrong": "젠킨수", "right": "젠킨스"}]}
+    reply = {"fixes": RIGHT["fixes"] + [{"wrong": "젠킨수", "right": "젠킨스"},       # 요청에 없음 → 짐작으로 받음
+                                        {"wrong": "다섯 개", "right": "여섯 개"}]}     # 수 낱말 → 버림
     c = correct(materials, body["agendas"], body["summary"], ScriptLLM(corrections=[reply]), 60.0)
-    assert (c.fixes, c.applied, c.changed, c.error_code, c.attempts) == (4, 3, 4, None, 1)     # m2·m7·m11·m13
-    assert "젠킨수」" in by_ref(c.materials)["m3"].text
+    assert (c.fixes, c.applied, c.guessed, c.changed, c.error_code, c.attempts) == (5, 4, 1, 5, None, 1)
+    assert "「젠킨스(STT: 젠킨수)」" in by_ref(c.materials)["m3"].text                  # 보이는 모양은 출처가 있을 때와 같다
+    assert "「다섯 개」" in by_ref(c.materials)["m2"].text
 
 
 @pytest.mark.parametrize("reply, code", [(LLMTimeout("t"), "LLM_TIMEOUT"), (LLMError("e"), "LLM_FAILED"),
@@ -229,14 +230,14 @@ def test_교정이_실패해도_초안은_교정_없이_만든다(body, material
 def test_다시_배치에서는_교정하지_않는다(body, materials):
     first = make_draft(body, ScriptLLM(answer(materials), corrections=[RIGHT]))
     again = dict(body, template={"items": TITLES}, previousLines=previous_lines_of(first))
-    llm = ScriptLLM({"placements": [{"m": f"m{i}", "section": 1} for i in range(1, 16)], "unplaced": []})
+    llm = ScriptLLM({"placements": [{"m": f"m{i}", "section": 1} for i in range(1, 17)], "unplaced": []})
     assert make_draft(again, llm)["status"] == SUCCEEDED and llm.correction_calls == []
 
 
 def test_로그에는_교정_개수만_남는다(body, materials, caplog):
     caplog.set_level(logging.INFO, logger="minutes.draft")
     make_draft(body, ScriptLLM(answer(materials), corrections=[RIGHT]))
-    assert "fixes=3 applied=3 corrected=4" in caplog.text and "correction_prompt=correction-v1" in caplog.text
+    assert "fixes=3 applied=3 guessed=0 corrected=4" in caplog.text and "correction_prompt=correction-v2" in caplog.text
     assert "쿠버" not in caplog.text and "STT" not in caplog.text
 
 

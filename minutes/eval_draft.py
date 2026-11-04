@@ -18,6 +18,7 @@ AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수,
                          {"source": [103, "decisionCheck", 12], "in": ["미결 안건"], "serious": ["결정 사항"]},
                          {"text": "고객사 로고는", "in": ["할 일", "고객 요청"]}],
               "tables": [{"field": "할 일", "columns": 4, "rows": 3}],
+              "grouping": {"안건별 논의": ["안건"], "할 일": ["담당자", "안건"]},
               "then": {"name": "배치-다시배치", "relayoutTo": ["결정 사항", "할 일"], "expect": [...]}}]}
 
   source  요약 항목 출처 [안건 id, 종류, 항목 id 또는 결정할 사항 id]. 결과 줄의 sources 로 찾는다
@@ -25,6 +26,8 @@ AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수,
   in      정답 칸 이름들. "(넣지 않음)" 은 어느 칸에도 넣지 않은 것
   serious 이 칸에 들어가면 큰 실수로 따로 센다 (예: 확인 안 된 결정이 결정 칸에)
   tables  표 필드의 열 개수(columns)와 행 수(rows). null 이면 보지 않는다
+  grouping  글 필드마다 맞다고 볼 묶는 기준 (명세 7.2). 줄이 들어간 필드만 센다. AI 가 기준을 주지 않은 필드는 "묶지 않음".
+          칸 고르기 채점(맞음)과 따로 센다
   then    처음 초안의 줄로 양식을 바꿔 다시 배치한다 (try_draft --relayout-to 와 같은 흐름). 처음이 실패하면 건너뛴다.
           addLines 에 줄(previousLines 모양)을 주면 이전 줄 뒤에 붙인다 (작성자가 직접 쓴 줄)
 """
@@ -41,8 +44,8 @@ from shared.llm import Reply
 
 from .draft import make_draft
 from .materials import build_materials
-from .models import TABLE
-from .placement import RELAYOUT_KIND, load_prompt
+from .models import NO_GROUPING, TABLE
+from .placement import PROMPT_KIND, RELAYOUT_KIND, load_prompt, parse_reply, read_grouping
 from .relayout import build_relayout, previous_lines_from
 from .request import template_fields
 from .table import TABLE_KIND
@@ -111,9 +114,12 @@ def placed(result: dict) -> list[tuple]:
     return [(line_key(line), s["title"]) for s in result.get("sections", []) for line in s.get("evidence", [])]
 
 
-def score(result: dict, expect: list[dict], tables: list[dict] = ()) -> dict:
+def score(result: dict, expect: list[dict], tables: list[dict] = (), grouping: dict | None = None,
+          chosen: dict | None = None) -> dict:
+    """grouping 은 사례의 필드별 정답 기준, chosen 은 AI 가 고른 필드별 기준 (필드 이름 → 기준)."""
     if result["status"] != "SUCCEEDED":
-        return {"ok": False, "failed": result["error"]["code"], "wrong": None, "serious": 0, "items": {}, "tables": []}
+        return {"ok": False, "failed": result["error"]["code"], "wrong": None, "serious": 0, "items": {}, "tables": [],
+                "grouping": {}}
     where = placed(result)
     items, wrong, serious = {}, 0, 0
     for e in expect:
@@ -124,7 +130,18 @@ def score(result: dict, expect: list[dict], tables: list[dict] = ()) -> dict:
         items[json.dumps(entry_key(e), ensure_ascii=False)] = {"got": got, "ok": good}
     table_scores = [_score_table(result, t) for t in tables]
     ok = wrong == 0 and all(t["ok"] for t in table_scores)
-    return {"ok": ok, "failed": None, "wrong": wrong, "serious": serious, "items": items, "tables": table_scores}
+    return {"ok": ok, "failed": None, "wrong": wrong, "serious": serious, "items": items, "tables": table_scores,
+            "grouping": _score_grouping(result, grouping or {}, chosen or {})}
+
+
+def _score_grouping(result, want: dict, chosen: dict) -> dict:
+    filled = {s["title"] for s in result["sections"] if s.get("evidence")}
+    out = {}
+    for title, allowed in want.items():
+        if title in filled:
+            got = chosen.get(title, NO_GROUPING)
+            out[title] = {"got": got, "ok": got in allowed}
+    return out
 
 
 def _score_table(result, want):
@@ -153,6 +170,9 @@ class Recorder:
             self.calls.append(rec)
             raise
         rec.update(ms=_ms(t0), input_tokens=reply.input_tokens, output_tokens=reply.output_tokens)
+        if rec["kind"] in (PROMPT_KIND, RELAYOUT_KIND):           # 칸 고르기 답의 묶는 기준 (칸 번호 → 기준 이름뿐)
+            data = parse_reply(reply.text)
+            rec["grouping"] = data.get("grouping") if isinstance(data, dict) else None
         self.calls.append(rec)
         return reply
 
@@ -213,10 +233,19 @@ def _one(name, body, spec, rec, kw, variant, n, timeout_s, writer, runs_out):
     calls = rec.calls[start:]
     for c in calls:
         writer.writerow({"variant": variant, "task": name, "run": n, **c})
+    sc = score(result, spec["expect"], spec.get("tables", ()), spec.get("grouping"), chosen_grouping(body, calls))
     runs_out.write(json.dumps({"variant": variant, "task": name, "run": n, "ms": _ms(t0), "calls": calls,
-                               "score": score(result, spec["expect"], spec.get("tables", ())), "result": result},
-                              ensure_ascii=False) + "\n")
+                               "score": sc, "result": result}, ensure_ascii=False) + "\n")
     return result
+
+
+def chosen_grouping(body: dict, calls: list[dict]) -> dict:
+    """마지막으로 통과한 칸 고르기 답의 묶는 기준 → 필드 이름 → 기준. 코드와 같은 규칙(read_grouping)으로 읽는다."""
+    titles = [f.title for f in template_fields(body["template"])[0] if f.ai_fill]
+    last = next((c for c in reversed(calls) if c["kind"] in (PROMPT_KIND, RELAYOUT_KIND) and not c["error"]), None)
+    if last is None:
+        return {}
+    return {titles[i]: by for i, by in read_grouping(last.get("grouping"), len(titles)).items()}
 
 
 def _ms(since):
@@ -229,19 +258,22 @@ def summarize(out_dir: Path) -> str:
     groups = {}
     for r in rows:
         groups.setdefault((r["task"], r["variant"]), []).append(r)
-    out = ["| 작업 | 지시문 | 맞음 | 틀린 항목 합 | 큰 실수 | 실패 | 호출 | 시간 중앙/최대(초) | 토큰 입력/출력 (판당 평균) |",
-           "|---|---|---|---|---|---|---|---|---|"]
+    out = ["| 작업 | 지시문 | 맞음 | 틀린 항목 합 | 큰 실수 | 실패 | 묶기 맞음 (필드) | 호출 | 시간 중앙/최대(초) |"
+           " 토큰 입력/출력 (판당 평균) |",
+           "|---|---|---|---|---|---|---|---|---|---|"]
     misses = []
     for (task, variant), rs in groups.items():
         ok = sum(r["score"]["ok"] for r in rs)
         wrong = sum(r["score"]["wrong"] or 0 for r in rs)
         serious = sum(r["score"]["serious"] for r in rs)
         failed = sum(bool(r["score"]["failed"]) for r in rs)
+        grouped = [g for r in rs for g in r["score"].get("grouping", {}).values()]
+        grouping = f"{sum(g['ok'] for g in grouped)}/{len(grouped)}" if grouped else "-"
         calls = [c for r in rs for c in r["calls"]]
         secs = [r["ms"] / 1000 for r in rs]
         tin = sum(c.get("input_tokens") or 0 for c in calls) / len(rs)
         tout = sum(c.get("output_tokens") or 0 for c in calls) / len(rs)
-        out.append(f"| {task} | {variant} | {ok}/{len(rs)} | {wrong} | {serious} | {failed} | {len(calls)} |"
+        out.append(f"| {task} | {variant} | {ok}/{len(rs)} | {wrong} | {serious} | {failed} | {grouping} | {len(calls)} |"
                    f" {statistics.median(secs):.1f} / {max(secs):.1f} | {tin:.0f} / {tout:.0f} |")
         counts = {}
         for r in rs:
@@ -249,6 +281,10 @@ def summarize(out_dir: Path) -> str:
                 if not item["ok"]:
                     where = " + ".join(item["got"])
                     counts[(key, where)] = counts.get((key, where), 0) + 1
+            for title, g in r["score"].get("grouping", {}).items():
+                if not g["ok"]:
+                    k = (f"묶기 {title}", g["got"])
+                    counts[k] = counts.get(k, 0) + 1
             for t in r["score"]["tables"]:
                 if not t["ok"]:
                     k = (f"표 {t['field']}", f"열 {len(t['columns'])}개 행 {t['rows']}개")

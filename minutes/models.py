@@ -1,8 +1,15 @@
 """회의록 초안의 자료 모양. 명세: docs/api/minutes-draft-contract.md"""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # 재료 종류. 칸 안의 줄 순서도 이 묶음 순서를 따른다 (결정할 사항 줄 → 요약 → 의견 → 할 일)
 KIND_RANK = {"decision": 0, "undecided": 0, "decisionCheck": 0, "summary": 1, "opinion": 2, "todo": 3}
+# 종류 이름. 다시 배치에서 AI 에 보여 줄 종류(relayout.py)와 "종류"로 묶을 때의 묶음 제목(lines.py). 의견의 세부 종류(우려·질문 등)는 "의견" 하나다
+KIND_NAMES = {"decision": "결정", "undecided": "미결", "decisionCheck": "결정 확인 필요", "summary": "요약",
+              "opinion": "의견", "todo": "할 일"}
+
+# 글 필드 안에서 줄을 묶는 기준 (명세 7.2). AI 가 칸을 고를 때 칸마다 하나 고른다
+BY_AGENDA, BY_ASSIGNEE, BY_KIND, NO_GROUPING = "안건", "담당자", "종류", "묶지 않음"
+GROUPINGS = (BY_AGENDA, BY_ASSIGNEE, BY_KIND, NO_GROUPING)
 
 
 @dataclass(frozen=True)
@@ -66,3 +73,4 @@ class Placement:
     """검사를 통과한 AI 배치 결과. 모든 재료가 sections 나 unplaced 중 한 곳에만 있다."""
     sections: dict[str, int]        # 재료 번호 → 필드 위치 (양식 필드의 0부터 순서)
     unplaced: tuple[str, ...]       # 어느 칸에도 넣지 못한 재료 번호
+    grouping: dict[int, str] = field(default_factory=dict)  # 필드 위치 → 묶는 기준 (GROUPINGS). 없는 필드는 묶지 않는다

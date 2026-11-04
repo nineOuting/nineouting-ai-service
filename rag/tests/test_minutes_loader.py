@@ -186,3 +186,19 @@ def test_머리글_바닥글이_없거나_비면_넣지_않는다(header, footer
 def test_표_경계(content, lines):
     m = dict(copy.deepcopy(TABLED), header=None, footer=None, sections=[{"title": "표", "content": content}])
     assert [p.content for p in load_minutes(m).pieces] == lines
+
+
+# 회의록 초안이 필드 안에서 안건·담당자 등으로 묶은 글 (명세 5.4, SCRUM-149)
+@pytest.mark.parametrize("content, lines", [
+    ("- 배포 일정\n  - 목요일로 정함\n  - QA 일정과 겹친다는 우려\n- 예산\n  - 월 사용량을 보고 정함\n- 작성자가 새로 쓴 줄",
+     ["배포 일정: 목요일로 정함", "배포 일정: QA 일정과 겹친다는 우려", "예산: 월 사용량을 보고 정함", "작성자가 새로 쓴 줄"]),
+    ("- 배포 일정: 목요일로 정함\n- 예산: 월 사용량을 보고 정함",                                   # 예전 형식은 그대로
+     ["배포 일정: 목요일로 정함", "예산: 월 사용량을 보고 정함"]),
+    ("- a\n  - b\n    - c\n  - d\n- e", ["a: b: c", "a: d", "e"]),                               # 여러 단계
+    ("- 김철수\n\t- QA 일정표 공유", ["김철수: QA 일정표 공유"]),                                    # 탭 들여쓰기
+    ("- 묶음\n  - x\n| 열 |\n|---|\n| 1 |\n  - 표 뒤 줄", ["묶음: x", "열: 1", "표 뒤 줄"]),          # 표가 위 줄을 끊는다
+    ("- 하위 줄 없는 제목\n- 해당 내용 없음", ["하위 줄 없는 제목"]),
+])
+def test_들여_쓴_줄은_위_줄을_붙여_넣고_위_줄은_따로_넣지_않는다(content, lines):
+    m = dict(copy.deepcopy(TABLED), header=None, footer=None, sections=[{"title": "안건별 논의", "content": content}])
+    assert [p.content for p in load_minutes(m).pieces] == lines

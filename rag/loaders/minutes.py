@@ -5,6 +5,9 @@
 
 확정 회의록 규칙
   - content 를 줄로 나누고 줄 앞 표시("- ", "* ", "• ")를 뗀다. 빈 줄과 "해당 내용 없음" 줄은 넣지 않는다
+  - 들여 쓴 목록(회의록 초안이 안건·담당자 등으로 묶은 필드, 명세 5.4)은 하위 줄 앞에 위 줄들을 ": " 로 붙여 한 줄로 넣고,
+    하위 줄이 있는 위 줄은 따로 넣지 않는다 ("- 배포 일정\n  - 목요일로 정함" → "배포 일정: 목요일로 정함").
+    들여쓰기가 없는 예전 형식은 줄마다 그대로다. 들여쓰기는 앞 공백 수로 보고 탭은 4칸으로 센다
   - content 안의 마크다운 표("|" 로 시작하는 줄이 이어지고 둘째 줄이 |---| 구분 줄)는 머리 행 아래의 행 하나가 Piece 하나.
     행은 "열 이름: 값 | …" (빈 칸은 뺌, 워드·엑셀 표와 같은 규칙). 몸통 행이 없으면 머리 행 이름들을 한 줄로.
     칸 안의 "\\|" 는 칸 구분이 아니다. 구분 줄이 없는 "|" 줄은 표가 아니라 보고 줄 그대로 넣는다
@@ -113,21 +116,38 @@ def _load_confirmed(minutes) -> LoadResult:
 
 
 def section_lines(content: str) -> list[str]:
-    """칸 글 -> 넣을 줄 목록. 일반 줄은 줄 앞 표시를 떼고, 마크다운 표는 행마다 "열 이름: 값 | …" 한 줄."""
-    raw = [line.strip() for line in content.splitlines()]
-    out, i = [], 0
+    """칸 글 -> 넣을 줄 목록. 일반 줄은 줄 앞 표시를 떼고, 마크다운 표는 행마다 "열 이름: 값 | …" 한 줄.
+    들여 쓴 줄은 위 줄들을 ": " 로 붙인다 (모듈 설명)."""
+    raw = [line.expandtabs(4).rstrip() for line in content.splitlines()]
+    entries, i = [], 0                    # ("table", 줄들) 또는 ("line", 들여쓰기, 글)
     while i < len(raw):
-        if raw[i].startswith("|") and i + 1 < len(raw) and _TABLE_RULE.match(raw[i + 1]):
+        line = raw[i].strip()
+        if line.startswith("|") and i + 1 < len(raw) and _TABLE_RULE.match(raw[i + 1].strip()):
             end = i + 2
-            while end < len(raw) and raw[end].startswith("|"):
+            while end < len(raw) and raw[end].strip().startswith("|"):
                 end += 1
-            out += _table_lines(raw[i], raw[i + 2:end])
+            entries.append(("table", _table_lines(line, [r.strip() for r in raw[i + 2:end]])))
             i = end
             continue
-        line = _BULLET.sub("", raw[i]).strip()
-        if line:
-            out.append(line)
+        text = _BULLET.sub("", line).strip()
+        if text:
+            entries.append(("line", len(raw[i]) - len(raw[i].lstrip()), text))
         i += 1
+
+    out, parents = [], []                 # parents: (들여쓰기, 글) 지금 줄의 위 줄들
+    for k, entry in enumerate(entries):
+        if entry[0] == "table":
+            out += entry[1]
+            parents = []
+            continue
+        _, indent, text = entry
+        while parents and parents[-1][0] >= indent:
+            parents.pop()
+        nxt = entries[k + 1] if k + 1 < len(entries) else None
+        if nxt and nxt[0] == "line" and nxt[1] > indent:     # 하위 줄이 있으면 위 줄로만 쓴다
+            parents.append((indent, text))
+            continue
+        out.append(": ".join([t for _, t in parents] + [text]))
     return out
 
 

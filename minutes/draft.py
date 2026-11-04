@@ -14,14 +14,14 @@ AI 가 채우는 표 필드 (명세 7.6): 배치 뒤 재료가 놓인 표 필드
   AI 실패           FAILED / LLM_TIMEOUT · LLM_FAILED · CHECK_FAILED
 
 요청 검사(형식 오류 → 400)는 이 함수를 부르기 전에 한다 (request.validate_request). 여기서는 다시 하지 않는다.
-로그에는 요청 번호, 회의록 번호, 개수, 시도 횟수, 상태, 오류 코드, 토큰, 걸린 시간만 남긴다. 요약·칸 이름·초안 글은 남기지 않는다.
+로그에는 요청 번호, 회의록 번호, 개수(묶는 기준을 받은 글 필드 수 grouped 포함), 시도 횟수, 상태, 오류 코드, 토큰, 걸린 시간만 남긴다. 요약·칸 이름·초안 글은 남기지 않는다.
 """
 import logging
 import time
 
 from .lines import build_sections, group, unplaced_lines
 from .materials import build_materials
-from .models import TABLE, Placement
+from .models import NO_GROUPING, TABLE, Placement
 from .placement import RELAYOUT_KIND, Prompt, load_prompt, place
 from .relayout import build_relayout
 from .request import template_fields
@@ -88,7 +88,8 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
 
     placement = outcome.placement
     placement = Placement(sections={ref: ai_fields[i] for ref, i in placement.sections.items()},
-                          unplaced=placement.unplaced)
+                          unplaced=placement.unplaced,
+                          grouping={ai_fields[i]: by for i, by in placement.grouping.items()})
     table_prompt = table_prompt or load_prompt(kind=TABLE_KIND)
     tables, calls, tokens_in, tokens_out, fallbacks = {}, 0, 0, 0, 0
     for i, ms in enumerate(group(len(fields), materials, placement)):
@@ -110,8 +111,9 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
     unplaced = not_sent + unplaced
     lost_lines = unplaced_lines(materials, placement, previous)
     lines = sum(len(s["evidence"]) for s in sections)
-    log.info("초안 완료 %s lines=%d unplaced=%d unplaced_lines=%d ms=%d",
-             tag, lines, len(unplaced), len(lost_lines), _ms(t0))
+    grouped = sum(by != NO_GROUPING for i, by in placement.grouping.items() if fields[i].type != TABLE)
+    log.info("초안 완료 %s lines=%d unplaced=%d unplaced_lines=%d grouped=%d ms=%d",
+             tag, lines, len(unplaced), len(lost_lines), grouped, _ms(t0))
     return succeeded(request_id, sections, unplaced, lost_lines, extra)
 
 

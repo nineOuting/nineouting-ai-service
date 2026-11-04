@@ -18,12 +18,10 @@ import re
 from dataclasses import replace
 
 from .materials import build_materials
-from .models import Material
+from .models import KIND_NAMES, Material
 
 WRITTEN = "written"                     # 작성자가 새로 쓴 줄의 재료 종류. 결과에는 나가지 않는다 (sources 가 빈 목록)
 WRITTEN_LABEL = "직접 작성"
-KIND_LABELS = {"decision": "결정", "undecided": "미결", "decisionCheck": "결정 확인 필요", "summary": "요약",
-               "opinion": "의견", "todo": "할 일"}
 
 
 def build_relayout(agendas: list[dict], summary: dict, previous_lines: list[dict]) -> tuple[list[Material], list[Material]]:
@@ -75,7 +73,7 @@ def _kept(line: dict, ref: str, i: int, original: Material | None, titles: dict)
         src = sources[0]
         agenda_id, kind, item_id, point_id = src["agendaId"], src["kind"], src.get("id"), src.get("decisionPointId")
         title = original.agenda_title if original else titles.get(agenda_id, "")
-        label = original.label if original else KIND_LABELS[kind]
+        label = original.label if original else KIND_NAMES[kind]
     else:
         agenda_id, kind, item_id, point_id, title, label = None, WRITTEN, None, None, "", WRITTEN_LABEL
     parts = ((("안건", title),) if title else ()) + (("종류", label), ("줄 글", text))     # 표 칸 값 (명세 7.6)

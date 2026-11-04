@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from minutes.draft import SUCCEEDED, make_draft
-from minutes.materials import build_materials
+from minutes.materials import build_materials, opinion_covered, summary_seqs
 from minutes.request import validate_request
 from minutes.try_draft import PlaceAllFakeLLM
 
@@ -41,9 +41,14 @@ def test_백엔드가_칸을_빼고_meetingId를_붙여도_통과한다(body):
     validate_request(dict(body, summary=summary))
 
 
+def _kept_opinions(agenda):
+    return [o for o in agenda["opinions"] if not opinion_covered(o, summary_seqs(agenda))]
+
+
 def test_모든_항목이_줄로_한_번씩_나온다(body):
+    """요약 문장이 이미 담은 의견은 빼고 (materials.opinion_covered)."""
     materials = build_materials(body["agendas"], body["summary"])
-    items = sum(len(a["summary"]) + len(a["opinions"]) + len(a["todos"]) for a in body["summary"]["agendas"])
+    items = sum(len(a["summary"]) + len(_kept_opinions(a)) + len(a["todos"]) for a in body["summary"]["agendas"])
     point_lines = sum(1 for a in body["summary"]["agendas"] for p in a["decisionPoints"]
                       if p["status"] in ("DECIDED", "UNDECIDED", "DECISION_CHECK"))
     assert point_lines > 0 and len(materials) == items + point_lines
@@ -68,8 +73,15 @@ def test_근거와_표시를_예시에서_그대로_옮긴다(body):
     lines = {(line["sources"][0]["kind"], line["sources"][0]["id"]): line
              for s in result["sections"] for line in s["evidence"]}
     for agenda in body["summary"]["agendas"]:
-        for kind, key in (("summary", "summary"), ("opinion", "opinions"), ("todo", "todos")):
-            for item in agenda[key]:
+        for kind, items in (("summary", agenda["summary"]), ("opinion", _kept_opinions(agenda)), ("todo", agenda["todos"])):
+            for item in items:
                 line = lines[(kind, item["id"])]
                 assert line["transcriptSeqs"] == item["evidenceSeqs"]
                 assert (line["edited"], line["needsCheck"]) == (item["edited"], item["needsCheck"])
+
+
+def test_요약_문장이_담은_의견은_빠지고_요약_밖_줄의_의견은_남는다(body):
+    result = make_draft(body, PlaceAllFakeLLM())
+    opinions = {line["sources"][0]["id"] for s in result["sections"] for line in s["evidence"]
+                if line["sources"][0]["kind"] == "opinion"}
+    assert opinions == {"k3f9a1-o2"}          # o1 은 근거 42 가 요약 문장 근거(42, 43, 45) 안, o2 는 44 라 요약 밖

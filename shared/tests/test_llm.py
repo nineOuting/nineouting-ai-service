@@ -49,7 +49,7 @@ def test_gemini_SDK_가_없으면_설정_오류(monkeypatch):
 def test_gemini_클라이언트는_재시도를_끔():
     pytest.importorskip("google.genai")
     llm, _ = make_llm(GEMINI_ENV, "RAG_LLM")
-    retry = llm._client._api_client._http_options.retry_options
+    retry = llm.inner._client._api_client._http_options.retry_options
     assert retry is not None and retry.attempts == 1
 
 

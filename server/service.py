@@ -35,7 +35,7 @@ from input_adapter import (adapt_batch, adapt_event, adapt_agendas, adapt_correc
                            adapt_item_edits, adapt_decision_edits, adapt_offtopic_action, adapt_end_request, AdapterError)
 from meeting_live_summary_v2 import LiveSummarizer, Cfg  # noqa: E402
 from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
-from agenda_summarizer import AgendaSummarizer, SummarizeCfg  # noqa: E402
+from agenda_summarizer import PROMPT_VERSIONS, AgendaSummarizer, SummarizeCfg  # noqa: E402
 from agenda_status import AgendaStatusJudge, StatusCfg  # noqa: E402
 from agenda_opinions import AgendaOpinions, OpinionCfg  # noqa: E402
 from agenda_todos import AgendaTodos, TodoCfg  # noqa: E402
@@ -110,6 +110,7 @@ def classify_cfg_from_env(env=None, cfg=None):
 def summarize_cfg_from_env(env=None, cfg=None):
     """환경변수 -> 안건별 요약 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
     AGENDA_SUMMARY_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), MAX_AGENDA_SUMMARY_CALLS_PER_MEETING(회의당 호출 상한, 기본 300)
+    AGENDA_SUMMARY_PROMPT(안건 요약 프롬프트 버전, 기본 v1. v7 은 해요체와 맥락 교정. 값이 틀리면 ConfigError)
     """
     env = os.environ if env is None else env
     cfg = cfg or cfg_from_env(env)
@@ -120,6 +121,11 @@ def summarize_cfg_from_env(env=None, cfg=None):
                 kw[name] = int(env[key])
             except ValueError:
                 raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+    prompt = (env.get("AGENDA_SUMMARY_PROMPT") or "").strip()
+    if prompt:
+        if prompt not in PROMPT_VERSIONS:
+            raise ConfigError(f"AGENDA_SUMMARY_PROMPT 는 {', '.join(PROMPT_VERSIONS)} 중 하나여야 함: {prompt}")
+        kw["prompt_version"] = prompt
     return SummarizeCfg(**kw)
 
 

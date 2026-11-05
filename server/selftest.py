@@ -652,6 +652,18 @@ def test_summary_config():
     c = summarize_cfg_from_env({"LLM_PROVIDER": "gemini", "LLM_MODEL": "m", "AGENDA_SUMMARY_REFRESH_SEC": "45",
                                 "MAX_AGENDA_SUMMARY_CALLS_PER_MEETING": "99"})
     assert (c.provider, c.model, c.refresh_sec, c.max_calls) == ("gemini", "m", 45, 99)
+    # 프롬프트 버전: 기본 v1(안 넣거나 비워도), v1~v7 허용, 앞뒤 공백 무시, 그 밖의 값은 시작할 때 설정 오류
+    assert d.prompt_version == "v1" and summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": ""}).prompt_version == "v1"
+    assert summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": "  "}).prompt_version == "v1"
+    for v in ("v1", "v2", "v3", "v4", "v5", "v6", "v7"):
+        assert summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": v}).prompt_version == v
+    assert summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": " v7 "}).prompt_version == "v7"
+    for bad in ("v0", "v8", "7", "V7", "latest"):
+        try:
+            summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": bad})
+            raise SystemExit(f"잘못된 프롬프트 버전을 못 잡음: {bad}")
+        except ConfigError:
+            pass
     for key in ("AGENDA_SUMMARY_REFRESH_SEC", "MAX_AGENDA_SUMMARY_CALLS_PER_MEETING"):
         try:
             summarize_cfg_from_env({key: "x"})

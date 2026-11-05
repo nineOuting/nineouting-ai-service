@@ -13,6 +13,7 @@
 
 모델·키·SDK 가 없으면 LLMConfigError 를 낸다. 서버는 그대로 뜨고 그 기능의 API 만 503 이다.
 공급자 SDK 의 예외는 LLMTimeout(시간 초과)·LLMError(그 밖) 로 바꿔서 던진다. 메시지에는 예외 이름만 넣는다.
+실제 공급자(gemini·openai)는 MaskingLLM 으로 감싸서 만든다. 보내는 글의 개인정보를 가리고 답에서 되돌린다 (shared/masking.py).
 SDK: gemini 는 공용 requirements.txt 의 google-genai, openai(운영)는 shared/requirements.txt 의 openai.
 """
 import logging
@@ -21,6 +22,8 @@ import threading
 import time
 from dataclasses import dataclass, replace
 from typing import Protocol
+
+from shared.masking import mask, unmask
 
 PROVIDERS = ("fake", "gemini", "openai")
 DEFAULT_TIMEOUT_S = 30.0
@@ -142,6 +145,24 @@ class OpenAILLM:
         return Reply(text, None if u is None else u.prompt_tokens, None if u is None else u.completion_tokens)
 
 
+class MaskingLLM:
+    """외부로 보내는 user 글의 개인정보를 가리고, 답을 원래 값으로 되돌린다. system 은 고정 문구라 가리지 않는다.
+    공급자마다 감싸므로 기본 모델과 폴백 모델 모두 가린 글만 받는다. 가리다 오류가 나면 원문을 보내지 않고 LLMError 를 낸다."""
+
+    def __init__(self, inner: LLM):
+        self.inner = inner
+        self.name, self.model = inner.name, inner.model
+
+    def generate(self, system, user, timeout_s, effort=None):
+        try:
+            masked, table = mask(user)
+        except Exception as e:
+            raise LLMError(f"개인정보 가리기 실패: {type(e).__name__}") from None
+        extra = {"effort": effort} if effort else {}
+        reply = self.inner.generate(system, masked, timeout_s, **extra)
+        return replace(reply, text=unmask(reply.text, table))
+
+
 def make_llm(env, prefix: str, timeout_key: str | None = None,
              default_timeout_s: float = DEFAULT_TIMEOUT_S) -> tuple[LLM, float]:
     """환경변수로 LLM 과 시간 제한을 만든다. {prefix}_PROVIDER·{prefix}_MODEL 을 읽고,
@@ -173,7 +194,7 @@ def _build(provider, model, env) -> LLM:
         raise LLMConfigError(f"API 키가 없음 ({' 또는 '.join(_KEYS[provider])})")
     cls, package = (GeminiLLM, "google-genai") if provider == "gemini" else (OpenAILLM, "openai")
     try:
-        return cls(model, key)
+        return MaskingLLM(cls(model, key))
     except ImportError:
         raise LLMConfigError(f"{provider} SDK({package}) 가 설치되지 않음") from None
 

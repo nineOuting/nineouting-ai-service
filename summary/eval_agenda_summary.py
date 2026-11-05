@@ -61,7 +61,7 @@ class SumRecorder:
 
     def __call__(self, user):
         self.calls += 1
-        self.in_chars += len(asum.AGENDA_SYSTEM_PROMPT) + len(user)
+        self.in_chars += len(asum.system_prompt(PROMPT_VERSION)) + len(user)
         return asum.echo_llm(user) if self.dry else self.inner(user)
 
 
@@ -74,6 +74,7 @@ def load_keypoints(path, use_draft):
 
 
 MIN_NEW_LINES = None          # --min-new-lines: 새 줄이 이만큼 쌓여야 요약한다 (None 이면 서비스 기본값)
+PROMPT_VERSION = "v1"          # --prompt: 안건 요약 프롬프트 버전 (v1 현행, v2 맥락 교정)
 
 
 def replay(lines, batches, agendas_msg, gold, mode, provider, model, dry):
@@ -85,7 +86,7 @@ def replay(lines, batches, agendas_msg, gold, mode, provider, model, dry):
     if mode == "gold":                                      # 사람이 확정한 분류를 고정하고 분류 모델은 부르지 않는다
         cls.apply_corrections([{"seq": s, "agenda_id": a, "rev": 1} for s, a in gold.items()])
         cls.halted = "평가: 사람이 확정한 분류만 사용"
-    scfg = asum.SummarizeCfg(provider=provider, model=model, **({"min_new_lines": MIN_NEW_LINES} if MIN_NEW_LINES else {}))
+    scfg = asum.SummarizeCfg(provider=provider, model=model, prompt_version=PROMPT_VERSION, **({"min_new_lines": MIN_NEW_LINES} if MIN_NEW_LINES else {}))
     srec = SumRecorder(asum.make_llm(scfg), dry)
     summ = asum.AgendaSummarizer(cls, scfg, llm=srec, id_prefix="e")
     for b in batches:
@@ -159,6 +160,18 @@ def write_grading(path, results, store, keypoints, agendas_msg):
                             f"{','.join(map(str, k['evidenceSeqs']))}\t겹친 문장: {','.join(cov) or '없음'}\t\t\t\t\n")
 
 
+def dump_items(path, results, prompt_version):
+    """모드별 안건 문장·근거 줄·정정 목록 저장 (eval_corrections.py 의 입력). 전사 문장이 들어 있으니 저장소에 올리지 않는다."""
+    out = {"promptVersion": prompt_version, "modes": {}}
+    for mode, (board, _cls, summ) in results.items():
+        corr = {it["id"]: [dict(c) for c in it.get("corrections", [])] for st in summ.ag.values() for it in st["items"]}
+        out["modes"][mode] = {"info": summ.info(), "agendas": {
+            a["agendaId"]: [{"id": x["id"], "text": x["text"], "evidenceSeqs": list(x["evidenceSeqs"]),
+                             "corrections": corr.get(x["id"], [])} for x in a["summary"]] for a in board["agendas"]}}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--transcript", required=True)
@@ -172,11 +185,14 @@ def main():
     ap.add_argument("--paid-ok", action="store_true", help="유료 호출 허용 (기준과 비용을 확인한 뒤에만)")
     ap.add_argument("--use-draft", action="store_true", help="확정 전 핵심 내용·라벨 초안을 쓴다 (점검용)")
     ap.add_argument("--min-new-lines", type=int, help="새 줄이 이만큼 쌓이면 바로 요약 (기본은 서비스 설정). 비용을 줄이는 평가용 설정이며 결과 JSON에 기록된다. 기존 결과와 직접 비교하지 않는다")
+    ap.add_argument("--prompt", default="v1", choices=asum.PROMPT_VERSIONS, help="안건 요약 프롬프트 버전 (v1 현행, v2 맥락 교정). 결과 JSON에 기록된다")
     ap.add_argument("--out", help="결과 JSON 경로 (유료 실행은 이미 있으면 거부)")
     ap.add_argument("--grading-out", help="사람이 채점할 표(TSV) 경로. 이미 있으면 거부")
+    ap.add_argument("--items-out", help="모드별 안건 문장·근거·정정 목록 JSON 경로 (채점 도구 입력). 이미 있으면 거부")
     a = ap.parse_args()
-    global MIN_NEW_LINES
+    global MIN_NEW_LINES, PROMPT_VERSION
     MIN_NEW_LINES = a.min_new_lines
+    PROMPT_VERSION = a.prompt
 
     paid = a.provider != "echo" and not a.dry_run
     if paid:
@@ -189,6 +205,8 @@ def main():
         sys.exit("유료 실행은 --out 이 필요하고, 그 파일이 이미 있으면 다시 돌리지 않습니다 (한 번만)")
     if a.grading_out and os.path.exists(a.grading_out):
         sys.exit("--grading-out 파일이 이미 있습니다")
+    if a.items_out and os.path.exists(a.items_out):
+        sys.exit("--items-out 파일이 이미 있습니다")
     modes = a.modes.split(",")
     if any(m not in MODES for m in modes):
         sys.exit(f"--modes 는 {', '.join(MODES)} 중에서 고르세요")
@@ -201,7 +219,7 @@ def main():
     keypoints, kp_confirmed = load_keypoints(a.keypoints, a.use_draft)
     dry = a.dry_run or a.provider == "echo"
     result = {"provider": a.provider, "model": a.model, "dryRun": dry, "labels": len(gold), "keypointsConfirmed": kp_confirmed,
-              "minNewLines": a.min_new_lines or asum.SummarizeCfg().min_new_lines, "criteria": CRITERIA, "modes": {}}
+              "minNewLines": a.min_new_lines or asum.SummarizeCfg().min_new_lines, "promptVersion": PROMPT_VERSION, "criteria": CRITERIA, "modes": {}}
     total = {"usd": 0.0, "krw": 0, "calls": 0}
     graded = {}
     for mode in modes:
@@ -225,6 +243,8 @@ def main():
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         with open(a.out, "w", encoding="utf-8") as f:
             f.write(text)
+    if a.items_out and graded:
+        dump_items(a.items_out, graded, PROMPT_VERSION)
     if a.grading_out and graded:
         store = {ln["id"]: ln["text"] for ln in next(iter(graded.values()))[1].store.snapshot()}
         write_grading(a.grading_out, graded, store, keypoints, adapt_agendas_ids(agendas_msg))

@@ -120,10 +120,33 @@ def test_종류로_묶으면_처음_나온_순서로_묶음을_둔다(materials)
 
 
 def test_기준_값이_하나뿐이면_묶지_않는다(materials):
-    sections, _ = build_sections(ITEMS, materials, placement(grouping={1: "안건", 2: "담당자"}))
+    sections, _ = build_sections(ITEMS, materials, placement(grouping={1: "안건", 2: "종류"}))
     assert section(sections, "결정 사항")["content"] == "- 배포 일정: 1차 배포를 10월 30일(목)로 정함"     # 안건 1개
-    assert section(sections, "미결 안건")["content"] == "\n".join([                                    # 담당자 0개
-        "- 예산: 월 사용량을 확인하기 전이라 승인 여부를 정하지 못함", "- 회식 장소: 회식 장소 확정 (결정 확인 필요: 강남역 근처로 정함)"])
+    one_kind = [m for m in materials if m.kind == "summary"]
+    assert content_of(one_kind, "종류") == content_of(one_kind)                                          # 종류 1개
+
+
+def test_담당자가_1명_이하이면_안건으로_묶는다(materials):
+    sections, _ = build_sections(ITEMS, materials, placement(grouping={2: "담당자"}))
+    assert section(sections, "미결 안건")["content"] == "\n".join([                                    # 담당자 0명
+        "- 예산", "  - 월 사용량을 확인하기 전이라 승인 여부를 정하지 못함",
+        "- 회식 장소", "  - 회식 장소 확정 (결정 확인 필요: 강남역 근처로 정함)"])
+    todos = [replace(m, parts=(*[p for p in m.parts if p[0] != "담당자"], ("담당자", "김철수")))
+             for m in materials if m.kind == "todo"]
+    assert len({m.agenda_id for m in todos}) > 1
+    assert content_of(todos, "담당자") == content_of(todos, "안건")                                       # 담당자 1명
+
+
+def test_담당자가_2명_이상이면_담당자로_묶는다(materials):
+    todos = [m for m in materials if m.kind == "todo"]
+    assert len({dict(m.parts).get("담당자") for m in todos} - {None}) >= 2
+    text = content_of(todos, "담당자")
+    assert text != content_of(todos, "안건") and "- 김철수\n  - " in text
+
+
+def test_안건도_하나뿐이면_담당자_기준은_묶지_않는다(materials):
+    one = [m for m in materials if m.agenda_id == 101 and m.kind == "todo"]
+    assert content_of(one, "담당자") == content_of(one)
 
 
 def test_묶어도_줄_목록은_그대로(materials):

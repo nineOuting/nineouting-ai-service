@@ -48,11 +48,19 @@ def test_안건의_statusReason과_status는_보지_않는다(request_body):
     assert m.text == "1차 배포를 10월 30일(목)로 정함" and m.evidence_seqs == (40, 42)
 
 
-def test_미결은_사항_문구를_쓰고_근거는_그_사항의_줄(request_body):
+def test_미결은_판정_내용을_쓰고_근거는_그_사항의_줄(request_body):
     m = by_kind(materials_of(request_body), "undecided")[0]
-    assert m.text == "광고 예산 승인"
+    assert m.text == "월 사용량을 확인하기 전이라 승인 여부를 정하지 못함"
+    assert dict(m.parts)["결정할 사항"] == "광고 예산 승인"          # 표의 칸 값으로는 사항 문구도 남는다
     assert m.item_id is None and m.source() == {"agendaId": 102, "kind": "undecided", "id": None, "decisionPointId": 9}
     assert m.evidence_seqs == (88,)
+
+
+def test_사람이_고친_미결_판정_내용이_줄에_나온다(request_body):
+    point = agenda(request_body, 1)["decisionPoints"][0]
+    point.update(decisionText="다음 회의에서 다시 보기로 함", edited=True)
+    m = by_kind(materials_of(request_body), "undecided")[0]
+    assert m.text == "다음 회의에서 다시 보기로 함" and m.edited
 
 
 def test_결정_확인_필요는_사항_문구에_결정_후보를_붙인다(request_body):
@@ -90,7 +98,7 @@ def test_결정할_사항마다_줄_하나이고_안건_안에서_사항_순서�
     points = [m for m in materials_of(request_body) if m.agenda_id == 102 and m.decision_point_id is not None]
     assert [(m.kind, m.decision_point_id, m.text) for m in points] == [
         ("decision", 10, "홍보는 사내 메일로 함"),
-        ("undecided", 9, "광고 예산 승인"),
+        ("undecided", 9, "승인 여부를 정하지 못함"),
         ("decisionCheck", 13, "담당 부서 (결정 확인 필요: 마케팅팀이 맡음)"),
     ]
     assert (points[0].edited, points[0].needs_check, points[0].evidence_seqs) == (True, True, (80,))
@@ -111,7 +119,7 @@ def test_전환_기간_decisionPoint_글은_번호_없는_사항_하나(request_
         for p in a["decisionPoints"]:
             p["decisionPointId"] = None
     ms = materials_of(request_body)
-    assert by_kind(ms, "undecided")[0].text == "광고 예산 승인"
+    assert by_kind(ms, "undecided")[0].text == "월 사용량을 확인하기 전이라 승인 여부를 정하지 못함"
     assert by_kind(ms, "decisionCheck")[0].text == "회식 장소 확정 (결정 확인 필요: 강남역 근처로 정함)"
     assert all(m.decision_point_id is None for m in ms)
 

@@ -24,7 +24,7 @@ def test_정상이면_양식_칸마다_줄과_글이_나온다(body):
     by_title = {s["title"]: s for s in result["sections"]}
     assert by_title["결정 사항"]["content"] == "- 배포 일정: 1차 배포를 10월 30일(목)로 정함"
     assert by_title["미결 안건"]["content"] == (
-        "- 예산: 광고 예산 승인\n"
+        "- 예산: 월 사용량을 확인하기 전이라 승인 여부를 정하지 못함\n"
         "- 회식 장소: 회식 장소 확정 (결정 확인 필요: 강남역 근처로 정함)")
     assert by_title["결정 사항"]["evidence"][0]["sources"] == [
         {"agendaId": 101, "kind": "decision", "id": None, "decisionPointId": 7}]

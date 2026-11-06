@@ -48,7 +48,7 @@ def test_줄_앞에_안건_제목을_붙인다(materials):
 def test_미결과_결정_확인_필요_줄(materials):
     sections, _ = build_sections(ITEMS, materials, placement())
     assert [line["sentence"] for line in section(sections, "미결 안건")["evidence"]] == [
-        "예산: 광고 예산 승인",
+        "예산: 월 사용량을 확인하기 전이라 승인 여부를 정하지 못함",
         "회식 장소: 회식 장소 확정 (결정 확인 필요: 강남역 근처로 정함)",
     ]
 
@@ -123,7 +123,7 @@ def test_기준_값이_하나뿐이면_묶지_않는다(materials):
     sections, _ = build_sections(ITEMS, materials, placement(grouping={1: "안건", 2: "담당자"}))
     assert section(sections, "결정 사항")["content"] == "- 배포 일정: 1차 배포를 10월 30일(목)로 정함"     # 안건 1개
     assert section(sections, "미결 안건")["content"] == "\n".join([                                    # 담당자 0개
-        "- 예산: 광고 예산 승인", "- 회식 장소: 회식 장소 확정 (결정 확인 필요: 강남역 근처로 정함)"])
+        "- 예산: 월 사용량을 확인하기 전이라 승인 여부를 정하지 못함", "- 회식 장소: 회식 장소 확정 (결정 확인 필요: 강남역 근처로 정함)"])
 
 
 def test_묶어도_줄_목록은_그대로(materials):

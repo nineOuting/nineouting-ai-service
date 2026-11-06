@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from minutes.lines import EMPTY_SECTION, build_sections, content_of
+from minutes.lines import EMPTY_SECTION, build_sections, content_of, line_text
 from minutes.materials import build_materials
 from minutes.models import TABLE, Field, Placement, Table
 
@@ -124,6 +124,22 @@ def test_기준_값이_하나뿐이면_묶지_않는다(materials):
     assert section(sections, "결정 사항")["content"] == "- 배포 일정: 1차 배포를 10월 30일(목)로 정함"     # 안건 1개
     one_kind = [m for m in materials if m.kind == "summary"]
     assert content_of(one_kind, "종류") == content_of(one_kind)                                          # 종류 1개
+
+
+@pytest.mark.parametrize("by", ["안건", "담당자", "종류", "묶지 않음"])
+def test_줄이_2개_이상이고_모두_한_안건이면_기준과_상관없이_안건_제목_아래로_묶는다(materials, by):
+    one = [replace(m, kind="summary") for m in materials if m.agenda_id == 101 and m.kind in ("summary", "opinion")]
+    assert len(one) == 2                                  # 종류 기준도 값이 하나가 되게 맞춘다
+    assert content_of(one, by) == "\n".join([
+        "- 배포 일정",
+        "  - 1차 배포 날짜를 다음 주 목요일로 하자는 제안이 나옴",
+        "  - 목요일은 QA 일정과 겹쳐 부담이 된다는 우려"])
+
+
+def test_한_안건이어도_작성자가_새로_쓴_줄이_섞이면_묶지_않음은_그대로다(materials):
+    one = [m for m in materials if m.agenda_id == 101 and m.kind in ("summary", "opinion")]
+    written = replace(one[0], agenda_id=None, agenda_title="", whole_line=True, text="새로 쓴 줄", sourced=False)
+    assert content_of([*one, written]).split("\n") == [f"- {line_text(m)}" for m in [*one, written]]
 
 
 def test_담당자가_1명_이하이면_안건으로_묶는다(materials):

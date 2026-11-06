@@ -4,7 +4,7 @@
 입력은 요청 검사(request.py)를 통과한 값이라고 본다.
 
   decision        DECIDED 인 결정할 사항 하나          글: {decisionText}
-  undecided       UNDECIDED 인 결정할 사항 하나        글: {사항 문구}. 짝이 맞는 문구가 없으면 {decisionText}
+  undecided       UNDECIDED 인 결정할 사항 하나        글: {decisionText}
   decisionCheck   DECISION_CHECK 인 결정할 사항 하나   글: {사항 문구} (결정 확인 필요: {decisionText})
   summary         요약 문장 하나                       원래 글 그대로
   opinion         의견 하나                            원래 글 그대로
@@ -17,6 +17,9 @@
 결정·미결 줄은 안건마다가 아니라 결정할 사항마다 만든다 (명세 v0.8). 회의 끝 요약이 결정을 사항마다 판정하고,
 한 안건 안에 결정된 사항과 미결 사항이 섞일 수 있기 때문이다. 안건의 status·statusReason 은 보지 않는다
 (statusReason 은 "3개 중 1개가 결정됨" 같은 개수 문장이다).
+
+미결 줄이 사항 문구가 아니라 decisionText 인 이유: 사항 문구는 회의 전에 쓴 질문이라 무엇이 논의됐고 왜 못 정했는지가 없고,
+점검에서 사람이 고친 decisionText 도 줄에 나오지 않았다 (SCRUM-180).
 
 모든 글은 코드가 정하고 AI 는 칸만 고른다. 결정 내용(decisionText)은 요약 쪽이 검증까지 마친 한 줄이고,
 요약 문장과 의견도 요약 단계에서 정리된 글이라 다시 다듬지 않는다. 다듬게 했을 때 얻는 것은 말끝 정도였고 잃는 것이 더 많았다
@@ -124,10 +127,8 @@ def _point_items(ai, agenda, info):
         # 번호가 없는 사항(전환 기간)은 안건 목록에도 번호 없는 사항이 하나뿐일 때만 짝으로 본다
         paired = pid in texts and (pid is not None or len(points) == 1)
         point = texts[pid] if paired else ""
-        if kind == "decision":
+        if kind in ("decision", "undecided"):
             text = decided
-        elif kind == "undecided":
-            text = point or decided
         else:
             mark = f"(결정 확인 필요: {decided})"
             text = f"{point} {mark}" if point else mark

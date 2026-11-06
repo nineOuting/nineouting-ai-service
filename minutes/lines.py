@@ -10,6 +10,8 @@
                 종류    제목 결정·미결·결정 확인 필요·요약·의견·할 일, 줄 글 그대로
               묶음 순서는 처음 나온 순서, 묶음 안은 줄 순서. 기준 값이 없는 줄(작성자가 새로 쓴 줄, 담당자 없는 할 일 등)은
               묶음 뒤에 들여 쓰지 않고 둔다. 기준 값이 1개 이하이면 묶지 않는다 (제목 줄 하나만 생기지 않게).
+              담당자 기준은 담당자가 1명 이하이면 안건으로 묶는다. 담당자를 못 적은 회의가 많고, 그때 AI 가 어느 기준을
+              골랐는지에 따라 같은 내용의 모양이 달라졌다 (SCRUM-180)
               묶지 않을 때는 줄 글에 "- " 를 붙여 줄바꿈으로 잇는다
 
 다시 배치 (명세 8장)
@@ -106,6 +108,9 @@ def content_of(materials: list[Material], by: str = NO_GROUPING) -> str:
     if not materials:
         return EMPTY_SECTION
     keys = [group_key(m, by) for m in materials]
+    if by == BY_ASSIGNEE and len({k for k in keys if k is not None}) <= 1:
+        by = BY_AGENDA
+        keys = [group_key(m, by) for m in materials]
     if len({k for k in keys if k is not None}) <= 1:
         return "\n".join(f"- {line_text(m)}" for m in materials)
     groups: dict[str, list[str]] = {}

@@ -62,7 +62,7 @@ def test_결정과_미결_줄은_사항마다_나오고_개수_문장을_쓰지_
     lines = [line for s in result["sections"] for line in s["evidence"]]
     sentences = [line["sentence"] for line in lines]
     assert "배포 일정: 1차 배포는 다음 주 목요일로 정한다" in sentences
-    assert "예산 배분: 외부 API 비용 한도 확정" in sentences                   # 미결은 사항 문구
+    assert "예산 배분: 외부 API 비용 한도는 사용량을 확인한 뒤 정하자는 의견만 나왔다" in sentences                   # 미결은 판정 내용
     assert not any("결정할 사항" in s or "아직 논의되지 않았어요" in s for s in sentences)
     points = {line["sources"][0]["decisionPointId"] for line in lines if line["sources"][0]["decisionPointId"]}
     assert points == {7, 10}                                                  # 논의 전 사항(11, 12)은 줄이 없다

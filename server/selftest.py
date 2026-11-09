@@ -652,16 +652,25 @@ def test_summary_config():
     c = summarize_cfg_from_env({"LLM_PROVIDER": "gemini", "LLM_MODEL": "m", "AGENDA_SUMMARY_REFRESH_SEC": "45",
                                 "MAX_AGENDA_SUMMARY_CALLS_PER_MEETING": "99"})
     assert (c.provider, c.model, c.refresh_sec, c.max_calls) == ("gemini", "m", 45, 99)
-    # 프롬프트 버전: 기본 v1(안 넣거나 비워도), v1~v7 허용, 앞뒤 공백 무시, 그 밖의 값은 시작할 때 설정 오류
+    # 프롬프트 버전: 기본 v1(안 넣거나 비워도), v1~v8 허용, 앞뒤 공백 무시, 그 밖의 값은 시작할 때 설정 오류
     assert d.prompt_version == "v1" and summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": ""}).prompt_version == "v1"
     assert summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": "  "}).prompt_version == "v1"
-    for v in ("v1", "v2", "v3", "v4", "v5", "v6", "v7"):
+    for v in ("v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"):
         assert summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": v}).prompt_version == v
     assert summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": " v7 "}).prompt_version == "v7"
-    for bad in ("v0", "v8", "7", "V7", "latest"):
+    for bad in ("v0", "v9", "7", "V8", "latest"):
         try:
             summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": bad})
             raise SystemExit(f"잘못된 프롬프트 버전을 못 잡음: {bad}")
+        except ConfigError:
+            pass
+    # 회의 중 주기 요약 프롬프트 버전: 기본 v1, v2 허용, 공백 무시, 그 밖의 값은 설정 오류
+    assert cfg_from_env({}).prompt_version == "v1" and cfg_from_env({"LIVE_SUMMARY_PROMPT": " "}).prompt_version == "v1"
+    assert cfg_from_env({"LIVE_SUMMARY_PROMPT": " v2 "}).prompt_version == "v2" and cfg_from_env({"LIVE_SUMMARY_PROMPT": "v1"}).prompt_version == "v1"
+    for bad in ("v0", "v3", "2", "V2", "latest"):
+        try:
+            cfg_from_env({"LIVE_SUMMARY_PROMPT": bad})
+            raise SystemExit(f"잘못된 주기 요약 프롬프트 버전을 못 잡음: {bad}")
         except ConfigError:
             pass
     for key in ("AGENDA_SUMMARY_REFRESH_SEC", "MAX_AGENDA_SUMMARY_CALLS_PER_MEETING"):
@@ -1349,7 +1358,7 @@ def test_agenda_leftover_flow(cap):
     b = boards()[-1]
     assert by_agenda(b, 102)["status"] == "DISCUSSING", "미리보기는 보드의 상태를 확정하지 않는다"
     assert b["leftover"]["requestRev"] == 4 and [(x["agendaId"], x["status"]) for x in b["leftover"]["agendas"]] == [(102, "UNDECIDED"), (103, "NOT_STARTED")], b["leftover"]
-    assert b["leftover"]["agendas"][0]["statusReason"]["text"].startswith("결정할 사항 1개 중 0개가 결정됨"), "상태 문구는 코드가 만든 사항 개수 문장"
+    assert b["leftover"]["agendas"][0]["statusReason"]["text"].startswith("결정할 사항 1개 중 0개가 결정됐어요"), "상태 문구는 코드가 만든 사항 개수 문장"
 
     # 회의가 끝나면 마지막 값. 이때 상태가 확정되어 보드의 상태와 목록의 상태가 같다
     reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": 40000})
@@ -1358,7 +1367,7 @@ def test_agenda_leftover_flow(cap):
     assert b["leftover"]["final"] is True and b["leftover"]["requestRev"] == 4, b["leftover"]
     assert [(x["agendaId"], x["status"]) for x in b["leftover"]["agendas"]] == [(102, "UNDECIDED"), (103, "NOT_STARTED")]
     assert by_agenda(b, 102)["status"] == "UNDECIDED"
-    assert b["leftover"]["agendas"][0]["statusReason"]["text"].startswith("결정할 사항 1개 중 0개가 결정됨"), "상태 문구는 코드가 만든 사항 개수 문장"
+    assert b["leftover"]["agendas"][0]["statusReason"]["text"].startswith("결정할 사항 1개 중 0개가 결정됐어요"), "상태 문구는 코드가 만든 사항 개수 문장"
     assert reg.receive_end_request(path, {"meetingId": mid, "action": "request", "rev": 9}) == {"accepted": False, "result": "ignored", "reason": "ended"}
     st = reg.status(path)
     assert st["errors"] == 0 and st["agendaLeftover"] == {"requestRev": 4, "active": True, "final": True, "requests": 2}, st
@@ -1669,7 +1678,7 @@ def test_decision_points_flow(cap):
     a = by_agenda(b, 101)
     assert a["status"] == "DECIDED" and [p["status"] for p in a["decisionPoints"]] == ["DECIDED"] * 3, a      # 모의 판정기는 모든 사항에 같은 판정
     assert all(p["evidenceSeqs"] == [3] and not p["edited"] and not p["needsCheck"] for p in a["decisionPoints"])
-    assert a["statusReason"] == {"text": "결정할 사항 3개가 모두 결정됨", "evidenceSeqs": [3]}, a["statusReason"]
+    assert a["statusReason"] == {"text": "결정할 사항 3개가 모두 결정됐어요", "evidenceSeqs": [3]}, a["statusReason"]
     assert by_agenda(b, 102)["status"] == "NOT_STARTED" and by_agenda(b, 102)["statusReason"] is None
     json.dumps(b)
 

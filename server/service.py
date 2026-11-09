@@ -33,7 +33,7 @@ if SUMMARY_DIR not in sys.path:
 
 from input_adapter import (adapt_batch, adapt_event, adapt_agendas, adapt_corrections, adapt_summary_edits,  # noqa: E402
                            adapt_item_edits, adapt_decision_edits, adapt_offtopic_action, adapt_end_request, AdapterError)
-from meeting_live_summary_v2 import LiveSummarizer, Cfg  # noqa: E402
+from meeting_live_summary_v2 import LiveSummarizer, Cfg, LIVE_PROMPT_VERSIONS  # noqa: E402
 from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
 from agenda_summarizer import PROMPT_VERSIONS, AgendaSummarizer, SummarizeCfg  # noqa: E402
 from agenda_status import AgendaStatusJudge, StatusCfg  # noqa: E402
@@ -72,7 +72,7 @@ class NotReady(Exception):
 def cfg_from_env(env=None):
     """환경변수 -> 요약기 설정.
     LLM_PROVIDER (기본 echo = 모델을 부르지 않는 테스트용), LLM_MODEL, LLM_FALLBACK_MODEL (선택, 기본 모델 호출이 실패하면 대신 부름),
-    WINDOW_SEC, REFRESH_SEC, MAX_CALLS_PER_MEETING
+    WINDOW_SEC, REFRESH_SEC, MAX_CALLS_PER_MEETING, LIVE_SUMMARY_PROMPT (회의 중 주기 요약 프롬프트 버전, 기본 v1)
     """
     env = os.environ if env is None else env
     provider = env.get("LLM_PROVIDER", "echo")
@@ -88,6 +88,11 @@ def cfg_from_env(env=None):
                 kw[name] = int(env[key])
             except ValueError:
                 raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+    live_prompt = (env.get("LIVE_SUMMARY_PROMPT") or "").strip()      # 회의 중 주기 요약 프롬프트 버전 (기본 v1, v2 는 해요체 + 숫자 표기 그대로)
+    if live_prompt:
+        if live_prompt not in LIVE_PROMPT_VERSIONS:
+            raise ConfigError(f"LIVE_SUMMARY_PROMPT 는 {', '.join(LIVE_PROMPT_VERSIONS)} 중 하나여야 함: {live_prompt}")
+        kw["prompt_version"] = live_prompt
     return Cfg(**kw)
 
 
@@ -110,7 +115,7 @@ def classify_cfg_from_env(env=None, cfg=None):
 def summarize_cfg_from_env(env=None, cfg=None):
     """환경변수 -> 안건별 요약 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
     AGENDA_SUMMARY_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), MAX_AGENDA_SUMMARY_CALLS_PER_MEETING(회의당 호출 상한, 기본 300)
-    AGENDA_SUMMARY_PROMPT(안건 요약 프롬프트 버전, 기본 v1. v7 은 해요체와 맥락 교정. 값이 틀리면 ConfigError)
+    AGENDA_SUMMARY_PROMPT(안건 요약 프롬프트 버전, 기본 v1. v7 은 해요체와 맥락 교정, v8 은 v7 + 마침표·숫자 표기 그대로. 값이 틀리면 ConfigError)
     """
     env = os.environ if env is None else env
     cfg = cfg or cfg_from_env(env)

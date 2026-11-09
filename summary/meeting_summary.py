@@ -211,6 +211,54 @@ SYSTEM_PROMPT = """너는 회의 전사에서 요약 항목을 뽑는 도구야.
 출력은 JSON만. 형식:
 {"summary": [{"text": "...", "topic": "...", "evidence": [[첫, 끝], [첫, 끝]]}]}"""
 
+# 문체·숫자 표기 v2: 해요체로 마침표까지 쓰고, 숫자·날짜·요일은 「」나 환산 없이 전사 표기 그대로 쓴다.
+# 값이 바뀌지 않았는지는 코드가 본다(validate_items 의 plain_numbers). 기존 SYSTEM_PROMPT 는 건드리지 않는다.
+PLAIN_RULE_3 = '3. 항목 text는 한두 문장의 자연스러운 해요체로 쓰고 마침표로 끝내. "~했어요", "~있었어요", "~예요"처럼 쓰고 "~함", "~임", "~나옴" 같은 명사형으로 끝내지 마. 모든 문장을 "~라는 말이 있었어요"로 끝내지 말고 말의 성격에 맞게 "~라고 했어요", "~을 제안했어요", "~이 걱정된다고 했어요", "~을 물었어요"처럼 섞어 써.'
+PLAIN_RULE_6 = '6. 숫자, 날짜, 요일, 시간, 금액, 수량은 전사에 나온 표기 그대로 자연스럽게 써. 「」로 묶거나 괄호로 환산해서 덧붙이지 마. 한글로 말한 숫자를 아라비아 숫자로 바꾸거나 값을 계산하지 마.'
+_PLAIN_RULES = {
+    3: PLAIN_RULE_3,
+    5: '5. 말을 그대로 인용할 때만 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). 숫자, 날짜, 요일, 금액, 수량은 인용하지 마(규칙 6).',
+    6: PLAIN_RULE_6,
+    9: '9. 결정 사항과 할 일은 따로 뽑지 마. 논의 요약만 해. 항목은 시간 순서로 써. "~하기로 했어요", "~로 정했어요"처럼 결정으로 쓰지 말고, 제안이면 "~하자는 제안이 있었어요", 의견이면 "~라는 의견이 있었어요"로 써.',
+    13: '13. text에는 누가 아니라 "무슨 말이 나왔는지"를 담아. 이유, 수량, 날짜, 질문과 그 답이 나오면 같이 써. "~에 대해 이야기를 나눴어요", "~에 대해 논의했어요"처럼 주제만 적지 마. 한 항목은 1~2문장이야.',
+}
+
+
+def swap_numbered_rule(prompt, num, new):
+    pat = re.compile(r"(?m)^%d\. .*$" % num)
+    assert len(pat.findall(prompt)) == 1, f"규칙 {num}을 찾지 못함"
+    return pat.sub(lambda m: new, prompt)
+
+
+def plain_style_prompt(prompt, rules=None):
+    for n, t in {**_PLAIN_RULES, **(rules or {})}.items():
+        prompt = swap_numbered_rule(prompt, n, t)
+    return prompt
+
+
+SYSTEM_PROMPT_V2 = plain_style_prompt(SYSTEM_PROMPT)
+
+
+def ensure_period(text):
+    """항목 문장이 마침표 없이 끝나면 붙인다 (여러 항목을 이어 보여 줄 때 문장이 붙어 보이지 않게)."""
+    t = (text or "").rstrip()
+    return t if not t or t[-1] in ".?!…" else t + "."
+
+
+_PLAIN_NUM_RE = re.compile(r"(?<![0-9가-힣])\d[\d,\.]*(?:\s?[만억천])?(?:\s?(?:퍼센트|%|원|명|건|개월|단계|번째|주차|시간|분|초|개|번|주|달|년|월|일|시|배|곳|가지|장|줄|회|차|대))?|(?<![가-힣])[월화수목금토일]요일")
+
+
+def plain_number_issues(text, stream):
+    """「」 밖에 쓴 숫자·날짜·요일 표현이 근거 줄 원문(stream)에 그대로 있는지 본다. 없는 표현 목록을 돌려준다.
+    한글로 쓴 수사(세 단계 등)는 보지 않는다: 말투를 바꿔 쓴 것과 값이 바뀐 것을 코드로 가르기 어렵다."""
+    outside = re.sub(r"「.*?」", " ", text or "")
+    out = []
+    for m in _PLAIN_NUM_RE.finditer(outside):
+        tok = m.group(0).strip()
+        if tok and squash(tok) not in stream and tok not in out:
+            out.append(tok)
+    return out
+
 
 # --------------------------------------------------------------------------------------
 # 4. LLM 호출
@@ -361,6 +409,15 @@ def fallback_target(provider, model):
     return None if fb == (provider, model) else fb
 
 
+def _fallback_cooldown_sec():
+    """LLM_FALLBACK_COOLDOWN_SEC 를 읽는다. 숫자가 아니거나 음수·무한대면 기본값을 쓴다 (설정 실수가 폴백 전환을 막지 않게)."""
+    try:
+        v = float(os.environ.get("LLM_FALLBACK_COOLDOWN_SEC") or FALLBACK_COOLDOWN_SEC)
+    except ValueError:
+        return float(FALLBACK_COOLDOWN_SEC)
+    return v if 0 <= v < float("inf") else float(FALLBACK_COOLDOWN_SEC)
+
+
 def call_llm(provider, model, system, user, mock_file=None, task=None):
     """모델을 부른다. LLM_FALLBACK_MODEL 이 설정돼 있고 기본 모델 호출이 예외로 실패하면 폴백 모델로 한 번 더 부른다.
     기본 모델이 실패하면 LLM_FALLBACK_COOLDOWN_SEC(기본 60초) 동안은 기본 모델을 건너뛰고 폴백만 부른다
@@ -374,7 +431,7 @@ def call_llm(provider, model, system, user, mock_file=None, task=None):
     try:
         return _call_once(provider, model, system, user, mock_file, task)
     except Exception as exc:
-        cooldown = float(os.environ.get("LLM_FALLBACK_COOLDOWN_SEC") or FALLBACK_COOLDOWN_SEC)
+        cooldown = _fallback_cooldown_sec()
         _primary_down_until[(provider, model)] = time.monotonic() + cooldown
         log.warning("기본 모델 호출 실패, 폴백 모델로 전환: task=%s primary=%s/%s fallback=%s/%s error=%s cooldown_sec=%s",
                     task, provider, model, fb[0], fb[1], type(exc).__name__, cooldown)
@@ -443,6 +500,7 @@ def unsupported_words(text, source_stream):
 
 
 LATIN_OK = {"ai", "stt", "ok", "jira", "git"}
+HAEYO_END = re.compile(r"(어요|아요|여요|해요|돼요|예요|에요|네요|군요|래요|데요|까요|세요|죠)$")   # 해요체 활용형(했어요, 있었어요, 나왔어요 ...)은 명사 후보가 아니다
 
 
 def unknown_terms(text, full_stream):
@@ -463,7 +521,7 @@ def unknown_terms(text, full_stream):
                     break
             if cand is None:
                 cand = tok
-            if cand[-1] in VERBISH or cand[-1] in "음임함됨짐옴듯" or len(cand) < 2:
+            if cand[-1] in VERBISH or cand[-1] in "음임함됨짐옴듯" or len(cand) < 2 or HAEYO_END.search(cand):
                 continue
             if any(cand.startswith(w) or w.startswith(cand) for w in COMMON_WORDS):
                 continue
@@ -507,7 +565,7 @@ def verify_items(provider, model, results, kept, mock_file=None):
     return issues, raw
 
 
-def validate_items(items, kept):
+def validate_items(items, kept, plain_numbers=False):
     """반환: [(item, errors, warnings, spans)]"""
     n = len(kept)
     full_stream, _fm = build_char_stream(kept)
@@ -553,18 +611,21 @@ def validate_items(items, kept):
                 warns.append("전사 전체에도 없는 단어 후보(강한 의심, 원문에서 직접 확인): " + ", ".join(gone))
             # 숫자 검사: 4자리 이상 숫자는 한글 인용에서 계산한 값과 같아야 함
             outside = re.sub(r"「.*?」", "", text)
-            for m in re.findall(r"\d[\d,]{2,}\d", outside):
+            for m in ([] if plain_numbers else re.findall(r"\d[\d,]{2,}\d", outside)):      # plain_numbers: 숫자를 「」로 인용하지 않는 문체라 이 검사 대신 아래 검사를 쓴다
                 val = int(m.replace(",", ""))
                 if val < 1000:
                     continue
                 if not any(kor_to_int(q) == val for q in quotes):
                     errs.append(f"숫자 {m}에 해당하는 한글 인용이 없음(원문 한글 표기를 「」로 인용해야 함)")
+            if plain_numbers:
+                for tok in plain_number_issues(text, stream):
+                    errs.append(f"숫자·날짜·요일 표현이 근거 줄에 그대로 없음: {tok} (전사에 나온 표기 그대로 써야 함)")
         results.append((it, errs, warns, spans))
     return results
 
 
-GENERIC_END = re.compile(r"(에 대해|에 관해|관련해?)[^.]*?(이야기를 나눔|이야기함|논의함|언급함|대화를 나눔)$")
-DECISION_END = re.compile(r"(하기로 함|하기로 했음|하기로 정함|로 정함|로 결정함|결정함)$")
+GENERIC_END = re.compile(r"(에 대해|에 관해|관련해?)[^.]*?(이야기를 나눔|이야기함|논의함|언급함|대화를 나눔|이야기를 나눴어요|이야기했어요|논의했어요|언급했어요|대화를 나눴어요)$")
+DECISION_END = re.compile(r"(하기로 함|하기로 했음|하기로 정함|로 정함|로 결정함|결정함|하기로 했어요|하기로 정했어요|로 정했어요|로 결정했어요|결정했어요|결정됐어요)$")
 MAX_ITEM_LINES = 45     # 한 항목이 묶을 수 있는 근거 줄 수 합계 (잡담도 한 항목으로 뭉치지 않게)
 MAX_SPAN_LINES = 30     # 근거 구간 하나의 최대 줄 수
 MAX_GAP_LINES = 8       # 어느 항목에도 안 들어간 연속 줄이 이만큼 이상이면 경고
@@ -877,6 +938,17 @@ def _selftest_fallback():
             raise SystemExit("둘 다 실패인데 성공")
         except TimeoutError as e:
             assert str(e) == "fallback"
+        # 쿨다운 환경변수가 숫자가 아니거나 음수여도 폴백은 돌아야 한다 (설정 실수로 장애 대응이 막히면 안 됨)
+        _call_once = fake
+        for bad in ("abc", "-5", "nan", "inf"):
+            fake.primary_down = True; calls.clear(); _primary_down_until.clear()
+            os.environ["LLM_FALLBACK_COOLDOWN_SEC"] = bad
+            assert call_llm("openai", "primary", "s", "u") == "ok:fallback", bad
+            assert calls == [("openai", "primary"), ("openai", "fallback")], (bad, calls)
+            assert 0 <= _primary_down_until[("openai", "primary")] - time.monotonic() <= FALLBACK_COOLDOWN_SEC + 1, bad
+        os.environ.pop("LLM_FALLBACK_COOLDOWN_SEC", None)
+        _primary_down_until.clear(); fake.primary_down = False
+        _call_once = both_down
         # 같은 모델이면 폴백이 아니다 / echo, mock 은 대상 아님
         assert fallback_target("openai", "primary") == ("openai", "fallback")
         os.environ["LLM_FALLBACK_MODEL"] = "primary"
@@ -959,8 +1031,34 @@ def selftest():
         USAGE_HOOK = None
     assert got == [("openai", "m", "live_summary", 9, 4)], got
     _selftest_reasoning_options()
+    # 해요체 활용형은 "전사에 없는 단어"로 잡지 않는다 (v2·v8 해요체 요약에서 경고가 부풀던 문제). 진짜 낯선 명사는 그대로 잡는다
+    for w in ("했어요", "있었어요", "나왔어요", "물었어요", "덧붙였어요", "이어졌어요", "그렇죠", "맞아요", "필요해요"):
+        assert unknown_terms(f"그 일을 {w}.", "전혀다른전사") == [], w
+    assert unknown_terms("그 일은 컨플루언스에서 했어요.", "전혀다른전사") == ["컨플루언스"], unknown_terms("그 일은 컨플루언스에서 했어요.", "전혀다른전사")
     _selftest_fallback()
-    print("자체 시험 통과 (전송 규격 처리, 한글 숫자 변환, 검증기, 토큰 사용량, 폴백 모델)")
+    # 숫자·날짜·요일을 「」 없이 전사 표기 그대로 쓰는 문체(plain_numbers): 값이 바뀐 것만 잡는다
+    pk = [{"start_ms": 0, "end_ms": 1000, "text": "가입 전환율이 18퍼센트까지 떨어졌고 한 달 6만 원 정도예요 목요일에 시작해요",
+           "text_marked": "가입 전환율이 18퍼센트까지 떨어졌고 한 달 6만 원 정도예요 목요일에 시작해요"}]
+    def plain_errs(t, plain=True):
+        return validate_items([{"text": t, "topic": None, "evidence": [[1, 1]]}], pk, plain_numbers=plain)[0][1]
+    assert not plain_errs("가입 전환율이 18퍼센트까지 떨어졌어요. 한 달 6만 원 정도이고 목요일에 시작해요."), "전사 표기 그대로면 통과"
+    assert any("20퍼센트" in e for e in plain_errs("가입 전환율이 20퍼센트까지 떨어졌어요.")), "숫자가 바뀌면 탈락"
+    assert any("금요일" in e for e in plain_errs("금요일에 시작해요.")), "요일이 바뀌면 탈락"
+    assert any("250,000원" in e for e in plain_errs("비용은 250,000원이에요.")), "근거에 없는 환산 값은 탈락"
+    assert not plain_errs("전환율이 20퍼센트라는 「18퍼센트」", plain=False), "기본(plain_numbers 끔)은 작은 숫자를 따지지 않는다(기존 동작)"
+    assert plain_number_issues("「18퍼센트」를 말했어요", "가입18퍼센트") == [], "「」 안은 기존 인용 검사가 본다"
+    assert ensure_period("끝났어요") == "끝났어요." and ensure_period("끝났어요.") == "끝났어요." and ensure_period("질문이에요?") == "질문이에요?" and ensure_period("") == ""
+    assert "해요체" in SYSTEM_PROMPT_V2 and "마침표" in SYSTEM_PROMPT_V2 and "환산해서 덧붙이지 마" in SYSTEM_PROMPT_V2
+    assert "(250,000원으로 읽힘)" not in SYSTEM_PROMPT_V2 and "(250,000원으로 읽힘)" in SYSTEM_PROMPT and "나옴" in SYSTEM_PROMPT, "기존 SYSTEM_PROMPT 는 그대로"
+    assert SYSTEM_PROMPT_V2.count("\n3. ") == 1 and SYSTEM_PROMPT_V2.count("\n6. ") == 1 and SYSTEM_PROMPT_V2.count("\n14. ") == 1
+    # 해요체로 쓴 "주제만 적은 문장"과 "결정처럼 쓴 문장"도 명사형과 똑같이 걸러야 한다 (v7 은 해요체라 예전 검사가 비어 있었다)
+    for t in ("배포 일정에 대해 논의했어요", "예산 관련해서 이야기를 나눴어요", "발표 자료에 관해 이야기했어요"):
+        assert GENERIC_END.search(t), t
+    for t in ("배포는 다음 주로 하기로 했어요", "장소는 강남으로 정했어요", "일정을 목요일로 결정했어요", "예산이 확정돼 결정됐어요"):
+        assert DECISION_END.search(t), t
+    for t in ("배포를 다음 주로 미루자는 의견이 있었어요", "비용이 걱정된다고 했어요", "금요일까지 가능한지 물었어요"):
+        assert not GENERIC_END.search(t) and not DECISION_END.search(t), t
+    print("자체 시험 통과 (전송 규격 처리, 한글 숫자 변환, 검증기, 토큰 사용량, 폴백 모델, 해요체 끝 검사)")
 
 
 def load_dotenv(path):

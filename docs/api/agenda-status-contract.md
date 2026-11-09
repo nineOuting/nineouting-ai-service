@@ -58,7 +58,7 @@
 {
   "agendaId": 101,
   "status": "UNDECIDED",
-  "statusReason": {"text": "결정할 사항 3개 중 1개가 결정됨 (결정 확인 필요 1개, 미결 1개)", "evidenceSeqs": [43, 45, 51]},
+  "statusReason": {"text": "결정할 사항 3개 중 1개가 결정됐어요 (결정 확인 필요 1개, 미결 1개)", "evidenceSeqs": [43, 45, 51]},
   "decisionPoints": [
     {"decisionPointId": 7, "status": "DECIDED", "decisionText": "...", "evidenceSeqs": [42, 43], "edited": false, "needsCheck": false},
     {"decisionPointId": 8, "status": "DECISION_CHECK", "decisionText": "...", "evidenceSeqs": [45], "edited": false, "needsCheck": false},
@@ -90,7 +90,7 @@
 ### 3.2 안건의 statusReason
 
 - 줄이 없는 안건(`NOT_STARTED`)은 `null`이다.
-- 그 밖의 안건은 `{text, evidenceSeqs}`이고 **코드가 만든 문장**이다. 모델이 쓰지 않는다. 문장은 사항 개수만 담는다 (예: "결정할 사항 3개 중 1개가 결정됨 (결정 확인 필요 1개, 미결 1개)"). 내용은 사항의 `decisionText`가 담는다.
+- 그 밖의 안건은 `{text, evidenceSeqs}`이고 **코드가 만든 문장**이다. 모델이 쓰지 않는다. 문장은 사항 개수만 담는다 (예: "결정할 사항 3개 중 1개가 결정됐어요 (결정 확인 필요 1개, 미결 1개)"). 내용은 사항의 `decisionText`가 담는다.
 - `evidenceSeqs`: 안건 상태가 `DECIDED`·`DECISION_CHECK`이면 `DECIDED`·`DECISION_CHECK` 사항들의 근거 줄을 합친 것이고, 그 밖이면 연결된 마지막 발언 줄 하나다 (v0.1과 같다).
 - v0.1에서는 `DECIDED` 안건의 `statusReason`을 모델이 쓴 한 문장으로 썼다. 이제 결정 내용은 사항마다 `decisionText`로 간다. `statusReason`을 결정 문장 재료로 쓰던 곳(회의록 초안)은 `decisionPoints`를 읽어야 한다 (`agenda-today-summary-contract.md` 3.2).
 

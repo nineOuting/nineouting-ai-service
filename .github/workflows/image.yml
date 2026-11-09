@@ -27,6 +27,7 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - '.github/workflows/image.yml'
+      - '.github/scripts/publish-dev-ecr.sh'
   pull_request:
     paths:
       - 'summary/**'
@@ -38,6 +39,7 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - '.github/workflows/image.yml'
+      - '.github/scripts/publish-dev-ecr.sh'
   workflow_dispatch:
 
 env:
@@ -161,6 +163,8 @@ jobs:
 
   # 두 플랫폼 이미지를 하나의 태그(develop 또는 릴리스 태그, 커밋 SHA)로 묶음
   merge:
+    outputs:
+      image_digest: ${{ steps.verify-index.outputs.image_digest }}
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -193,13 +197,86 @@ jobs:
           else
             tags+=(-t "${IMAGE}:develop")
           fi
+          sources=()
+          for digest_file in *; do
+            [[ "$digest_file" =~ ^[0-9a-f]{64}$ ]] || exit 1
+            sources+=("${IMAGE}@sha256:${digest_file}")
+          done
           docker buildx imagetools create \
+            --metadata-file "${RUNNER_TEMP}/ai-index-metadata.json" \
             --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
             "${tags[@]}" \
-            $(printf "${IMAGE}@sha256:%s " *)
+            "${sources[@]}"
 
       - name: 두 플랫폼이 들어갔는지 확인
+        id: verify-index
         run: |
-          docker buildx imagetools inspect "${IMAGE}:${GITHUB_SHA}" | tee inspect.txt
+          set -euo pipefail
+          digest=$(jq -er '."containerimage.descriptor".digest' "${RUNNER_TEMP}/ai-index-metadata.json")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect "${IMAGE}@${digest}" | tee inspect.txt
           grep -q "linux/amd64" inspect.txt && grep -q "linux/arm64" inspect.txt
           echo "묶음 확인: linux/amd64, linux/arm64" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "image_digest=$digest" >> "$GITHUB_OUTPUT"
+
+
+  # 검증된 GHCR 묶음의 AMD64 이미지만 DEV ECR에 전송한다. EKS 배포는 실행하지 않는다.
+  dev-ecr:
+    name: Verify and publish DEV ECR image
+    needs: merge
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    outputs:
+      image_repository: ${{ steps.publish.outputs.image_repository }}
+      image_digest: ${{ steps.publish.outputs.image_digest }}
+      image_uri: ${{ steps.publish.outputs.image_uri }}
+      image_tag: ${{ steps.publish.outputs.image_tag }}
+    env:
+      AWS_REGION: ap-northeast-2
+      EXPECTED_ACCOUNT: '443845329525'
+      SOURCE_IMAGE: ghcr.io/nineouting/nineouting-ai-service
+      SOURCE_DIGEST: ${{ needs.merge.outputs.image_digest }}
+      TARGET_IMAGE: 443845329525.dkr.ecr.ap-northeast-2.amazonaws.com/nineouting-dev-ai-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to verified GHCR image
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Authenticate to DEV with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::443845329525:role/nineouting-dev-ai-service-github
+          aws-region: ap-northeast-2
+          role-session-name: gha-ai-${{ github.run_id }}
+      - name: Check DEV account
+        shell: bash
+        run: |
+          set -euo pipefail
+          account=$(aws sts get-caller-identity --query Account --output text)
+          test "$account" = "$EXPECTED_ACCOUNT"
+          echo "AWS account verified: $account"
+      - name: Login to DEV ECR
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Publish and verify AMD64 image in DEV ECR
+        id: publish
+        shell: bash
+        run: bash .github/scripts/publish-dev-ecr.sh
+      - name: Save verified DEV image reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-ecr-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            image-result.txt
+            ecr-manifest.txt
+            ecr-manifest-raw.json
+          if-no-files-found: error
+          retention-days: 30

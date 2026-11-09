@@ -215,7 +215,8 @@ jobs:
           digest=$(jq -er '."containerimage.descriptor".digest' "${RUNNER_TEMP}/ai-index-metadata.json")
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker buildx imagetools inspect "${IMAGE}@${digest}" | tee inspect.txt
-          grep -q "linux/amd64" inspect.txt && grep -q "linux/arm64" inspect.txt
+          grep -q "linux/amd64" inspect.txt || exit 1
+          grep -q "linux/arm64" inspect.txt || exit 1
           echo "묶음 확인: linux/amd64, linux/arm64" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "image_digest=$digest" >> "$GITHUB_OUTPUT"
 

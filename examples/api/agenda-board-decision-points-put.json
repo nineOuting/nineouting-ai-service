@@ -7,7 +7,7 @@
       "agendaId": 101,
       "status": "UNDECIDED",
       "statusReason": {
-        "text": "결정할 사항 3개 중 1개가 결정됨 (결정 확인 필요 1개, 미결 1개)",
+        "text": "결정할 사항 3개 중 1개가 결정됐어요 (결정 확인 필요 1개, 미결 1개)",
         "evidenceSeqs": [
           51
         ]
@@ -54,7 +54,7 @@
       "agendaId": 102,
       "status": "DISCUSSING",
       "statusReason": {
-        "text": "결정할 사항 2개 중 1개가 결정됨 (미결 1개)",
+        "text": "결정할 사항 2개 중 1개가 결정됐어요 (미결 1개)",
         "evidenceSeqs": [
           58
         ]

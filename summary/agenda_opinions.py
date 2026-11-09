@@ -45,7 +45,7 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건에 나온 의견을 정리하�
    - "QUESTION": 아직 답이 나오지 않은 질문. 상대의 말을 확인하려고 되묻는 말이나 곧바로 답이 나온 질문은 만들지 마.
 5. EVIDENCE는 전사에 실제로 나온 이유만 써. 이유가 전사에 없으면 만들지 마. 의견만 있으면 OPINION 항목만 만들어.
 6. 같은 안(예: A안)에 대한 의견, 근거, 우려는 이어서 나열해.
-7. text는 한 문장으로, 무슨 말이 나왔는지를 써. "~라는 의견이 나옴", "~라는 우려가 나옴"처럼 써. 결정이 났다고 쓰지 마(결정 여부는 따로 판정해).
+7. text는 한 문장으로, 무슨 말이 나왔는지를 써. 자연스러운 해요체로 끝내고 "~함", "~나옴" 같은 명사형으로 끝내지 마. kind에 맞게 OPINION은 "~라는 의견이 있었어요"나 "~을 제안했어요", EVIDENCE는 "~라는 설명이 있었어요", CONCERN은 "~이 걱정된다는 의견이 있었어요", QUESTION은 "~냐는 질문이 있었어요"처럼 써. 결정이 났다고 쓰지 마(결정 여부는 따로 판정해). "~하기로 했어요", "~로 정했어요"도 쓰지 마.
 8. 모든 항목에 근거 줄 번호 구간 [[첫 번호, 끝 번호], ...]을 달아. 구간의 양 끝은 입력에 있는 번호여야 해. 그 의견이 나온 줄만 가리켜.
 9. text에는 근거 줄에 없는 사실, 이름, 숫자를 쓰지 마. 말을 인용할 때는 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 그 부분을 근거로 쓰면 text에 "STT 불확실"이라고 밝혀. 숫자는 말한 한글 표기를 「」로 그대로 인용해. 사람 이름, 호칭, "한 명"처럼 단위 앞의 한 글자 말은 「」로 묶지 말고 그냥 써.
 10. [사람이 확정한 항목]이 있으면 그 내용은 다시 쓰지 마.
@@ -89,7 +89,7 @@ def echo_llm(user):
             kind = "OPINION"
         else:
             continue
-        out.append({"text": f"{n}번 줄에 {_LABEL[kind]} 표현이 나옴", "kind": kind, "evidence": [[int(n), int(n)]]})
+        out.append({"text": f"{n}번 줄에 {_LABEL[kind]} 표현이 있었어요", "kind": kind, "evidence": [[int(n), int(n)]]})
     return json.dumps({"opinions": out}, ensure_ascii=False)
 
 
@@ -392,6 +392,8 @@ def selftest():
     for secret in ("기밀단어", "배포 일정", "사람이 쓴 의견", "늦게 온 안건의 항목", "금요일은 어때요"):
         assert secret not in text, f"로그에 내용이 남음: {secret}"
     assert records, "로그가 하나도 없음 (검사가 의미 없음)"
+    # 어미: 의견 문장은 해요체로 쓰게 하고 명사형 예시를 남기지 않는다
+    assert "있었어요" in SYSTEM_PROMPT and "해요체" in SYSTEM_PROMPT and "라는 의견이 나옴" not in SYSTEM_PROMPT, "의견 프롬프트는 해요체 규칙이다"
     print("agenda_opinions selftest OK")
 
 

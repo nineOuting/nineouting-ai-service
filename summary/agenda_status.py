@@ -92,9 +92,10 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건의 결정할 사항마다 결�
 3. 제안이나 의견만 나오고 아무도 동의하지 않았으면 decided가 아니야. 답이 하나로 좁혀졌으면 check, 좁혀지지 않았으면 undecided로 해.
 4. 누가 말한 내용을 다른 사람이 받아서 확인하는 말("네", "좋아요", "그렇게 해요")은 합의 표현이 될 수 있어. 앞 줄과 함께 봐.
 5. verdict가 decided, check, undecided이면 text에 한 문장을 쓰고, evidence에 근거 줄 번호 구간 [[첫 번호, 끝 번호], ...]을 달아. 구간의 양 끝은 입력에 있는 번호여야 해.
-   - decided: 무엇으로 결정됐는지.
-   - check: 결정으로 보이는 내용.
-   - undecided: 아직 정해지지 않은 내용. 의견이 갈렸으면 어떤 의견들이 나왔는지만 써.
+   - decided: 무엇으로 결정됐는지. "~로 정했어요", "~하기로 했어요"처럼 써.
+   - check: 결정으로 보이는 내용. "~로 정해진 것 같아요"처럼 써.
+   - undecided: 아직 정해지지 않은 내용. "~는 아직 정해지지 않았어요"처럼 쓰고, 의견이 갈렸으면 어떤 의견들이 있었는지만 써.
+   문장은 자연스러운 해요체로 끝내고 "~함", "~정함", "~결정됨" 같은 명사형으로 끝내지 마.
    근거에는 그 문장의 내용이 나온 줄을 모두 넣어. decided에는 답이 나온 줄과 합의 표현이 나온 줄을 모두 넣어. 근거 줄 수에 상한은 없어.
 6. text에는 근거 줄에 없는 사실, 이름, 숫자를 쓰지 마. "우세하다", "다수", "대체로"처럼 대화에 없는 평가나 짐작도 쓰지 마. 말을 인용할 때는 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 그 부분을 근거로 쓰면 text에 "STT 불확실"이라고 밝혀. 숫자는 말한 한글 표기를 「」로 그대로 인용해.
 7. verdict가 none이면 text는 빈 문자열, evidence는 빈 목록으로 줘.
@@ -153,9 +154,9 @@ def _reason_text(stat_list):
     d, c = stat_list.count(DECIDED), stat_list.count(DECISION_CHECK)
     u, s = stat_list.count(UNDECIDED), stat_list.count(NOT_STARTED)
     if d == t:
-        return f"결정할 사항 {t}개가 모두 결정됨"
+        return f"결정할 사항 {t}개가 모두 결정됐어요"
     parts = [f"{name} {n}개" for name, n in (("결정 확인 필요", c), ("미결", u), ("논의 전", s)) if n]
-    return f"결정할 사항 {t}개 중 {d}개가 결정됨" + (f" ({', '.join(parts)})" if parts else "")
+    return f"결정할 사항 {t}개 중 {d}개가 결정됐어요" + (f" ({', '.join(parts)})" if parts else "")
 
 
 # --------------------------------------------------------------------------------------
@@ -172,9 +173,9 @@ def echo_llm(user):
         n, _t, text = rows[-1]
         text = re.sub(r"[⟨⟩]", "", text)
         if any(w in text for w in ("확정", "결정", "하기로")):
-            v, why, ev = "decided", "마지막 줄에 결정 표현이 나옴", [[int(n), int(n)]]
+            v, why, ev = "decided", "마지막 줄에 결정 표현이 있었어요", [[int(n), int(n)]]
         elif any(w in text for w in ("글쎄", "아마")):
-            v, why, ev = "check", "마지막 줄에 불확실한 표현이 나옴", [[int(n), int(n)]]
+            v, why, ev = "check", "마지막 줄에 불확실한 표현이 있었어요", [[int(n), int(n)]]
     return json.dumps({"points": [{"n": k, "verdict": v, "text": why, "evidence": [list(e) for e in ev]}
                                   for k in range(1, n_pts + 1)]}, ensure_ascii=False)
 
@@ -650,7 +651,7 @@ def selftest():
     feed(c, [ln(1, 0, "배포는 목요일로 하죠"), ln(2, 4000, "배포 좋아요 그렇게 해요")], 5000)
     j.process()
     s = stat(j)
-    assert s["status"] == DECIDED and s["reason"] == {"text": "결정할 사항 1개가 모두 결정됨", "evidenceSeqs": [1, 2]}, s
+    assert s["status"] == DECIDED and s["reason"] == {"text": "결정할 사항 1개가 모두 결정됐어요", "evidenceSeqs": [1, 2]}, s
     assert s["points"] == [{"decisionPointId": None, "status": DECIDED, "decisionText": "배포는 다음 주 목요일로 정함",
                             "evidenceSeqs": [1, 2], "edited": False, "needsCheck": False}], s
     # 5) check
@@ -713,7 +714,7 @@ def selftest():
     c, j = fresh(llm=lambda u: seen.append(u) or answer("none"))
     feed(c, [ln(1, 0, "배포 일정 얘기")], 1000)
     assert j.process() == 0
-    assert j.process(final=True) == 1 and stat(j)["status"] == UNDECIDED and "결정할 사항 1개 중 0개가 결정됨" in stat(j)["reason"]["text"]
+    assert j.process(final=True) == 1 and stat(j)["status"] == UNDECIDED and "결정할 사항 1개 중 0개가 결정됐어요" in stat(j)["reason"]["text"]
     assert j.board_status()["a2"]["status"] == NOT_STARTED, "줄이 없는 안건은 끝나도 아직 안 다룸"
 
     # 12-2) flush: 기다리는 규칙만 건너뛰고 종료 확정은 켜지 않는다 (종료 버튼, AI-07)
@@ -799,7 +800,7 @@ def selftest():
     c.set_agendas(2, [A2, A3, A1])
     j.final = True
     r = j.board_status()["a1"]["reason"]
-    assert r["evidenceSeqs"] == [2] and r["text"].startswith("결정할 사항 1개 중 0개가 결정됨"), r
+    assert r["evidenceSeqs"] == [2] and r["text"].startswith("결정할 사항 1개 중 0개가 결정됐어요"), r
     # 불확실 줄이 합의 표현이면 모델이 결정으로 낼 수 있고, 불확실 줄을 근거로 달 수 있다
     c, j = fresh(llm=lambda u: answer("decided", "배포를 목요일로 하기로 함 (동의 표현은 「좋습니다」, STT 불확실)", [(1, 2)]), show_uncertain=True)
     feed(c, [ln(1, 0, "배포를 목요일로 해도 되나요"), ln(2, 2500, "좋습니다", low=True)], 4000)
@@ -879,7 +880,7 @@ def selftest():
     assert [p["evidenceSeqs"] for p in pts] == [[1, 2], [3], [4]]
     assert pts[0]["decisionText"] == "1차 배포는 다음 주 목요일로 정함" and not any(p["edited"] or p["needsCheck"] for p in pts)
     assert bs["status"] == DISCUSSING, "일부만 결정이면 결정이 아니고, 현재 안건이면 논의 중"
-    assert bs["reason"] == {"text": "결정할 사항 3개 중 1개가 결정됨 (결정 확인 필요 1개, 미결 1개)", "evidenceSeqs": [4]}, bs["reason"]
+    assert bs["reason"] == {"text": "결정할 사항 3개 중 1개가 결정됐어요 (결정 확인 필요 1개, 미결 1개)", "evidenceSeqs": [4]}, bs["reason"]
     assert j.process() == 0, "같은 내용은 다시 부르지 않음"
     j.process(final=True)
     assert j.board_status()["p1"]["status"] == UNDECIDED, "회의가 끝나면 일부만 결정된 안건은 미결"
@@ -944,7 +945,7 @@ def selftest():
              ln(3, 4000, "배포 일정 이야기 3번"), ln(4, 6000, "배포 일정 이야기 4번")], 7000)
     j.process()
     bs = j.board_status()["p4"]
-    assert bs["status"] == DECISION_CHECK and bs["reason"] == {"text": "결정할 사항 2개 중 1개가 결정됨 (결정 확인 필요 1개)", "evidenceSeqs": [1, 2]}, bs["reason"]
+    assert bs["status"] == DECISION_CHECK and bs["reason"] == {"text": "결정할 사항 2개 중 1개가 결정됐어요 (결정 확인 필요 1개)", "evidenceSeqs": [1, 2]}, bs["reason"]
 
     # 20) 사람이 고친 결정 내용: 고정하고 상태만 계속 판정한다
     def edit(rev, text="담당은 인프라 팀으로 확정", ev=(3,), pid=8, aid="p1"):
@@ -1045,6 +1046,11 @@ def selftest():
     for secret in ("기밀단어", "배포 일정", "배포는 다음 주 목요일로 정함", "목요일", "사항기밀", "인프라 팀", "정해지지 않음"):
         assert secret not in text, f"로그에 내용이 남음: {secret}"
     assert records
+    # 어미: 결정 문장은 해요체, 코드가 만드는 문구도 해요체
+    assert all(x in SYSTEM_PROMPT for x in ("로 정했어요", "정해진 것 같아요", "아직 정해지지 않았어요", "해요체")), "상태 판정 프롬프트는 해요체 규칙이다"
+    assert _reason_text([DECIDED, DECIDED]) == "결정할 사항 2개가 모두 결정됐어요"
+    assert _reason_text([DECIDED, UNDECIDED]) == "결정할 사항 2개 중 1개가 결정됐어요 (미결 1개)"
+    assert FIXED_NOT_STARTED.endswith("어요") and fixed_undecided("배포 일정").endswith("어요")
     print("agenda_status selftest OK")
 
 

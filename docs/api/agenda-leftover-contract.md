@@ -39,7 +39,7 @@
     {
       "agendaId": 102,
       "status": "UNDECIDED",
-      "statusReason": { "text": "결정할 사항 2개 중 1개가 결정됨 (미결 1개)", "evidenceSeqs": [51] },
+      "statusReason": { "text": "결정할 사항 2개 중 1개가 결정됐어요 (미결 1개)", "evidenceSeqs": [51] },
       "decisionPoints": [
         { "decisionPointId": 11, "status": "DECIDED", "decisionText": "...", "evidenceSeqs": [47], "edited": false, "needsCheck": false },
         { "decisionPointId": 12, "status": "UNDECIDED", "decisionText": "...", "evidenceSeqs": [48, 51], "edited": false, "needsCheck": false }

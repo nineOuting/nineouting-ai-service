@@ -40,10 +40,14 @@ bash -n .github/scripts/publish-dev-ecr.sh
 python3 .github/scripts/test_publish_dev_ecr.py
 ```
 
-실제 첫 OIDC 인증·ECR Push 및 대상 digest 검증은 아직 실행하지 않았다. Workflow가 develop에 반영된 뒤 push 또는 develop 수동 실행으로 확인한다. 로컬 mock 결과는 AWS 성공의 증거가 아니다. 이번 로컬 작업에서 ECR/IAM/Kubernetes/Argo CD를 변경하지 않았다.
+SCRUM-187 PR #67 병합 후 실제 실행 `42579944054` attempt 1에서 OIDC 인증·ECR Push·digest/플랫폼 검증이 성공했다. 검증 digest는 `sha256:859e546fc25351bc30bf81592840badce975be385af40bff11d006a8fbd04801`이다. 이번 SCRUM-188의 자동 PR 생성은 별도 검증 대상이며 아직 실제 실행 전이다.
 
-## 선택 요청: AI Helm values 변경 PR
+## SCRUM-188: AI Helm values 변경 PR
 
-점검한 인프라 dev에는 AI Helm values와 AI Application이 아직 없으며 AI 저장소의 DEV_GITOPS_TOKEN도 미등록이다. 기존 promotion 도구는 백엔드 5개 서비스/dev만 허용한다. 따라서 이번 전송 연결에서 빈 AI values나 임의 실행 설정을 만들어 PR을 생성하지 않는다.
+인프라 PR #68 이후 dev에 AI values와 Auto Sync=false인 AI Application이 준비됐다. `dev-gitops` Job은 성공한 dev-ecr 뒤 동일 run/attempt artifact를 받아 인프라의 promotion 도구로 AI `image.digest` 한 줄 변경 PR을 생성한다.
 
-이 작업의 검증된 image_uri/image_digest 출력을 다음 Helm 구성에 그대로 사용할 수 있다. 인프라에서 AI values·수동 Sync Application을 준비하고 별도 GitOps 토큰을 등록한 뒤, AI develop/ECR 이름에 맞는 엄격한 출처 검증으로 PR 생성을 추가한다. AI Auto Sync는 켜지 않는다. 기존 백엔드 5개 앱 정책도 변경하지 않는다.
+먼저 인프라의 SCRUM-188 AI 매핑을 dev에 반영하고 AI 저장소 Actions Secret `DEV_GITOPS_TOKEN`에 인프라 Contents/Pull requests 읽기·쓰기 토큰을 등록해야 한다. 이 Workflow 변경을 develop에 반영한 뒤 실제 성공과 생성 PR의 인프라 CI를 확인한다. PR 실행에서는 dev-ecr/dev-gitops가 skip된다.
+
+GitHub source/CI 읽기는 원본 AI `GITHUB_TOKEN` contents/actions 읽기 권한을 사용하고, 인프라 checkout/쓰기만 별도 GitOps 토큰을 사용한다. checkout 자격증명은 Git 설정에 남기지 않는다. 오래된 develop SHA, 실패 ECR, 다른 run/attempt artifact는 거절한다. 반복 실행의 artifact가 없으면 필요한 경우 Workflow 전체를 재실행한다.
+
+자동 PR 생성은 AI 배포 완료를 뜻하지 않는다. AI Auto Sync는 켜지 않으며 이미지 PR 병합·실제 수동 Sync는 인프라 담당자의 별도 확인으로 진행한다. 기존 백엔드 5개 앱 정책은 변경하지 않는다.

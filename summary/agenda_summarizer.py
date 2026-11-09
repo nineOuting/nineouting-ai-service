@@ -36,7 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from meeting_summary import (SYSTEM_PROMPT, build_input, validate_items, call_llm, parse_llm_json, mmss, squash)  # noqa: E402
+from meeting_summary import (SYSTEM_PROMPT, build_input, validate_items, call_llm, parse_llm_json, mmss, squash, PLAIN_RULE_3, PLAIN_RULE_6, ensure_period)  # noqa: E402
 from meeting_live_summary_v2 import echo_llm, window_range  # noqa: E402
 from agenda_classifier import _clean  # noqa: E402
 from agenda_leftover import build_leftover  # noqa: E402
@@ -63,9 +63,9 @@ assert AGENDA_SYSTEM_PROMPT != SYSTEM_PROMPT, "시스템 프롬프트에 추가 
 # ---- 프롬프트 v2: 맥락 교정 (설계: claude/summary-text-quality-design-v1.md) ----
 # v1 = 현행(받아쓰기 오류를 고쳐 쓰지 않는다), v2 = 앞뒤 줄의 맥락으로 고쳐 쓰고 정정 목록(corrections)을 함께 낸다.
 # 평가를 통과하기 전에는 SummarizeCfg 기본값이 v1이다. 공유 원문(SYSTEM_PROMPT)은 바꾸지 않고 안건 요약용 문자열에서만 바꾼다.
-PROMPT_VERSIONS = ("v1", "v2", "v3", "v4", "v5", "v6", "v7")
-CORRECTING_VERSIONS = ("v2", "v3", "v4", "v5", "v6", "v7")       # 정정 목록(corrections)을 받는 버전
-STRICT_VERSIONS = ("v3", "v4", "v5", "v6", "v7")                 # 고친 말의 원문이 「」 안에도 남으면 탈락시키는 버전
+PROMPT_VERSIONS = ("v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8")
+CORRECTING_VERSIONS = ("v2", "v3", "v4", "v5", "v6", "v7", "v8")       # 정정 목록(corrections)을 받는 버전
+STRICT_VERSIONS = ("v3", "v4", "v5", "v6", "v7", "v8")                 # 고친 말의 원문이 「」 안에도 남으면 탈락시키는 버전
 
 _V2_RULES = {
     4: '''4. 전사는 STT 원본이라 받아쓰기 오류가 있어. ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 앞뒤 줄의 맥락으로 뜻이 분명한 오류는 맞는 말로 고쳐 쓰고, 고친 말은 모두 corrections에 적어(규칙 14). 맥락으로도 뜻을 정할 수 없는 말은 짐작하지 말고 text에 쓰지 마.''',
@@ -116,6 +116,16 @@ _V7_STYLE_RULES = {**_V6_STYLE_RULES,
     3: '''3. 항목 text는 한 줄로, 자연스러운 해요체로 끝내. "~했어요", "~있었어요", "~예요"처럼 쓰고 "~함", "~임", "~나옴" 같은 명사형으로 끝내지 마. 모든 문장을 "~는 말이 있었어요"로 끝내지 말고 말의 성격에 맞게 "~라고 했어요", "~을 제안했어요", "~이 걱정된다고 했어요", "~을 물었어요"처럼 섞어 써.'''}
 
 
+# v8: v7 + 마침표까지 해요체 + 숫자·날짜·요일은 「」·환산 없이 전사 표기 그대로(값이 바뀌지 않았는지는 코드가 본다)
+#     + 규칙 24 의 "STT 불확실" 문구가 규칙 14 의 "(받아쓰기 불확실)" 표시와 어긋나던 것을 맞춤
+PLAIN_VERSIONS = ("v8",)
+_V8_RULES = {**_V5_RULES, **_V7_STYLE_RULES,
+    3: PLAIN_RULE_3,
+    5: '''5. 규칙 14의 풀리지 않는 말이 아니면 「」 인용을 쓰지 말고 자연스러운 문장으로 풀어 써. 인용을 쓸 때는 입력 원문과 똑같이 쓰고(⟨ ⟩ 기호는 빼) 인용 안에서는 단어를 고치지 마. 숫자, 날짜, 요일, 금액, 수량은 인용하지 마(규칙 6).''',
+    6: PLAIN_RULE_6,
+    24: '''24. 규칙 14로 표시한 말에는 "(받아쓰기 불확실)"만 붙이고, 'STT 불확실' 같은 말을 따로 쓰지 마.'''}
+
+
 def _build_v2_prompt(rule14=None, rules=None):
     p = AGENDA_SYSTEM_PROMPT
     for n, t in {**_V2_RULES, **(rules or {}), **({14: rule14} if rule14 else {})}.items():
@@ -131,6 +141,7 @@ AGENDA_SYSTEM_PROMPT_V4 = _build_v2_prompt(_V4_RULE_14)
 AGENDA_SYSTEM_PROMPT_V5 = _build_v2_prompt(_V5_RULE_14, _V5_RULES)
 AGENDA_SYSTEM_PROMPT_V6 = _build_v2_prompt(_V6_RULE_14, {**_V5_RULES, **_V6_STYLE_RULES})
 AGENDA_SYSTEM_PROMPT_V7 = _build_v2_prompt(_V7_RULE_14, {**_V5_RULES, **_V7_STYLE_RULES})
+AGENDA_SYSTEM_PROMPT_V8 = _build_v2_prompt(_V7_RULE_14, _V8_RULES)
 
 
 def system_prompt(version):
@@ -148,6 +159,8 @@ def system_prompt(version):
         return AGENDA_SYSTEM_PROMPT_V6
     if version == "v7":
         return AGENDA_SYSTEM_PROMPT_V7
+    if version == "v8":
+        return AGENDA_SYSTEM_PROMPT_V8
     raise ValueError(f"알 수 없는 프롬프트 버전: {version}")
 
 
@@ -492,7 +505,12 @@ class AgendaSummarizer:
                     break
                 cur_user = user + f"\n\n[이전 출력]\n{raw}\n\n[오류]\nJSON 해석 실패({type(e).__name__}). 형식에 맞게 JSON만 다시 출력해."
                 continue
-            res = validate_items(items, job["lines"])
+            plain = self.cfg.prompt_version in PLAIN_VERSIONS
+            if plain:
+                for _it in items:
+                    if isinstance(_it, dict) and isinstance(_it.get("text"), str):
+                        _it["text"] = ensure_period(_it["text"])
+            res = validate_items(items, job["lines"], plain_numbers=plain)
             if self.cfg.prompt_version in CORRECTING_VERSIONS:
                 res = check_corrections(res, job["lines"], strict=self.cfg.prompt_version in STRICT_VERSIONS)      # 정정 목록 검사: 어긋나면 그 항목은 탈락
             bad = [(i, r) for i, r in enumerate(res, 1) if r[1]]
@@ -997,7 +1015,7 @@ def selftest():
 
     # 17-4) decisionPoints (AI-04 v0.2): 판정기가 준 사항별 결과를 보드에 담고, 정리본과 미결 목록에도 복사해 담는다
     pts_a1 = [{"decisionPointId": 7, "status": "DECIDED", "decisionText": "목요일로 정함", "evidenceSeqs": [1, 2], "edited": False, "needsCheck": False}]
-    with_pts = {"a1": {"status": "DECIDED", "reason": {"text": "결정할 사항 1개가 모두 결정됨", "evidenceSeqs": [1, 2]}, "points": pts_a1},
+    with_pts = {"a1": {"status": "DECIDED", "reason": {"text": "결정할 사항 1개가 모두 결정됐어요", "evidenceSeqs": [1, 2]}, "points": pts_a1},
                 "a2": {"status": "NOT_STARTED", "reason": None, "points": [{"decisionPointId": 8, "status": "NOT_STARTED", "decisionText": "아직 논의되지 않았어요",
                                                                             "evidenceSeqs": [], "edited": False, "needsCheck": False}]}}
     b = s.take_board(status_info=with_pts, leftover=lf2(7, with_pts))
@@ -1113,7 +1131,7 @@ def selftest():
     two = {"text": "「레그」(RAG)를 붙이자는 의견이 나옴", "topic": None, "evidence": [[1, 1]], "corrections": [{"from": "레그", "to": "RAG", "line": 1}]}
     assert any("그대로 남아 있음" in e for e in check_corrections(validate_items([dict(two)], kl2s), kl2s, strict=True)[0][1]), "두 글자 원문도 strict 에서 걸러진다"
     assert all(p.count("\n14. ") == 1 and "corrections" in p for p in (p2, p3, p4))
-    assert CORRECTING_VERSIONS == ("v2", "v3", "v4", "v5", "v6", "v7") and STRICT_VERSIONS == ("v3", "v4", "v5", "v6", "v7")
+    assert CORRECTING_VERSIONS == ("v2", "v3", "v4", "v5", "v6", "v7", "v8") and STRICT_VERSIONS == ("v3", "v4", "v5", "v6", "v7", "v8")
     quoted = dict(good, text="현재 「에스티티」(STT)만 쓰자는 의견이 나옴", corrections=[{"from": "에스티티", "to": "STT", "line": 1}])
     assert not check_corrections(validate_items([dict(quoted)], kl), kl)[0][1], "v2 검사는 「」 안의 원문을 통과시킨다(측정 때와 같은 동작 유지)"
     errs = check_corrections(validate_items([dict(quoted)], kl), kl, strict=True)[0][1]
@@ -1184,6 +1202,27 @@ def selftest():
     assert "말의 성격에 맞게" in p7 and "말의 성격에 맞게" not in p6 and '"~라고 했어요", "~을 제안했어요"' in p7
     assert all(x in p7 for x in (UNSURE_MARK, "해요체", "알 수 없는 이름", '"(250,000원)"처럼 괄호 안에', "하자는 제안이 있었어요", "논의했어요"))
     assert p7.count("\n3. ") == 1 and p7.count("\n14. ") == 1
+
+    # v8: v7 + 마침표까지 해요체 + 숫자·요일은 전사 표기 그대로. 규칙 24 가 규칙 14 의 표시와 어긋나지 않는다
+    p8 = system_prompt("v8")
+    assert p8 is AGENDA_SYSTEM_PROMPT_V8 and p8 != p7 and "v8" in PROMPT_VERSIONS and "v8" in CORRECTING_VERSIONS and "v8" in STRICT_VERSIONS and PLAIN_VERSIONS == ("v8",)
+    assert SummarizeCfg(prompt_version="v8").prompt_version == "v8"
+    assert "마침표로 끝내" in p8 and "환산해서 덧붙이지 마" in p8 and "숫자, 날짜, 요일, 금액, 수량은 인용하지 마" in p8
+    assert '"(250,000원)"처럼 괄호 안에' not in p8 and '"(250,000원)"처럼 괄호 안에' in p7
+    assert '꼭 적어' in p7 and 'STT 불확실"이라고 꼭 적어' not in p8 and "(받아쓰기 불확실)\"만 붙이고" in p8, "v7 은 규칙 24 와 14 가 어긋나 있었고 v8 에서 맞췄다"
+    assert all(p8.count("\n%d. " % n) == 1 for n in (3, 5, 6, 14, 24))
+    plain_calls = []
+
+    def fake_plain(user):
+        plain_calls.append(user)
+        t = "배포 정확도가 18퍼센트 낮다는 의견이 있었어요"
+        if len(plain_calls) == 1:
+            t = "배포 정확도가 20퍼센트 낮다는 의견이 있었어요"      # 근거 줄에 없는 숫자 -> 탈락 후 다시 부름
+        return json.dumps({"summary": [{"text": t, "topic": None, "evidence": [[1, 2]], "corrections": []}]}, ensure_ascii=False)
+    c, s = fresh(sum_kw={"prompt_version": "v8"}, llm=fake_plain)
+    feed(c, [ln(1, 0, "기밀단어 배포 일정 이야기"), ln(2, 4000, "배포 정확도가 18퍼센트 낮아요")], 5000)
+    assert s.process() == 2 and "숫자·날짜·요일 표현이 근거 줄에 그대로 없음" in plain_calls[1], "v8 은 바뀐 숫자를 탈락시키고 다시 부른다"
+    assert s.ag["a1"]["items"][0]["text"] == "배포 정확도가 18퍼센트 낮다는 의견이 있었어요.", "전사 표기 그대로 쓰고 마침표를 붙인다"
 
     # 요약기 연결: v2는 정정 목록이 어긋나면 오류를 알려 주고 다시 부른다. 통과한 정정은 항목에 보관하되 보드에는 내지 않는다
     seen_calls = []

@@ -33,7 +33,7 @@ if HERE not in sys.path:
 
 from meeting_summary import (  # noqa: E402
     TranscriptStore, load_jsonl_as_protocol_lines, make_batches, build_input,
-    SYSTEM_PROMPT, call_llm, parse_llm_json, validate_items, build_char_stream, unknown_terms,
+    SYSTEM_PROMPT, SYSTEM_PROMPT_V2, ensure_period, call_llm, parse_llm_json, validate_items, build_char_stream, unknown_terms,
     spans_to_evidence, mmss, fmt_t, GENERIC_END, DECISION_END, MAX_ITEM_LINES, MAX_SPAN_LINES, load_dotenv,
 )
 
@@ -60,6 +60,18 @@ LIVE_ADDENDUM = """
 LIVE_SYSTEM_PROMPT = SYSTEM_PROMPT.replace("\n\n출력은 JSON만.", LIVE_ADDENDUM + "\n\n출력은 JSON만.")
 assert LIVE_SYSTEM_PROMPT != SYSTEM_PROMPT, "시스템 프롬프트에 추가 규칙을 끼워 넣지 못함 (meeting_summary.py 버전 확인)"
 
+# v2: 해요체, 숫자·요일은 전사 표기 그대로(「」·환산 없음), 끝에 걸린 한마디는 새 항목으로 만들지 않음
+LIVE_PROMPT_VERSIONS = ("v1", "v2")
+LIVE_ADDENDUM_V2 = LIVE_ADDENDUM.replace(" 숫자는 뒤에 이어지는 글자까지 빼지 말고 끝까지 인용해.", "") + """
+26. 마지막 줄이 앞에서 이미 다룬 화제를 다시 알리는 짧은 한마디(예: 다음 안건 이름만 부르는 말)이거나 말이 끊긴 조각이면 새 항목으로 만들지 말고, 같은 화제 항목의 근거 구간에만 넣어."""
+assert LIVE_ADDENDUM_V2 != LIVE_ADDENDUM
+LIVE_SYSTEM_PROMPT_V2 = SYSTEM_PROMPT_V2.replace("\n\n출력은 JSON만.", LIVE_ADDENDUM_V2 + "\n\n출력은 JSON만.")
+assert LIVE_SYSTEM_PROMPT_V2 != SYSTEM_PROMPT_V2
+
+
+def live_system_prompt(version):
+    return LIVE_SYSTEM_PROMPT_V2 if version == "v2" else LIVE_SYSTEM_PROMPT
+
 
 # --------------------------------------------------------------------------------------
 # 0. 설정과 모의 요약기
@@ -77,10 +89,13 @@ class Cfg:
         self.context_windows = 2      # 맥락용으로 주는 이전 구간 수
         self.provider = "echo"
         self.model = None
+        self.prompt_version = "v1"    # v1: 현행(명사형, 숫자를 「」로 인용), v2: 해요체 + 숫자·요일은 전사 표기 그대로
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError(f"알 수 없는 설정: {k}")
             setattr(self, k, v)
+        if self.prompt_version not in LIVE_PROMPT_VERSIONS:
+            raise ValueError(f"알 수 없는 프롬프트 버전: {self.prompt_version}")
 
 
 def window_range(n_lines, max_items):
@@ -114,7 +129,7 @@ def echo_llm(user):
 def make_llm(cfg):
     if cfg.provider == "echo":
         return echo_llm
-    return lambda user: call_llm(cfg.provider, cfg.model, LIVE_SYSTEM_PROMPT, user, task="live_summary")
+    return lambda user: call_llm(cfg.provider, cfg.model, live_system_prompt(cfg.prompt_version), user, task="live_summary")
 
 
 def _sha(s):
@@ -371,7 +386,7 @@ class LiveSummarizer:
             dt = time.time() - t0
             self.calls += 1
             w["calls"] += 1
-            self.prompt_chars += len(LIVE_SYSTEM_PROMPT) + len(cur_user)
+            self.prompt_chars += len(live_system_prompt(self.cfg.prompt_version)) + len(cur_user)
             self.call_log.append({"call": self.calls, "window": idx, "attempt": attempt, "now_ms": now,
                                   "elapsed_sec": round(dt, 2), "input_chars": len(cur_user), "error": err})
             if err:
@@ -390,7 +405,12 @@ class LiveSummarizer:
             except Exception as e:
                 cur_user = user + f"\n\n[이전 출력]\n{raw}\n\n[오류]\nJSON 해석 실패({e}). 형식에 맞게 JSON만 다시 출력해."
                 continue
-            results = validate_items(items, kept)
+            plain = self.cfg.prompt_version == "v2"
+            if plain:
+                for _it in items:
+                    if isinstance(_it, dict) and isinstance(_it.get("text"), str):
+                        _it["text"] = ensure_period(_it["text"])
+            results = validate_items(items, kept, plain_numbers=plain)
             bad = [(i, r) for i, r in enumerate(results, 1) if r[1]]
             quality = self._window_quality(results, kept, full_stream, lo_eff, need_hi, covered0)
             raws_ok = True
@@ -615,10 +635,16 @@ def cmd_qa_prompts(args):
 # --------------------------------------------------------------------------------------
 # 4. 실행 명령
 # --------------------------------------------------------------------------------------
+def cfg_from_args(args):
+    """run 명령의 인자 -> Cfg. 프롬프트 버전은 --prompt 로만 고른다 (환경변수 LIVE_SUMMARY_PROMPT 는 서버만 읽는다)."""
+    return Cfg(window_sec=args.window_sec, refresh_sec=args.refresh_sec, max_items=args.max_items,
+               min_open_lines=args.min_open_lines, retries=args.retries, max_calls=args.max_calls,
+               context_windows=args.context_windows, provider="echo" if args.plan else args.provider, model=args.model,
+               prompt_version=getattr(args, "prompt", None) or "v1")
+
+
 def cmd_run(args):
-    cfg = Cfg(window_sec=args.window_sec, refresh_sec=args.refresh_sec, max_items=args.max_items,
-              min_open_lines=args.min_open_lines, retries=args.retries, max_calls=args.max_calls,
-              context_windows=args.context_windows, provider="echo" if args.plan else args.provider, model=args.model)
+    cfg = cfg_from_args(args)
     lines = load_jsonl_as_protocol_lines(args.input)
     cps = [int(x) for x in args.checkpoints.split(",") if x.strip()]
     ls = LiveSummarizer(args.meeting_id, cfg, date=args.date, out_dir=None if args.plan else args.out,
@@ -780,6 +806,21 @@ def selftest():
     assert ls7.snapshots["end"]["halted"] is True
     # 10) 시스템 규칙에 구간용 규칙이 들어갔는지
     assert "한 구간이야" in LIVE_SYSTEM_PROMPT and "출력은 JSON만" in LIVE_SYSTEM_PROMPT
+    # v2: 해요체 + 숫자 표기 그대로 + 끝에 걸린 한마디 처리. v1 은 그대로
+    assert Cfg().prompt_version == "v1" and Cfg(prompt_version="v2").prompt_version == "v2"
+    import types
+    base = dict(window_sec=120, refresh_sec=60, max_items=3, min_open_lines=4, retries=0, max_calls=60, context_windows=2,
+                provider="echo", model=None, plan=False)
+    assert cfg_from_args(types.SimpleNamespace(**base)).prompt_version == "v1"                       # 옵션이 없으면 v1
+    assert cfg_from_args(types.SimpleNamespace(**base, prompt="v2")).prompt_version == "v2"          # --prompt v2 가 Cfg 까지 간다
+    try:
+        Cfg(prompt_version="v3")
+        raise AssertionError("알 수 없는 버전은 거절해야 함")
+    except ValueError:
+        pass
+    assert live_system_prompt("v1") is LIVE_SYSTEM_PROMPT and live_system_prompt("v2") is LIVE_SYSTEM_PROMPT_V2 and LIVE_SYSTEM_PROMPT != LIVE_SYSTEM_PROMPT_V2
+    assert "한 구간이야" in LIVE_SYSTEM_PROMPT_V2 and "해요체" in LIVE_SYSTEM_PROMPT_V2 and "26. " in LIVE_SYSTEM_PROMPT_V2 and "끝까지 인용해" not in LIVE_SYSTEM_PROMPT_V2 and "끝까지 인용해" in LIVE_SYSTEM_PROMPT
+    assert LIVE_SYSTEM_PROMPT_V2.count("\n24. ") == 1 and LIVE_SYSTEM_PROMPT_V2.count("\n26. ") == 1
     print("자체 시험 통과 (창 나누기, 확정, 수정 반영, 잠금과 확인 필요, 호출 상한, 호출 실패 처리, 시점별 저장, QA 문항 선별)")
 
 
@@ -807,6 +848,8 @@ def main():
     r.add_argument("--max-calls", type=int, default=60, help="모델 호출 상한 (넘으면 멈춤)")
     r.add_argument("--context-windows", type=int, default=2, help="맥락용으로 주는 이전 구간 수")
     r.add_argument("--checkpoints", default="600,1200", help="시점별로 저장할 회의 경과 초 (쉼표로 구분). 종료 시점은 항상 저장")
+    r.add_argument("--prompt", choices=LIVE_PROMPT_VERSIONS, default="v1",
+                   help="주기 요약 프롬프트 버전 (v1 현행, v2 해요체 + 숫자 표기 그대로). 결과의 live_state.json 에 기록된다")
     r.add_argument("--plan", action="store_true", help="모델을 부르지 않고 호출 횟수와 비용 추정만 출력")
 
     q = sub.add_parser("qa-prompts", help="시점별 요약 + 그 시점까지의 문항으로 QA 프롬프트 만들기")

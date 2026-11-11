@@ -4,6 +4,7 @@
   .venv/bin/python -m minutes.eval_draft minutes/tests/fixtures/eval_basic.json --runs 20
   .venv/bin/python -m minutes.eval_draft 사례.json --runs 20 --prompt v8 v9 --relayout-prompt v2 v3
   .venv/bin/python -m minutes.eval_draft minutes/tests/fixtures/eval_stt.json --runs 10 --correction-prompt v1
+  .venv/bin/python -m minutes.eval_draft 사례.json --runs 10 --polish-prompt v1
   .venv/bin/python -m minutes.eval_draft --summary data/eval/minutes/eval_basic-20261102-101500
 
 --dry-run 은 AI 를 부르지 않는다. 사례의 정답표가 AI 에 가는 재료와 하나씩 맞물리는지만 본다.
@@ -32,18 +33,22 @@ AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수,
   grouping  글 필드마다 맞다고 볼 묶는 기준 (명세 7.2). 줄이 들어간 필드만 센다. AI 가 기준을 주지 않은 필드는 "묶지 않음".
           칸 고르기 채점(맞음)과 따로 센다
   fixes   오인식 교정 (명세 7.7). 칸 고르기 채점(맞음)과 따로 센다
-          want       [잘못 적힌 말, 맞는 표기]. 결과 글에 "맞는 표기(STT: 잘못 적힌 말)" 이 있으면 맞음.
+          want       [잘못 적힌 말, 맞는 표기]. 결과 글에 "[맞는 표기]" 가 있으면 맞음 (SCRUM-218 표시 모양).
                      맞는 표기가 여럿이면 목록으로 쓴다 (예: ["머지 리퀘스트", "Merge Request"]).
-                     낱말마다 나눠 고친 모양("깃허브(STT: 깃헙) 액션(STT: 액선)")도 맞음
-          keep       바뀌면 안 되는 말. 결과 글에 "(STT: 그 말)" 이 있으면 틀림. want·allow 에 없는 교정도 틀림으로 센다
-          allow      바뀌어도 되고 안 바뀌어도 되는 말 (맞는 표기가 요청에 없어 짐작해야 하는 것 등)
+                     낱말마다 나눠 고친 모양("[깃허브] [액션]")도 맞음
+          keep       바뀌면 안 되는 말 (설명용). 줄 글에는 원래 말이 남지 않으므로, want 의 맞는 표기가 아닌 "[X]" 를
+                     모두 틀린 교정으로 센다 (extra 에 X 가 들어간다)
+          allow      바뀌어도 되고 안 바뀌어도 되는 말 (맞는 표기가 요청에 없어 짐작해야 하는 것 등). 이 말이 결과 글에서
+                     사라진 수만큼 want 에 없는 "[X]" 를 봐준다
           untouched  교정이 붙으면 안 되는 줄의 출처 (사람이 고친 항목 등)
+  template 요청의 양식 대신 쓸 양식 (같은 요청을 양식만 바꿔 돌릴 때)
   then    처음 초안의 줄로 양식을 바꿔 다시 배치한다 (try_draft --relayout-to 와 같은 흐름). 처음이 실패하면 건너뛴다.
           addLines 에 줄(previousLines 모양)을 주면 이전 줄 뒤에 붙인다 (작성자가 직접 쓴 줄)
 """
 import argparse
 import csv
 import json
+import logging
 import re
 import statistics
 import sys
@@ -58,6 +63,7 @@ from .draft import make_draft
 from .materials import build_materials
 from .models import NO_GROUPING, TABLE
 from .placement import PROMPT_KIND, RELAYOUT_KIND, load_prompt, parse_reply, read_grouping
+from .polish import POLISH_KIND
 from .relayout import build_relayout, previous_lines_from
 from .request import template_fields
 from .table import TABLE_KIND
@@ -66,7 +72,7 @@ REPO = Path(__file__).resolve().parent.parent
 OUT_ROOT = REPO / "data" / "eval" / "minutes"
 NONE = "(넣지 않음)"
 TIMEOUT_S = 60.0                  # 운영 기본값 (MINUTES_LLM_TIMEOUT_S)
-_FIXED = re.compile(r"\(STT: ([^)]+)\)")
+_FIXED = re.compile(r"\[([^\[\]]*[^?\[\]])\]")              # 교정 표시 [맞는 표기]. [X?] 는 불확실 표시라 뺀다
 
 
 # ---------- 사례 ----------
@@ -74,6 +80,8 @@ def load_case(path: Path) -> dict:
     case = json.loads(path.read_text(encoding="utf-8"))
     for task in case["tasks"]:
         task["body"] = json.loads((path.parent / task["request"]).read_text(encoding="utf-8"))
+        if "template" in task:
+            task["body"]["template"] = task["template"]
     return case
 
 
@@ -149,15 +157,16 @@ def score(result: dict, expect: list[dict], tables: list[dict] = (), grouping: d
 
 
 def _score_fixes(result, want: dict) -> dict:
-    """교정 채점. hit: 바뀐 want 쌍 수, extra: want 에 없는 교정(keep 포함), touched: 교정이 붙은 untouched 줄 수."""
+    """교정 채점. hit: 바뀐 want 쌍 수, extra: want 의 맞는 표기가 아닌 교정 표시, touched: 교정이 붙은 untouched 줄 수."""
     lines = [(line_key(line), line.get("sentence") or " | ".join(line.get("cells", [])))
              for s in result["sections"] for line in s.get("evidence", [])]
     text = "\n".join(t for _, t in lines)
     pairs = [(w, r if isinstance(r, list) else [r]) for w, r in want.get("want", ())]
     hit = [w for w, rs in pairs if any(form in text for r in rs for form in _fixed_forms(w, r))]
-    wanted = {w for w, _ in pairs} | {wp for w, rs in pairs for r in rs for wp, _ in _word_pairs(w, r)}
-    wanted |= set(want.get("allow", ()))
-    extra = sorted({w for w in _FIXED.findall(text) if w not in wanted})
+    rights = {r for _, rs in pairs for r in rs} | {rp for w, rs in pairs for r in rs for _, rp in _word_pairs(w, r)}
+    unexplained = sorted({r for r in _FIXED.findall(text) if r not in rights})
+    excused = sum(a not in text for a in want.get("allow", ()))
+    extra = unexplained[excused:] if excused < len(unexplained) else []
     untouched = {tuple(u) for u in want.get("untouched", ())}
     touched = sum(1 for key, t in lines if key in untouched and _FIXED.search(t))
     return {"want": len(pairs), "hit": len(hit), "missed": [w for w, _ in pairs if w not in hit], "extra": extra,
@@ -182,10 +191,10 @@ def _word_pairs(wrong: str, right: str) -> list[tuple[str, str]]:
 
 def _fixed_forms(wrong: str, right: str) -> list[str]:
     """교정된 글의 모양. 통째로 바꾼 것, 또는 낱말마다 나눠 바꾼 것 (AI 가 쌍을 낱말로 나눠 내기도 한다)."""
-    forms = [f"{right}(STT: {wrong})"]
+    forms = [f"[{right}]"]
     w, r = wrong.split(), right.split()
     if len(w) == len(r) > 1:
-        forms.append(" ".join(b if a == b else f"{b}(STT: {a})" for a, b in zip(w, r)))
+        forms.append(" ".join(b if a == b else f"[{b}]" for a, b in zip(w, r)))
     return forms
 
 
@@ -224,15 +233,17 @@ class Recorder:
         return reply
 
 
-def variants_of(placement: list[str], relayout: list[str], table: list[str], correction: list[str] = (None,)) -> list[dict]:
-    n = max(len(placement), len(relayout), len(table), len(correction))
+def variants_of(placement: list[str], relayout: list[str], table: list[str], correction: list[str] = (None,),
+                polish: list[str] = (None,)) -> list[dict]:
+    n = max(len(placement), len(relayout), len(table), len(correction), len(polish))
     pick = lambda vs, i: vs[min(i, len(vs) - 1)]                                     # noqa: E731
     return [{"placement": pick(placement, i), "relayout": pick(relayout, i), "table": pick(table, i),
-             "correction": pick(correction, i)} for i in range(n)]
+             "correction": pick(correction, i), "polish": pick(polish, i)} for i in range(n)]
 
 
 def label(v: dict) -> str:
     tail = f" correction-{v['correction']}" if v.get("correction") else ""
+    tail += f" polish-{v['polish']}" if v.get("polish") else ""
     return f"placement-{v['placement']} relayout-{v['relayout']} table-{v['table']}{tail}"
 
 
@@ -241,7 +252,8 @@ def run_case(case: dict, llm, runs: int, variants: list[dict], out_dir: Path, ti
     out_dir.mkdir(parents=True, exist_ok=True)
     loaded = [{"placement": load_prompt(v["placement"]), "relayout": load_prompt(v["relayout"], RELAYOUT_KIND),
                "table": load_prompt(v["table"], TABLE_KIND),
-               "correction": load_prompt(v.get("correction"), CORRECTION_KIND)} for v in variants]
+               "correction": load_prompt(v.get("correction"), CORRECTION_KIND),
+               "polish": load_prompt(v.get("polish"), POLISH_KIND)} for v in variants]
     kinds = {p.text: kind for prompts in loaded for kind, p in prompts.items()}
     rec = Recorder(llm, kinds)
     meta = {"about": case.get("about"), "model": f"{llm.name}/{llm.model}", "runs": runs,
@@ -264,7 +276,7 @@ def run_case(case: dict, llm, runs: int, variants: list[dict], out_dir: Path, ti
 
 def _run_task(task, rec, prompts, variant, n, timeout_s, writer, runs_out):
     kw = {"prompt": prompts["placement"], "relayout_prompt": prompts["relayout"], "table_prompt": prompts["table"],
-          "correction_prompt": prompts["correction"]}
+          "correction_prompt": prompts["correction"], "polish_prompt": prompts["polish"]}
     first = _one(task["name"], task["body"], task, rec, kw, variant, n, timeout_s, writer, runs_out)
     then = task.get("then")
     if then and first["status"] == "SUCCEEDED":
@@ -277,15 +289,43 @@ def relayout_body(body: dict, then: dict, first: dict) -> dict:
                 previousLines=previous_lines_from(first) + list(then.get("addLines", ())))
 
 
+class _DraftTag(logging.Handler):
+    """초안 완료 로그의 다듬기 개수(polish_sent·polish_done·polish_failed)를 읽는다. 글은 로그에 없다."""
+
+    def __init__(self):
+        super().__init__()
+        self.polish = None
+
+    def emit(self, record):
+        msg = record.getMessage()
+        if "초안 완료" not in msg:
+            return
+        got = dict(re.findall(r"(polish_sent|polish_done|polish_failed|polish_error)=(\S+)", msg))
+        if "polish_sent" in got:
+            failed = dict(kv.split(":") for kv in got.get("polish_failed", "").split(",") if ":" in kv)
+            self.polish = {"sent": int(got["polish_sent"]), "done": int(got["polish_done"]),
+                           "failed": {k: int(v) for k, v in failed.items()}, "error": got.get("polish_error")}
+
+
 def _one(name, body, spec, rec, kw, variant, n, timeout_s, writer, runs_out):
     start = len(rec.calls)
     t0 = time.monotonic()
-    result = make_draft(body, rec, timeout_s=timeout_s, **kw)
+    tag = _DraftTag()
+    draft_log = logging.getLogger("minutes.draft")
+    draft_log.addHandler(tag)
+    level = draft_log.level
+    draft_log.setLevel(logging.INFO)
+    try:
+        result = make_draft(body, rec, timeout_s=timeout_s, **kw)
+    finally:
+        draft_log.removeHandler(tag)
+        draft_log.setLevel(level)
     calls = rec.calls[start:]
     for c in calls:
         writer.writerow({"variant": variant, "task": name, "run": n, **c})
     sc = score(result, spec["expect"], spec.get("tables", ()), spec.get("grouping"), chosen_grouping(body, calls),
                spec.get("fixes"))
+    sc["polish"] = tag.polish
     runs_out.write(json.dumps({"variant": variant, "task": name, "run": n, "ms": _ms(t0), "calls": calls,
                                "score": sc, "result": result}, ensure_ascii=False) + "\n")
     return result
@@ -310,9 +350,9 @@ def summarize(out_dir: Path) -> str:
     groups = {}
     for r in rows:
         groups.setdefault((r["task"], r["variant"]), []).append(r)
-    out = ["| 작업 | 지시문 | 맞음 | 틀린 항목 합 | 큰 실수 | 실패 | 묶기 맞음 (필드) | 교정 맞음 (판) | 호출 |"
+    out = ["| 작업 | 지시문 | 맞음 | 틀린 항목 합 | 큰 실수 | 실패 | 묶기 맞음 (필드) | 교정 맞음 (판) | 다듬기 통과 (줄) | 호출 |"
            " 시간 중앙/최대(초) | 토큰 입력/출력 (판당 평균) |",
-           "|---|---|---|---|---|---|---|---|---|---|---|"]
+           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     misses = []
     for (task, variant), rs in groups.items():
         ok = sum(r["score"]["ok"] for r in rs)
@@ -323,11 +363,13 @@ def summarize(out_dir: Path) -> str:
         grouping = f"{sum(g['ok'] for g in grouped)}/{len(grouped)}" if grouped else "-"
         fixed = [r["score"]["fixes"] for r in rs if r["score"].get("fixes")]
         fixes = f"{sum(x['ok'] for x in fixed)}/{len(fixed)}" if fixed else "-"
+        pol = [r["score"].get("polish") for r in rs if r["score"].get("polish")]
+        polished = f"{sum(x['done'] for x in pol)}/{sum(x['sent'] for x in pol)}" if pol else "-"
         calls = [c for r in rs for c in r["calls"]]
         secs = [r["ms"] / 1000 for r in rs]
         tin = sum(c.get("input_tokens") or 0 for c in calls) / len(rs)
         tout = sum(c.get("output_tokens") or 0 for c in calls) / len(rs)
-        out.append(f"| {task} | {variant} | {ok}/{len(rs)} | {wrong} | {serious} | {failed} | {grouping} | {fixes} | {len(calls)} |"
+        out.append(f"| {task} | {variant} | {ok}/{len(rs)} | {wrong} | {serious} | {failed} | {grouping} | {fixes} | {polished} | {len(calls)} |"
                    f" {statistics.median(secs):.1f} / {max(secs):.1f} | {tin:.0f} / {tout:.0f} |")
         counts = {}
         for r in rs:
@@ -344,6 +386,10 @@ def summarize(out_dir: Path) -> str:
                 counts[(f"교정 {w}", "안 바뀜")] = counts.get((f"교정 {w}", "안 바뀜"), 0) + 1
             for w in (x or {}).get("extra", ()):
                 counts[(f"교정 {w}", "바뀌면 안 되는데 바뀜")] = counts.get((f"교정 {w}", "바뀌면 안 되는데 바뀜"), 0) + 1
+            for kind, k in ((r["score"].get("polish") or {}).get("failed") or {}).items():
+                counts[("다듬기 검사", kind)] = counts.get(("다듬기 검사", kind), 0) + k
+            if (r["score"].get("polish") or {}).get("error"):
+                counts[("다듬기", r["score"]["polish"]["error"])] = counts.get(("다듬기", r["score"]["polish"]["error"]), 0) + 1
             if x and x["touched"]:
                 counts[("교정", "사람이 고친 줄에 붙음")] = counts.get(("교정", "사람이 고친 줄에 붙음"), 0) + 1
             for t in r["score"]["tables"]:
@@ -418,6 +464,7 @@ def main(argv=None):
     p.add_argument("--relayout-prompt", nargs="+", default=[None])
     p.add_argument("--table-prompt", nargs="+", default=[None])
     p.add_argument("--correction-prompt", nargs="+", default=[None])
+    p.add_argument("--polish-prompt", nargs="+", default=[None])
     p.add_argument("--timeout", type=float, default=TIMEOUT_S)
     p.add_argument("--dry-run", action="store_true", help="AI 없이 정답표와 재료가 맞물리는지만 본다")
     p.add_argument("--summary", type=Path, metavar="결과폴더", help="저장된 결과로 요약만 다시 낸다")
@@ -435,8 +482,10 @@ def main(argv=None):
     variants = [{k: _resolved(v, kind) for k, v, kind in (("placement", x["placement"], "placement"),
                                                           ("relayout", x["relayout"], RELAYOUT_KIND),
                                                           ("table", x["table"], TABLE_KIND),
-                                                          ("correction", x["correction"], CORRECTION_KIND))}
-                for x in variants_of(args.prompt, args.relayout_prompt, args.table_prompt, args.correction_prompt)]
+                                                          ("correction", x["correction"], CORRECTION_KIND),
+                                                          ("polish", x["polish"], POLISH_KIND))}
+                for x in variants_of(args.prompt, args.relayout_prompt, args.table_prompt, args.correction_prompt,
+                                     args.polish_prompt)]
     out_dir = OUT_ROOT / f"{args.case.stem}-{datetime.now():%Y%m%d-%H%M%S}"
     print(f"사례: {args.case.name} / AI: {llm.name} ({llm.model}) / {args.runs}판 / " + ", ".join(map(label, variants)),
           flush=True)

@@ -12,6 +12,7 @@
 | 양식 필드 (명세 v0.7: 필드마다 글/표·AI 채움 설정, 머리글·바닥글. v0.8: 필드 설명) | 구현 (SCRUM-113, 123). AI 에는 AI 가 채우는 필드만 칸으로 넘기고, 설명이 있으면 칸 이름 뒤에 붙인다. v0.6 요청(`template.items`)은 결과도 v0.6 모양 |
 | AI 가 채우는 표 필드 (명세 7.6) | 구현 (SCRUM-114, `table.py`). 배치 뒤 재료가 놓인 표 필드마다 AI 를 한 번 더 불러 열 이름과 칸 값을 정한다. 칸 값은 재료 조각에서만 뽑는다 (코드 검사). 표 하나라도 실패하면 초안 전체가 실패 |
 | STT 오인식 교정 (명세 7.7) | 구현 (SCRUM-150, `correction.py`). 처음 초안에서 칸을 고르기 전에 AI 를 한 번 더 불러 "잘못 적힌 말 → 맞는 표기" 쌍만 받는다. 맞는 표기는 요청 안(요약 글의 「」 밖, 안건 제목, 결정할 사항)의 것을 먼저 쓰고, 없으면 앞뒤 글로 분명할 때만 짐작한다 (SCRUM-151). 소리가 비슷한 쌍만 코드가 `테라폼(STT: 테로폰)`, `버그 수정(STT: 어그 수정)` 모양으로 반영한다. 원래 글이 남아 사용자가 판단한다. 실패하면 교정 없이 간다. 다시 배치에서는 하지 않는다 |
+| 문장 다듬기 (명세 7.8) | 구현 (SCRUM-218, `polish.py`). 배치·표 채우기 뒤 글 필드의 줄을 개조식 "~함/~음"·아라비아 숫자·대괄호 표시(`[맞는 표기]`, `[불확실한 말?]`)로 다시 쓴다. 코드가 숫자·표시·영어 낱말·길이를 검사해 걸린 줄은 원문(읽은 값만 바꾼 글). 실패하면 원문. 사람이 고친 항목·표·다시 배치는 다듬지 않는다 |
 | 양식 변경 시 다시 배치 (`previousLines`) | 구현 (SCRUM-98, `relayout.py`). 고친 줄·새로 쓴 줄은 글 그대로 칸만 다시 고름. 처음 초안과 지시문을 따로 씀 (`prompts/relayout/`) |
 | 근거·맥락 연결 (AI-11) | ai-service API 없음. 결과의 `sources`·`transcriptSeqs` 를 백엔드가 따라간다 |
 
@@ -60,8 +61,9 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 | `MINUTES_LLM_TIMEOUT_S` | AI 응답 시간 제한(초) | 60 |
 | `MINUTES_LLM_FALLBACK_PROVIDER`, `MINUTES_LLM_FALLBACK_MODEL` | 폴백 모델. 기본 모델 호출이 실패하면(호출 오류 전부: 연결 실패, 시간 초과, 빈 응답, 429·5xx, 404·401 같은 설정 오류도. 실패마다 경고 로그가 남는다) 같은 입력으로 한 번 더 부른다. **공급자와 모델은 함께 넣는다.** 넣지 않으면 폴백 없이 쓴다 (RAG 폴백 설정은 따르지 않는다. 시작 로그에 `(폴백 없음)`). 폴백이 기본 모델과 같으면 폴백 없이 쓴다. 틀리면 초안 주소만 503. 서버와 따로 띄운 작업자에서만 쓰고 평가·손 시험 도구는 폴백하지 않는다. 형식 검사 실패에는 폴백하지 않는다. 폴백이 답하면 로그에 `fallback_calls=N` | 없음 (폴백 없음) |
 | `MINUTES_LLM_FALLBACK_COOLDOWN_S` | 기본 모델이 실패한 뒤 기본 모델을 건너뛰고 폴백만 부르는 시간(초) | 60 |
-| `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION`, `MINUTES_TABLE_PROMPT_VERSION`, `MINUTES_CORRECTION_PROMPT_VERSION` | 처음 초안·다시 배치·표 채우기·오인식 교정 지시문 버전 (예: `v10`, `v4`, `v1`, `v1`). v7·v1 은 결정 문장을 다듬던 때의 글이라 지금 코드와 맞지 않는다 (답의 글은 버린다) | 가장 큰 번호 |
+| `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION`, `MINUTES_TABLE_PROMPT_VERSION`, `MINUTES_CORRECTION_PROMPT_VERSION`, `MINUTES_POLISH_PROMPT_VERSION` | 처음 초안·다시 배치·표 채우기·오인식 교정·문장 다듬기 지시문 버전 (예: `v10`, `v4`, `v1`, `v1`, `v1`). v7·v1 은 결정 문장을 다듬던 때의 글이라 지금 코드와 맞지 않는다 (답의 글은 버린다) | 가장 큰 번호 |
 | `MINUTES_CORRECTION` | `0` 이면 STT 오인식 교정(명세 7.7)을 하지 않는다. 초안마다 AI 호출이 1번 준다 (실제 회의에서 교정 호출이 20~30초 걸렸다, 2026-11-04 측정). 요약 단계가 오인식을 충분히 잡게 되면 끈다. `0`·`1` 말고 다른 값이면 서버는 뜨고 시작 로그에 `회의록 초안 설정 오류` 가 남고 초안 주소만 503 | `1` (켬) |
+| `MINUTES_POLISH` | `0` 이면 AI 문장 다듬기(명세 7.8)를 하지 않는다. 읽은 값이 붙은 수 인용을 바꾸는 코드 정리만 한다. 초안마다 AI 호출이 1번 준다 (실제 회의 33줄에서 다듬기 호출이 22~28초 걸렸다, 2026-11-11 측정). `0`·`1` 말고 다른 값이면 서버는 뜨고 시작 로그에 `회의록 초안 설정 오류` 가 남고 초안 주소만 503 | `1` (켬) |
 | `MINUTES_WORKER_IN_PROCESS` | `0` 이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker` 로 따로) | `1` |
 | `MINUTES_DB_POOL_MAX`, `MINUTES_DB_POOL_TIMEOUT_S` | 접수 주소의 DB 연결 수, 연결을 기다리는 초 | 3, 5 |
 | `MINUTES_DB_STATEMENT_TIMEOUT_MS`, `MINUTES_DB_IDLE_TX_TIMEOUT_MS`, `MINUTES_DB_CONNECT_TIMEOUT_S` | DB 시간 제한 | 30000, 60000, 10 |

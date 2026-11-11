@@ -142,7 +142,7 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
 
 def _correction_tag(prompt: Prompt, c: Correction) -> str:
     """교정 단계의 개수·토큰. 실패면 오류 코드를 붙인다 (초안은 교정 없이 계속 만든다)."""
-    tag = (f" correction_prompt={prompt.version} correction_attempts={c.attempts} fixes={c.fixes} applied={c.applied} guessed={c.guessed}"
+    tag = (f" correction_prompt={prompt.version} correction_attempts={c.attempts} fixes={c.fixes} applied={c.applied} guessed={c.guessed} respelled={c.respelled}"
            f" corrected={c.changed} correction_in_tokens={c.input_tokens} correction_out_tokens={c.output_tokens}")
     if c.fallback_calls:
         tag += f" correction_fallback_calls={c.fallback_calls}"

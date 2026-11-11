@@ -10,8 +10,11 @@
                             요청 안에 있는지(has_source)는 세기만 한다 (로그의 guessed = 요청 안에 없던 쌍 수).
                             요청 안이란 요약 글의 「」 밖(재료에서 빠진 의견 포함), 안건 제목, 결정할 사항 문구다.
                             「」 안은 요약 쪽이 STT 를 확신하지 못해 원문 그대로 옮긴 글이라 세지 않는다
-                    영어    right 에 영어가 있으면 소리는 reading 으로 비교하고, reading 이 wrong 과 같으면 오인식이 아니라
-                            표기만 바꾸는 것이라 버린다 (에이더블유에스 → AWS). 요청 안에 있는지는 사용자가 쓴 안건 글에서만 센다
+                    영어    right 에 영어가 있으면 소리는 reading 으로 비교한다. 요청 안에 있는지는 사용자가 쓴 안건 글에서만 센다
+                    표기    reading 이 wrong 과 같으면 오인식이 아니라 표기만 맞추는 쌍이다 (에이더블유에스 → AWS, respelling).
+                            right 가 사용자가 쓴 안건 글에 낱말로 있을 때만 받고 소리 검사는 하지 않는다 (SCRUM-218).
+                            실제 회의에서 잘못 들은 곳은 [Terraform], 맞게 들은 곳은 [테라폼?]·에이더블유에스 로 갈려
+                            맞게 들은 쪽이 오히려 불확실해 보였다. 안건에 없는 영어로는 바꾸지 않는다 (피피티 → PPT 막힘)
                     글자    wrong·reading 은 한글(띄어쓰기 포함)만, right 는 한글·영어·띄어쓰기만. 두 글자 이상, 서로 다르고
                             한쪽이 다른 쪽을 품지 않는다, 숫자·수 낱말이 없다
                     소리    자모로 풀어 비교한 비슷함이 글자 수가 같으면 MIN_SIMILARITY, 다르면(MAX_LENGTH_GAP 자까지)
@@ -65,6 +68,7 @@ class Correction:
     fixes: int = 0                      # 답에서 읽은 쌍 수
     applied: int = 0                    # 검사를 통과한 쌍 수
     guessed: int = 0                    # 그중 맞는 표기가 요청 안에 없던 쌍 수 (앞뒤 글로 짐작한 것)
+    respelled: int = 0                  # 그중 표기만 맞춘 쌍 수 (에이더블유에스 → AWS, 안건 글의 영어 표기로)
     changed: int = 0                    # 글이 바뀐 재료 수
     error_code: str | None = None       # 교정 없이 간 이유 (LLM_TIMEOUT · LLM_FAILED · CHECK_FAILED)
     attempts: int = 0
@@ -103,11 +107,13 @@ def _correct(materials, agendas, summary, llm, timeout_s, prompt, call_retries) 
     if outcome.placement is None:
         return Correction(materials, error_code=outcome.error_code, **usage)
     pairs = outcome.placement
-    passed = [p for p in pairs if check_fix(*p, targets)]
+    passed = [p for p in pairs if check_fix(*p, targets, written)]
     guessed = sum(not has_source(right, sources, written) for _, right, _ in passed)
+    respelled = sum(wrong == reading for wrong, _, reading in passed)
     fixed = apply(materials, [p[:2] for p in passed])
     changed = sum(a is not b for a, b in zip(materials, fixed))
-    return Correction(fixed, fixes=len(pairs), applied=len(passed), guessed=guessed, changed=changed, **usage)
+    return Correction(fixed, fixes=len(pairs), applied=len(passed), guessed=guessed, respelled=respelled, changed=changed,
+                      **usage)
 
 
 def build_user(materials: list[Material], agendas: list[dict], summary: dict) -> str:
@@ -171,11 +177,14 @@ def agenda_text(agendas: list[dict]) -> str:
     return "\n".join(texts)
 
 
-def check_fix(wrong: str, right: str, reading: str | None, targets: list[Material]) -> bool:
-    """출처는 보지 않는다 (has_source 로 세기만 한다). 소리·글자·숫자 검사만 한다."""
+def check_fix(wrong: str, right: str, reading: str | None, targets: list[Material], written: str = "") -> bool:
+    """출처는 보지 않는다 (has_source 로 세기만 한다). 소리·글자·숫자 검사만 한다.
+    표기만 맞추는 쌍(respelling)은 예외로 영어 표기가 사용자가 쓴 안건 글(written)에 있어야 받는다."""
     if _LATIN.search(right):
-        if not (reading and _HANGUL.fullmatch(reading) and _WRITTEN.fullmatch(right)) or reading == wrong:
+        if not (reading and _HANGUL.fullmatch(reading) and _WRITTEN.fullmatch(right)):
             return False
+        if reading == wrong:
+            return respelling(wrong, right, reading, targets, written)
         heard = reading
     else:
         if not _HANGUL.fullmatch(right):
@@ -191,6 +200,19 @@ def check_fix(wrong: str, right: str, reading: str | None, targets: list[Materia
     if gap > MAX_LENGTH_GAP:
         return False
     return similarity(wrong, heard) >= (MIN_SIMILARITY if gap == 0 else MIN_SIMILARITY_GAP)
+
+
+def respelling(wrong: str, right: str, reading: str | None, targets: list[Material], written: str) -> bool:
+    """한글 소리가 영어를 맞게 읽은 것인데 그 영어 표기가 안건 글에 있는 쌍 (에이더블유에스 → AWS).
+    실제 회의에서 잘못 들은 곳은 [Terraform] 으로, 맞게 들은 곳은 [테라폼?] 으로 갈려 맞게 들은 쪽이 불확실해 보였다.
+    안건 글에 낱말로 있어야 한다 (AI 가 아무 한글 소리나 영어로 바꾸지 않게. 피피티 → PPT 는 안건에 없으면 막힌다)."""
+    if not (reading == wrong and _LATIN.search(right) and _WRITTEN.fullmatch(right)):
+        return False
+    if not re.search(rf"(?<![A-Za-z]){re.escape(right)}(?![A-Za-z])", written):
+        return False
+    if not _HANGUL.fullmatch(wrong) or not any(wrong in m.text for m in targets):
+        return False
+    return _syllables(wrong) >= 2 and not _has_number(wrong)
 
 
 def has_source(right: str, sources: str, written: str) -> bool:

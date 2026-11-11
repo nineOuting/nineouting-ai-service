@@ -199,15 +199,16 @@ def test_교정_채점은_바뀐_쌍과_바뀌면_안_되는_교정을_센다(st
                        {"wrong": "그라파냐", "right": "그라파나"}, {"wrong": "얼러트 매니져", "right": "얼러트 매니저"},
                        {"wrong": "깃헙 액선", "right": "깃허브 액션"},
                        {"wrong": "알고 시디", "right": "ArgoCD", "reading": "아르고 시디"},
-                       {"wrong": "머지 리퀘스드", "right": "머지 리퀘스트"}]}
+                       {"wrong": "머지 리퀘스드", "right": "머지 리퀘스트"},
+                       {"wrong": "에이더블유에스", "right": "AWS", "reading": "에이더블유에스"}]}   # 표기 맞춤 (안건에 AWS)
     result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[right]))
     s = score(result, stt["expect"], fixes=stt["fixes"])
-    assert s["ok"] and s["fixes"] == {"want": 7, "hit": 7, "missed": [], "extra": [], "touched": 0, "ok": True}
+    assert s["ok"] and s["fixes"] == {"want": 8, "hit": 8, "missed": [], "extra": [], "touched": 0, "ok": True}
 
     partial = {"fixes": [{"wrong": "쿠버내티스", "right": "쿠버네티스"}, {"wrong": "회의실", "right": "회의록"}]}
     result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[partial]))
     x = score(result, stt["expect"], fixes=stt["fixes"])["fixes"]
-    assert (x["hit"], x["missed"], x["extra"], x["ok"]) == (1, ["프로메테오스", "그라파냐", "얼러트 매니져", "깃헙 액선", "알고 시디", "머지 리퀘스드"], ["회의록"], False)
+    assert (x["hit"], x["missed"], x["extra"], x["ok"]) == (1, ["프로메테오스", "그라파냐", "얼러트 매니져", "깃헙 액선", "알고 시디", "머지 리퀘스드", "에이더블유에스"], ["회의록"], False)
     assert x["touched"] == 0                                    # 사람이 고친 의견에는 붙지 않는다
 
 

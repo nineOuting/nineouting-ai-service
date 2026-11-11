@@ -43,7 +43,7 @@ def by_ref(materials):
 
 def ok(body, materials, wrong, right, reading=None, targets=None):
     targets = [m for m in materials if not m.edited] if targets is None else targets
-    return check_fix(wrong, right, reading, targets)
+    return check_fix(wrong, right, reading, targets, agenda_text(body["agendas"]))
 
 
 def sourced(body, right):
@@ -60,6 +60,7 @@ def sourced(body, right):
     ("젠킨수", "젠킨스", None, False),                       # 맞는 표기가 요청에 없음 → 짐작으로 받음
     ("핼름", "헬름", None, False),                           # 「」 안에만 있음 → 짐작으로 받음
     ("젠킨수", "Jenkins", "젠킨스", False),                  # 영어가 요약 글에만 있음 → 짐작으로 받음
+    ("에이더블유에스", "AWS", "에이더블유에스", True),       # 표기만 맞춤, 안건 글에 AWS 가 있음
 ])
 def test_소리가_비슷하면_받고_요청_안에_있는지는_따로_센다(materials, body, wrong, right, reading, source):
     assert ok(body, materials, wrong, right, reading)
@@ -76,11 +77,41 @@ def test_소리가_비슷하면_받고_요청_안에_있는지는_따로_센다(
     ("알고 시디", "ArgoCD", None, "영어인데 읽는 소리가 없음"),
     ("알고 시디", "ArgoCD", "ArgoCD", "읽는 소리가 한글이 아님"),
     ("알고 시디", "ArgoCD", "예산", "읽는 소리가 비슷하지 않음"),
-    ("에이더블유에스", "AWS", "에이더블유에스", "맞게 읽은 소리를 영어로 바꾸는 것뿐 (오인식 아님)"),
     ("알고 시디", "ArgoCD 2", "아르고 시디 이", "숫자"),
 ])
 def test_검사에_걸리는_쌍은_버린다(materials, body, wrong, right, reading, why):
     assert not ok(body, materials, wrong, right, reading), why
+
+
+def _material(text):
+    from minutes.models import Material
+    return Material(ref="m1", agenda_id=1, agenda_title="t", kind="summary", item_id="s", label="요약",
+                    text=text, evidence_seqs=(), edited=False, needs_check=False, order=(0, 1, 0))
+
+
+WRITTEN = "클라우드 역할\nAWS·Terraform 쪽을 누가 맡을지"
+
+
+@pytest.mark.parametrize("wrong, right, reading, text, accepted", [
+    ("에이더블유에스", "AWS", "에이더블유에스", "「에이더블유에스」를 맡아 해보기", True),     # 안건 글의 영어 표기로 맞춘다
+    ("테라폼", "Terraform", "테라폼", "「테라폼」은 프로젝트 시간에 공부함", True),
+    ("피피티", "PPT", "피피티", "피피티 1~2장 준비", False),                             # 안건 글에 없음
+    ("에이더블유", "AW", "에이더블유", "에이더블유 계정", False),                         # 안건 글에 낱말로 없음 (AWS 의 일부)
+    ("에이더블유에스", "AWS", "에이더블유에스", "다른 글", False),                        # 재료에 없음
+    ("에이", "A", "에이", "에이 안", False),                                             # 한 글자
+])
+def test_표기만_맞추는_쌍은_안건_글에_있는_영어로만_받는다(wrong, right, reading, text, accepted):
+    assert check_fix(wrong, right, reading, [_material(text)], WRITTEN) is accepted
+
+
+def test_표기만_맞춘_쌍은_따로_세고_다른_교정과_같은_모양으로_바꾼다(materials, body):
+    body["agendas"][0]["title"] += " (AWS)"
+    target = materials[0]
+    materials = [target.__class__(**{**target.__dict__, "text": target.text + " 「에이더블유에스」 계정"}), *materials[1:]]
+    reply = {"fixes": [{"wrong": "에이더블유에스", "right": "AWS", "reading": "에이더블유에스"}]}
+    c = correct(materials, body["agendas"], body["summary"], ScriptLLM(corrections=[reply]), 60.0)
+    assert (c.applied, c.respelled, c.guessed) == (1, 1, 0)
+    assert "「[AWS]」 계정" in c.materials[0].text
 
 
 def test_사람이_고친_재료에만_있는_말은_바꾸지_않는다(materials, body):
@@ -238,7 +269,7 @@ def test_다시_배치에서는_교정하지_않는다(body, materials):
 def test_로그에는_교정_개수만_남는다(body, materials, caplog):
     caplog.set_level(logging.INFO, logger="minutes.draft")
     make_draft(body, ScriptLLM(answer(materials), corrections=[RIGHT]))
-    assert "fixes=3 applied=3 guessed=0 corrected=4" in caplog.text and "correction_prompt=correction-v2" in caplog.text
+    assert "fixes=3 applied=3 guessed=0 respelled=0 corrected=4" in caplog.text and "correction_prompt=correction-v3" in caplog.text
     assert "쿠버" not in caplog.text and "STT" not in caplog.text
 
 

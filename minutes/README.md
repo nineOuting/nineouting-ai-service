@@ -63,7 +63,7 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 | `MINUTES_LLM_FALLBACK_COOLDOWN_S` | 기본 모델이 실패한 뒤 기본 모델을 건너뛰고 폴백만 부르는 시간(초) | 60 |
 | `MINUTES_PROMPT_VERSION`, `MINUTES_RELAYOUT_PROMPT_VERSION`, `MINUTES_TABLE_PROMPT_VERSION`, `MINUTES_CORRECTION_PROMPT_VERSION`, `MINUTES_POLISH_PROMPT_VERSION` | 처음 초안·다시 배치·표 채우기·오인식 교정·문장 다듬기 지시문 버전 (예: `v10`, `v4`, `v1`, `v1`, `v1`). v7·v1 은 결정 문장을 다듬던 때의 글이라 지금 코드와 맞지 않는다 (답의 글은 버린다) | 가장 큰 번호 |
 | `MINUTES_CORRECTION` | `0` 이면 STT 오인식 교정(명세 7.7)을 하지 않는다. 초안마다 AI 호출이 1번 준다 (실제 회의에서 교정 호출이 20~30초 걸렸다, 2026-11-04 측정). 요약 단계가 오인식을 충분히 잡게 되면 끈다. `0`·`1` 말고 다른 값이면 서버는 뜨고 시작 로그에 `회의록 초안 설정 오류` 가 남고 초안 주소만 503 | `1` (켬) |
-| `MINUTES_POLISH` | `0` 이면 AI 문장 다듬기(명세 7.8)를 하지 않는다. 읽은 값이 붙은 수 인용을 바꾸는 코드 정리만 한다. 초안마다 AI 호출이 1번 준다 (실제 회의 33줄에서 다듬기 호출이 36~43초 걸렸다, 2026-11-11 측정). `0`·`1` 말고 다른 값이면 서버는 뜨고 시작 로그에 `회의록 초안 설정 오류` 가 남고 초안 주소만 503 | `1` (켬) |
+| `MINUTES_POLISH` | `0` 이면 AI 문장 다듬기(명세 7.8)를 하지 않는다. 읽은 값이 붙은 수 인용을 바꾸는 코드 정리만 한다. 초안마다 AI 호출이 1~2번 준다 (검사에 걸린 줄을 한 번 더 묻는다. 실제 회의 33줄에서 초안이 82~105초에서 31~44초로 준다, 2026-11-11 측정). `0`·`1` 말고 다른 값이면 서버는 뜨고 시작 로그에 `회의록 초안 설정 오류` 가 남고 초안 주소만 503 | `1` (켬) |
 | `MINUTES_WORKER_IN_PROCESS` | `0` 이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker` 로 따로) | `1` |
 | `MINUTES_DB_POOL_MAX`, `MINUTES_DB_POOL_TIMEOUT_S` | 접수 주소의 DB 연결 수, 연결을 기다리는 초 | 3, 5 |
 | `MINUTES_DB_STATEMENT_TIMEOUT_MS`, `MINUTES_DB_IDLE_TX_TIMEOUT_MS`, `MINUTES_DB_CONNECT_TIMEOUT_S` | DB 시간 제한 | 30000, 60000, 10 |

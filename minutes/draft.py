@@ -155,6 +155,8 @@ def _polish_tag(prompt: Prompt, p: Polish, enabled: bool) -> str:
         return " polish=off"
     tag = (f" polish_prompt={prompt.version} polish_attempts={p.attempts} polish_sent={p.sent} polish_done={p.polished}"
            f" polish_in_tokens={p.input_tokens} polish_out_tokens={p.output_tokens}")
+    if p.retried:
+        tag += f" polish_retried={p.retried}"
     if p.failed:
         tag += " polish_failed=" + ",".join(f"{k}:{v}" for k, v in sorted(p.failed.items()))
     if p.fallback_calls:

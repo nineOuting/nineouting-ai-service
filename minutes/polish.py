@@ -9,7 +9,8 @@
                                「[테라폼]」처럼 교정 표시만 든 인용은 [테라폼]. ② 가 실패한 줄은 이 글을 쓴다
   ② 다듬기 (AI)               ① 의 글을 줄마다 다시 쓴다. 할 일은 할 일 글만, 결정 확인 필요는 결정 후보 글만 보내고
                                나머지(담당자·기한, 사항 문구)는 코드가 다시 붙인다
-  ③ 검사 (check_line, 코드)   걸리면 그 줄만 ① 의 글
+  ③ 검사 (check_line, 코드)   걸린 줄만 이유(<고칠 점>)를 붙여 한 번 더 보내고, 또 걸리면 그 줄만 ① 의 글
+                               (실제 회의 초안에서 33줄 중 4줄이 걸려 「」·"말이 나옴" 이 남은 줄이 섞였다)
                                숫자   다듬은 글의 숫자는 ① 글의 숫자이거나 ① 글의 한글 수 낱말로 읽을 수 있는 값이다.
                                       ① 글의 아라비아 숫자는 모두 남는다 (만·억 단위로 바꿔 쓴 것도 같은 값으로 본다).
                                       다듬은 글의 불확실 표시 [X?] 안에 한글 수로 남은 값은 남은 것으로 본다
@@ -18,7 +19,9 @@
                                       (수 낱말을 숫자로 바꾼 것은 같은 글로 본다: 「팔 한 여섯 개」(6개로 읽힘) → [팔 6개?]).
                                       실제 회의에서 읽은 값이 있는 수를 표시 안에서도 숫자로 바꿨고, 읽기에는 그쪽이 낫다
                                       「」, "(…로 읽힘)", "(STT" 는 남지 않는다 (표시를 대괄호 하나로 맞춘다).
-                                      "불확실" 도 원문의 "STT 불확실" 설명 수만큼 줄어야 한다 (설명 글을 남기지 않는다)
+                                      "[요구사항 문서]는 STT 불확실함" 처럼 설명 안에 든 교정 표시는 설명과 같이 지워도 된다.
+                                      "[X?]로 불확실함" 처럼 남은 설명 말은 거르지 않는다 (실제 회의에서 이것 때문에 원문으로
+                                      돌아간 줄이 다듬은 글보다 못했다. 지시문 규칙 10 에만 둔다)
                                영어   원문에 없던 영어 낱말이 생기면 걸린다. 실제 회의에서 AI 가 「에이더블유에스」 → AWS,
                                       아이에이 → AI(IA 였음) 처럼 표시 없이 낱말을 바꿨다 (바로잡기는 교정 단계의 일이고 표시가 붙어야 한다)
                                인용   「」 를 지우고 [X?] 로 묶지 않은 채 글을 그대로 두면 걸린다 (수·날짜 인용은 숫자로 바꿔 쓰므로 뺀다).
@@ -45,6 +48,7 @@ POLISH_KIND = "polish"
 POLISH_ERROR = "POLISH_ERROR"
 SWITCH_KEY = "MINUTES_POLISH"
 MIN_RATIO = 0.5
+RETRIES = 1                                     # 검사에 걸린 줄을 다시 보내는 횟수 (실제 회의 33줄 중 4줄이 걸려 문체가 섞였음)
 log = logging.getLogger("minutes.polish")
 
 _READ = re.compile(r"「([^「」]*)」\s*\(([^()]*?)\s*(?:으)?로 읽힘\)")
@@ -55,7 +59,8 @@ _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?:억|만|천)?")
 _LEFTOVER = ("「", "」", "읽힘)", "(STT")
 _LATIN = re.compile(r"[A-Za-z]+")
 _HANGUL = re.compile(r"[가-힣]+")
-_STT_NOTE = re.compile(r"STT\s*불확실")
+_NESTED = re.compile(r"\[[^\]]*\[")
+_NOTED_MARK = re.compile(r"\[([^\[\]]+)\]\s*(?:은|는|이|가)?\s*STT\s*불확실")
 _DATE_WORDS = re.compile(r"[월화수목금토일]요일|오늘|내일|어제|모레|이번주|다음주|지난주|주말|오전|오후|아침|저녁|점심|밤")
 # 말끝·조사에 오는 글자. 원문 낱말 뒤에 이 글자만 붙거나 바뀌면 말끝을 바꾼 것으로 본다 (실제 회의 답 165줄로 맞춤)
 _ENDING_CHARS = set("다고는은이가를을에의로와과도만기하함음됨임있었겠지며면서아어요게냐니까데해했한할된될인일던든랑나야여것줄수께부터처럼보씩"
@@ -82,6 +87,7 @@ class Polish:
     polished: int = 0                           # 검사를 통과해 다듬은 글을 쓴 줄 수
     failed: dict[str, int] = field(default_factory=dict)   # 검사별 걸린 줄 수 (missing = 답에 없음)
     error_code: str | None = None               # ② 없이 간 이유 (LLM_TIMEOUT · LLM_FAILED · CHECK_FAILED · POLISH_ERROR)
+    retried: int = 0                            # 첫 답이 검사에 걸려 다시 보낸 줄 수
     attempts: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -186,20 +192,8 @@ def check_line(before: str, after: str, original: str) -> str | None:
         return "shape"
     if any(t in after for t in _LEFTOVER):
         return "leftover"
-    fixed = [b for b in _BRACKET.findall(before)]
-    if any(after.count(f"[{b}]") < before.count(f"[{b}]") for b in set(fixed)):
+    if _mark_issue(before, after, original):
         return "marks"
-    quoted = [_letters(q) for q in _QUOTE.findall(original)]
-    for b in _BRACKET.findall(after):
-        if b in fixed:
-            continue
-        if not b.endswith("?") or not b[:-1].strip():
-            return "marks"
-        inner = _letters(b[:-1])                        # 수만 든 표시([세 개?])는 빈 글: 숫자는 숫자 검사가 본다
-        if not any(inner in q for q in quoted):
-            return "marks"
-    if after.count("불확실") > before.count("불확실") - len(_STT_NOTE.findall(before)):
-        return "leftover"
     if not set(_LATIN.findall(after)) <= set(_LATIN.findall(before)):
         return "latin"
     if _unmarked_quote(before, after):
@@ -213,6 +207,28 @@ def check_line(before: str, after: str, original: str) -> str | None:
         return "numbers"
     if _length(after) < MIN_RATIO * _length(before):
         return "length"
+    return None
+
+
+def _mark_issue(before: str, after: str, original: str) -> str | None:
+    """표시 검사에 걸린 이유 (다시 물을 때 그대로 알려 준다). 통과하면 None."""
+    if _NESTED.search(after):                           # 실제 회의: [… 바고 [Helm 차트화]?], [[요구사항 문서]?]
+        return "대괄호 안에 대괄호를 넣지 말 것. [바로잡은 말] 은 그대로 두고, 그 앞뒤의 불확실한 말만 따로 [원래 말?] 로 묶을 것"
+    fixed = set(_BRACKET.findall(before))
+    # "[요구사항 문서]는 STT 불확실함" 처럼 설명 안의 표시는 설명과 같이 지워도 된다 (규칙 10)
+    noted = _NOTED_MARK.findall(before)
+    for b in sorted(fixed):
+        if after.count(f"[{b}]") < before.count(f"[{b}]") - noted.count(b):
+            return f"[{b}] 는 바로잡은 말이라 글자 그대로 둘 것 (물음표를 붙이거나 지우거나 다른 말로 바꾸지 말 것)"
+    quoted = [_letters(q) for q in _QUOTE.findall(original)]
+    for b in _BRACKET.findall(after):
+        if b in fixed:
+            continue
+        if not b.endswith("?") or not b[:-1].strip():
+            return f"[{b}] 처럼 물음표 없는 대괄호를 새로 만들지 말 것. 「」 안 글은 [원래 말?] 로 쓸 것"
+        inner = _letters(b[:-1])                        # 수만 든 표시([세 개?])는 빈 글: 숫자는 숫자 검사가 본다
+        if not any(inner in q for q in quoted):
+            return f"[{b}] 의 안은 「」 안 글자를 그대로 쓸 것 (「」 밖 말을 묶거나 글자를 바꾸지 말 것)"
     return None
 
 
@@ -237,19 +253,21 @@ def _changed_word(before: str, after: str) -> str | None:
     """원문 낱말 뒤가 말끝이 아닌 글자로 바뀐 낱말. 실제 회의: 일 더블유에스 → 일 더블유스.
     앞 두 글자 이상이 원문에 있고, 원문에 없는 뒤 글자가 말끝·조사 글자가 아니면 표기를 바꾼 것으로 본다.
     뒤 글자를 지운 것은 말끝을 줄인 것과 구별하기 어려워, 바로 뒤 낱말이 그대로일 때만 본다
-    (맡기기 어렵고 → 맡기 어렵고: 남에게 맡기는 것이 내가 맡는 것으로 바뀜. 실제 회의 10판 중 7판)."""
+    (맡기기 어렵고 → 맡기 어렵고: 남에게 맡기는 것이 내가 맡는 것으로 바뀜. 실제 회의 10판 중 7판).
+    돌려주는 값은 "원래 → 바뀐" (다시 물을 때 알려 준다)."""
     source = _flat(before.replace("「", "").replace("」", ""))
     after_words = _words(after)
     for word in after_words:
         stem = next((n for n in range(len(word), 0, -1) if word[:n] in source), 0)
         if 2 <= stem < len(word) and not set(word[stem:]) <= _ENDING_CHARS:
-            return word
+            origin = next((w for w in _words(before.replace("「", " ").replace("」", " ")) if w.startswith(word[:stem])), word[:stem])
+            return f"{origin} → {word}"
     before_words = _words(before.replace("「", " ").replace("」", " "))
     pairs = set(zip(after_words, after_words[1:]))
     for word, nxt in zip(before_words, before_words[1:]):
         for short, same in pairs:
             if same == nxt and short != word and len(short) >= 2 and word.startswith(short):
-                return short
+                return f"{word} {nxt} → {short} {same}"
     return None
 
 
@@ -318,22 +336,68 @@ def polish(materials: list[Material], refs: set[str], llm, timeout_s: float, pro
 
 
 def _polish(materials, chosen, parts, before, llm, timeout_s, prompt, call_retries) -> Polish:
-    outcome = ask(prompt or load_prompt(kind=POLISH_KIND), lambda _: build_user(chosen, before), read_lines,
-                  llm, timeout_s, max_retries=0, call_retries=call_retries)
+    """첫 답에서 검사에 걸린 줄만 이유를 붙여 한 번 더 보낸다 (RETRIES). 통과한 줄은 그때그때 남겨 두므로,
+    다시 묻다 실패해도(시간 초과 등) 첫 답에서 통과한 줄은 다듬은 글을 쓴다. 두 번째도 걸리면 그 줄만 ① 의 글."""
+    by_ref = {m.ref: m for m in chosen}
+    texts, pending, failed = dict(before), [m.ref for m in chosen], {}
+    state = {"checked": 0, "retried": 0}
+
+    def make_user(problems):
+        lines = [by_ref[ref] for ref in pending]
+        return build_user(lines, before, problems)
+
+    def check(data):
+        answers, _ = read_lines(data)
+        if answers is None:                              # 답 전체를 읽을 수 없음: 걸린 줄은 그대로 남는다
+            return None, ['답이 {"lines": [...]} 모양의 JSON이 아님']
+        state["checked"] += 1
+        failed.clear()
+        problems = []
+        for ref in list(pending):
+            m = by_ref[ref]
+            after = _unlabel(answers.get(ref), m)
+            problem = "missing" if after is None else check_line(before[ref], after, parts[ref][1])
+            if problem:
+                failed[problem] = failed.get(problem, 0) + 1
+                problems.append(f"{ref}: {_hint(problem, before[ref], after, parts[ref][1])}")
+            else:
+                texts[ref] = after.strip()
+                pending.remove(ref)
+        if pending and state["checked"] <= RETRIES:
+            state["retried"] += len(pending)
+        return (True, []) if not pending else (None, problems)
+
+    outcome = ask(prompt or load_prompt(kind=POLISH_KIND), make_user, check,
+                  llm, timeout_s, max_retries=RETRIES, call_retries=call_retries)
     usage = dict(attempts=outcome.attempts, input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens,
                  fallback_calls=outcome.fallback_calls)
-    if outcome.placement is None:
-        return Polish(_apply(materials, parts, before), sent=len(chosen), error_code=outcome.error_code, **usage)
-    answers, texts, failed = outcome.placement, dict(before), {}
-    for m in chosen:
-        after = _unlabel(answers.get(m.ref), m)
-        problem = "missing" if after is None else check_line(before[m.ref], after, parts[m.ref][1])
-        if problem:
-            failed[problem] = failed.get(problem, 0) + 1
-        else:
-            texts[m.ref] = after.strip()
-    return Polish(_apply(materials, parts, texts), sent=len(chosen), polished=len(chosen) - sum(failed.values()),
-                  failed=failed, **usage)
+    # 답을 한 번도 검사하지 못했으면(호출 실패, 읽을 수 없는 답) 모든 줄이 ① 의 글이고 오류 코드를 남긴다
+    error = outcome.error_code if not state["checked"] else None
+    if not state["checked"]:
+        failed = {}
+    return Polish(_apply(materials, parts, texts), sent=len(chosen), polished=len(chosen) - len(pending),
+                  failed=dict(failed) if pending else {}, error_code=error, retried=state["retried"], **usage)
+
+
+_HINTS = {
+    "shape": "빈 글이나 줄바꿈 없이 한 줄로 쓸 것",
+    "leftover": "「」, \"(…로 읽힘)\", \"(STT\" 를 남기지 말고, \"불확실함\" 같은 설명도 쓰지 말 것 ([원래 말?] 이 그 뜻을 대신함)",
+    "latin": "글에 없던 영어 낱말을 쓰지 말 것 (한글로 적힌 소리는 그대로 둠)",
+    "numbers": "글에 있는 숫자를 모두 남기고, 없던 숫자를 만들지 말 것",
+    "length": "내용을 빼지 말 것",
+    "missing": "이 줄의 답이 없었음",
+}
+
+
+def _hint(problem: str, before: str, after: str | None, original: str = "") -> str:
+    """다시 물을 때 줄마다 붙이는 이유. 인용·낱말은 걸린 말을 짚어 준다 (AI 에 이미 보낸 글이라 새로 나가는 내용은 없다)."""
+    if problem == "quote":
+        return f"「{_unmarked_quote(before, after)}」 는 「」 를 지우기만 하지 말고 [{_unmarked_quote(before, after)}?] 로 쓸 것"
+    if problem == "words":
+        return f"\"{_changed_word(before, after)}\" 처럼 낱말의 글자를 바꾸거나 빼지 말 것. 바꾸는 것은 말끝, 겉말, 숫자뿐임"
+    if problem == "marks":
+        return _mark_issue(before, after, original)
+    return _HINTS[problem]
 
 
 def _unlabel(text: str | None, m: Material) -> str | None:
@@ -344,11 +408,15 @@ def _unlabel(text: str | None, m: Material) -> str | None:
     return re.sub(rf"^\s*(?:{re.escape(m.ref)}\s*\|\s*)?(?:\[{label}\]\s*|{label}\s*\|\s*)", "", text)
 
 
-def build_user(chosen: list[Material], before: dict[str, str]) -> str:
-    """AI 에게 줄 글. 꺾쇠는 글 안에서 바꿔 칸 밖으로 새지 않게 한다 (배치와 같음)."""
+def build_user(chosen: list[Material], before: dict[str, str], problems: list[str] = ()) -> str:
+    """AI 에게 줄 글. 꺾쇠는 글 안에서 바꿔 칸 밖으로 새지 않게 한다 (배치와 같음).
+    problems 가 있으면 다시 묻는 것이라 <고칠 점> 을 붙인다 (줄은 걸린 줄만 온다)."""
     # 종류를 대괄호로 쓰지 않는다: 답에 "[요약] …" 처럼 따라 써서 교정 표시와 헷갈렸다 (실제 회의 33줄 모두)
     lines = [f"{m.ref} | {KIND_LABELS[m.kind]} | {_quote(_one_line(before[m.ref]))}" for m in chosen]
-    return "\n".join(["<줄>", *lines, "</줄>"])
+    out = ["<줄>", *lines, "</줄>"]
+    if problems:
+        out += ["", "<고칠 점>", *(_quote(_one_line(p)) for p in problems), "</고칠 점>"]
+    return "\n".join(out)
 
 
 def read_lines(data) -> tuple[dict[str, str] | None, list[str]]:

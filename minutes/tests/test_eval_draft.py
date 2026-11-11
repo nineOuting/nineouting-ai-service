@@ -138,11 +138,11 @@ def test_판마다_돌리고_호출과_채점을_남긴다(case, tmp_path):
     out = run_case(case, llm, 2, [{"placement": "v8", "relayout": "v2", "table": "v1"}], tmp_path, progress=lambda s: None)
     runs = [json.loads(line) for line in (out / "runs.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [(r["run"], r["score"]["ok"]) for r in runs] == [(1, False), (2, True)]
-    assert [c["kind"] for c in runs[0]["calls"]] == ["correction", "placement", "polish"]   # 교정 → 배치 → 다듬기
+    assert [c["kind"] for c in runs[0]["calls"]] == ["correction", "placement", "polish", "polish"]   # 교정 → 배치 → 다듬기 (빈 답이라 한 번 더)
     assert runs[0]["calls"][1]["input_tokens"] == 100
-    assert (out / "calls.csv").read_text(encoding="utf-8").count("\n") == 7              # 머리 + 판마다 교정·배치·다듬기
+    assert (out / "calls.csv").read_text(encoding="utf-8").count("\n") == 9              # 머리 + 판마다 교정·배치·다듬기 2번(빈 답이라 한 번 더)
     text = summarize(out)
-    assert "| 배치 | placement-v8 relayout-v2 table-v1 | 1/2 | 1 | 0 | 0 | 4/8 | - | 0/15 | 6 |" in text     # 기준 없음 = 묶지 않음 (결정·미결만 맞음)
+    assert "| 배치 | placement-v8 relayout-v2 table-v1 | 1/2 | 1 | 0 | 0 | 4/8 | - | 0/15 | 8 |" in text     # 기준 없음 = 묶지 않음 (결정·미결만 맞음)
     assert '- 배치 / placement-v8 relayout-v2 table-v1: [103, "opinion", "k3f9a1-20"] → (넣지 않음) (1번)' in text
 
 

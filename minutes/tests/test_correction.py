@@ -101,11 +101,11 @@ def test_교정은_정해_둔_생각하는_양으로_부르고_칸_고르기는_
     import minutes.correction as c
     llm = ScriptLLM(answer(materials), corrections=[RIGHT])
     make_draft(body, llm)
-    assert llm.efforts == [None, None, None]              # 교정·칸 고르기·다듬기. 지금은 모델 기본값
+    assert llm.efforts == [None, None, None, None]        # 교정·칸 고르기·다듬기(빈 답이라 한 번 더). 지금은 모델 기본값
     monkeypatch.setattr(c, "EFFORT", "low")
     llm = ScriptLLM(answer(materials), corrections=[RIGHT])
     make_draft(body, llm)
-    assert llm.efforts == ["low", None, None]
+    assert llm.efforts == ["low", None, None, None]            # 다듬기는 빈 답이라 한 번 더
 
 
 def test_교정_코드에서_예외가_나도_초안은_만든다(body, materials, monkeypatch):

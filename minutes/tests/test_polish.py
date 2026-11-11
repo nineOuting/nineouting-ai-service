@@ -12,7 +12,7 @@ import pytest
 from minutes.draft import SUCCEEDED, make_draft
 from minutes.materials import build_materials
 from minutes.polish import (POLISH_ERROR, check_line, digit_values, enabled_from_env, korean_values, normalize,
-                            polish, read_lines, split)
+                            polish, read_lines, split, _hint)
 from minutes_fakes import GOOD, ScriptLLM, load_request, previous_lines_of
 from shared.llm import LLMError, LLMTimeout
 
@@ -131,10 +131,13 @@ def test_원문에_없던_영어_낱말이_생기면_걸린다(before, after, pr
     ("모임은 금요일로 하자는 말에 「좋은데요」라고 답했습니다", "모임은 금요일로 하자는 말에 좋다고 답함.", None),                                        # 사람 말은 풀어 쓴다
     ("「십 일월 중순에서 말 사이」까지 답하기로 했다", "11월 중순에서 말 사이까지 답하기로 함.", None),  # 수 인용은 숫자로
     ("모임은 「금요일」에 하기로 했다", "모임은 금요일에 하기로 함.", None),                         # 날짜 낱말
-    ("「크로노빔」은 STT 불확실함. 공부하겠다는 말이 나옴", "[크로노빔?]은 의미가 불확실함. 공부하겠다고 함.", "leftover"),
+    ("「크로노빔」은 STT 불확실함. 공부하겠다는 말이 나옴", "[크로노빔?]은 의미가 불확실함. 공부하겠다고 함.", None),  # 남은 설명 말은 거르지 않는다
+    ("기획 분들이 [기능 명세]에서 화면 흐름을 다 만들었다는 말이 나옴; [기능 명세]는 STT 불확실함.",
+     "기획 분들이 [기능 명세]에서 화면 흐름을 다 만들었다고 함.", None),  # 설명 안의 표시는 같이 지워도 된다
+    ("[기능 명세]에서 만들었고 [기능 명세]를 고친다는 말이 나옴", "[기능 명세]에서 만들었다고 함. 고친다고 함.", "marks"),
     ("결과가 불확실하다는 우려가 나옴", "결과가 불확실하다고 우려함.", None),                       # 원래 글의 불확실은 남는다
 ])
-def test_불확실한_인용을_표시_없이_두거나_설명을_남기면_걸린다(before, after, problem):
+def test_불확실한_인용을_표시_없이_두면_걸린다(before, after, problem):
     assert check_line(before, after, before) == problem
 
 
@@ -204,10 +207,32 @@ def test_사람이_고친_재료와_넣지_못한_재료는_보내지_않는다(
 def test_검사에_걸리거나_답에_없는_줄은_정리한_글을_쓴다(materials):
     reply = {"lines": [l if l["m"] != "m1" else {"m": "m1", "text": "1차 배포를 11월 30일로 정함."}
                        for l in GOOD_LINES["lines"] if l["m"] != "m2"]}
-    p = polish(materials, PLACED, ScriptLLM(polishes=[reply]), 10)
+    llm = ScriptLLM(polishes=[reply])                     # 다시 물을 때는 빈 답
+    p = polish(materials, PLACED, llm, 10)
     ms, before = by_ref(p.materials), by_ref(materials)
     assert ms["m1"].text == before["m1"].text and ms["m2"].text == before["m2"].text
-    assert p.failed == {"numbers": 1, "missing": 1} and p.polished == 5
+    assert p.failed == {"missing": 2} and p.polished == 5 and p.retried == 2 and len(llm.polish_calls) == 2
+
+
+def test_걸린_줄만_이유를_붙여_한_번_더_보내고_통과하면_다듬은_글을_쓴다(materials):
+    first = {"lines": [l if l["m"] != "m1" else {"m": "m1", "text": "1차 배포를 11월 30일로 정함."}
+                       for l in GOOD_LINES["lines"]]}
+    again = {"lines": [l for l in GOOD_LINES["lines"] if l["m"] == "m1"]}
+    llm = ScriptLLM(polishes=[first, again])
+    p = polish(materials, PLACED, llm, 10)
+    retry = llm.polish_calls[1][1]
+    assert "m1 | " in retry and "m3 | " not in retry                       # 걸린 줄만 보낸다
+    assert "<고칠 점>" in retry and "m1: 글에 있는 숫자를 모두 남기고" in retry
+    good = next(l["text"] for l in GOOD_LINES["lines"] if l["m"] == "m1")
+    assert by_ref(p.materials)["m1"].text == good
+    assert p.failed == {} and p.polished == 7 and p.retried == 1 and p.attempts == 2
+
+
+def test_다시_묻다_실패해도_첫_답에서_통과한_줄은_다듬은_글을_쓴다(materials):
+    first = {"lines": [l for l in GOOD_LINES["lines"] if l["m"] != "m2"]}
+    llm = ScriptLLM(polishes=[first, LLMTimeout("t"), LLMTimeout("t")])
+    p = polish(materials, PLACED, llm, 10)
+    assert p.polished == 6 and p.error_code is None and p.failed == {"missing": 1}
 
 
 @pytest.mark.parametrize("reply, code", [
@@ -293,3 +318,24 @@ def test_다듬기_설정이_0이나_1이_아니면_설정_오류(raw):
     with pytest.raises(ValueError):
         enabled_from_env({"MINUTES_POLISH": raw})
 
+
+
+# ---- 다시 물을 때 알려 주는 이유
+
+def test_대괄호를_겹치면_표시_검사에_걸린다():
+    before = "「도쿄에서 바꿀 때 [Helm 차트화]」로 일괄적으로 했다는 말이 나옴"
+    assert check_line(before, "[도쿄에서 바꿀 때 [Helm 차트화]?]로 일괄적으로 함.", before) == "marks"
+    assert check_line(before, "[도쿄에서 바꿀 때?] [Helm 차트화]로 일괄적으로 함.", before) is None
+
+
+@pytest.mark.parametrize("before, after, problem, hint", [
+    ("기획 분들이 [요구사항 문서]에서 화면 흐름을 다 만들었다는 말이 나옴",
+     "기획 분들이 [요구사항 문서?]에서 화면 흐름을 다 만들었다고 함.", "marks", "[요구사항 문서] 는 바로잡은 말이라 글자 그대로 둘 것"),
+    ("「크로노빔」을 더 공부하겠다는 말이 나옴", "[크로노빔]을 더 공부하겠다고 함.", "marks", "[크로노빔] 처럼 물음표 없는 대괄호를"),
+    ("위험 부담 때문에 맡기기 어렵고 자리가 적다는 말이 나옴", "위험 부담 때문에 맡기 어렵고 자리가 적다고 함.", "words", "\"맡기기 어렵고 → 맡기 어렵고\""),
+    ("일 더블유에스를 맡아 해보기", "일 더블유스를 맡아 해보기", "words", "\"더블유에스를 → 더블유스를\""),
+    ("「크로노빔」을 더 공부하겠다는 말이 나옴", "크로노빔을 더 공부하겠다고 함.", "quote", "[크로노빔?] 로 쓸 것"),
+])
+def test_다시_물을_때_걸린_말을_짚어_준다(before, after, problem, hint):
+    assert check_line(before, after, before) == problem
+    assert hint in _hint(problem, before, after, before)

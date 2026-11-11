@@ -11,9 +11,15 @@
                                나머지(담당자·기한, 사항 문구)는 코드가 다시 붙인다
   ③ 검사 (check_line, 코드)   걸리면 그 줄만 ① 의 글
                                숫자   다듬은 글의 숫자는 ① 글의 숫자이거나 ① 글의 한글 수 낱말로 읽을 수 있는 값이다.
-                                      ① 글의 아라비아 숫자는 모두 남는다 (만·억 단위로 바꿔 쓴 것도 같은 값으로 본다)
-                               표시   ① 글의 [맞는 표기] 는 모두 글자 그대로 남는다. 새 대괄호는 [X?] 이고 X 는 원문 「」 안 글이다.
+                                      ① 글의 아라비아 숫자는 모두 남는다 (만·억 단위로 바꿔 쓴 것도 같은 값으로 본다).
+                                      다듬은 글의 불확실 표시 [X?] 안에 한글 수로 남은 값은 남은 것으로 본다
+                                      (「팔 한 여섯 개」(6개로 읽힘) → [팔 한 여섯 개?]: 읽은 값은 지웠지만 "여섯" 이 남음)
+                               표시   ① 글의 [맞는 표기] 는 모두 글자 그대로 남는다. 새 대괄호는 [X?] 이고 X 는 원문 「」 안 글이다
+                                      (수 낱말을 숫자로 바꾼 것은 같은 글로 본다: 「팔 한 여섯 개」(6개로 읽힘) → [팔 6개?]).
+                                      실제 회의에서 읽은 값이 있는 수를 표시 안에서도 숫자로 바꿨고, 읽기에는 그쪽이 낫다
                                       「」, "(…로 읽힘)", "(STT" 는 남지 않는다 (표시를 대괄호 하나로 맞춘다)
+                               영어   원문에 없던 영어 낱말이 생기면 걸린다. 실제 회의에서 AI 가 「에이더블유에스」 → AWS,
+                                      아이에이 → AI(IA 였음) 처럼 표시 없이 낱말을 바꿨다 (바로잡기는 교정 단계의 일이고 표시가 붙어야 한다)
                                길이   공백을 뺀 글자 수가 ① 글의 MIN_RATIO 미만이면 걸린다 (내용이 빠졌을 가능성)
                                모양   빈 글, 줄바꿈
   실패              호출 실패, 시간 초과, 읽을 수 없는 답, 예상하지 못한 예외는 모든 줄을 ① 의 글로 간다.
@@ -42,6 +48,7 @@ _MARK_ONLY = re.compile(r"「\s*(\[[^\[\]]+\])\s*」")
 _BRACKET = re.compile(r"\[([^\[\]]+)\]")
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?:억|만|천)?")
 _LEFTOVER = ("「", "」", "읽힘)", "(STT")
+_LATIN = re.compile(r"[A-Za-z]+")
 
 # 한글 수 낱말
 _SINO_DIGIT = dict(zip("일이삼사오육칠팔구", range(1, 10)))
@@ -106,9 +113,10 @@ def _strip_numbers(text: str) -> str:
 # ---------- 숫자 ----------
 
 def digit_values(text: str) -> set[float]:
-    """아라비아 숫자의 값. 쉼표는 떼고, 바로 뒤의 만·억·천은 곱한다 (300만 = 3000000). 대괄호 안은 보지 않는다."""
+    """아라비아 숫자의 값. 쉼표는 떼고, 바로 뒤의 만·억·천은 곱한다 (300만 = 3000000). 대괄호 안도 센다
+    (실제 회의: 「삼십 초코컷」(30으로 읽힘) → [30 초코컷?] 처럼 숫자가 불확실 표시 안으로 들어간다)."""
     out = set()
-    for m in _NUMBER.finditer(_BRACKET.sub(" ", text)):
+    for m in _NUMBER.finditer(text):
         raw = m.group(0).replace(",", "").replace(" ", "")
         unit = {"억": 100_000_000, "만": 10_000, "천": 1000}.get(raw[-1], 1)
         num = raw.rstrip("억만천")
@@ -125,7 +133,8 @@ def korean_values(text: str) -> set[float]:
     for word, values in _SPECIAL.items():
         if word in text:
             out.update(values)
-    for run in _SINO_RUN.findall(text):
+    # 띄어 쓴 한자 수도 읽는다 (실제 회의: 「십 일월 중순」 → 11월)
+    for run in _SINO_RUN.findall(text) + _SINO_RUN.findall(re.sub(r"(?<=[일이삼사오육칠팔구십백천만억]) (?=[일이삼사오육칠팔구십백천만억])", "", text)):
         for i in range(len(run)):
             for j in range(i + 1, min(len(run), i + 8) + 1):
                 v = _sino(run[i:j])
@@ -160,7 +169,7 @@ def _sino(word: str) -> int | None:
 # ---------- ③ 검사 ----------
 
 def check_line(before: str, after: str, original: str) -> str | None:
-    """걸린 검사 이름 (numbers, marks, leftover, length, shape). 통과하면 None.
+    """걸린 검사 이름 (numbers, marks, leftover, latin, length, shape). 통과하면 None.
     before 는 ① 의 글, after 는 다듬은 글, original 은 ① 전 글 (「」 안 글을 찾는 데 쓴다)."""
     if not after.strip() or "\n" in after.strip():
         return "shape"
@@ -169,20 +178,32 @@ def check_line(before: str, after: str, original: str) -> str | None:
     fixed = [b for b in _BRACKET.findall(before)]
     if any(after.count(f"[{b}]") < before.count(f"[{b}]") for b in set(fixed)):
         return "marks"
-    quoted = [" ".join(q.split()) for q in _QUOTE.findall(original)]
+    quoted = [_letters(q) for q in _QUOTE.findall(original)]
     for b in _BRACKET.findall(after):
         if b in fixed:
             continue
-        inner = " ".join(b[:-1].split()) if b.endswith("?") else None
-        if not inner or not any(inner in q for q in quoted):
+        if not b.endswith("?") or not b[:-1].strip():
             return "marks"
+        inner = _letters(b[:-1])                        # 수만 든 표시([세 개?])는 빈 글: 숫자는 숫자 검사가 본다
+        if not any(inner in q for q in quoted):
+            return "marks"
+    if not set(_LATIN.findall(after)) <= set(_LATIN.findall(before)):
+        return "latin"
     have, allowed = digit_values(before), digit_values(before) | korean_values(before)
     got = digit_values(after)
-    if not have <= got or not got <= allowed:
+    kept = {v for b in _BRACKET.findall(after) if b.endswith("?") for v in korean_values(b)}
+    if not have <= got | kept or not got <= allowed:
         return "numbers"
     if _length(after) < MIN_RATIO * _length(before):
         return "length"
     return None
+
+
+def _letters(text: str) -> str:
+    """수·단위로만 된 낱말과 숫자, 띄어쓰기를 뺀 글. 불확실 표시 안 글이 원문 「」 안 글과 같은지 볼 때 쓴다.
+    낱말 안의 글자는 지우지 않는다 ("약을 사" 의 "사" 는 남고, 따로 선 "여섯"·"6개" 는 빠진다)."""
+    kept = [w for w in text.split() if _strip_numbers(re.sub(r"[\d,.]", "", w))]
+    return "".join(re.sub(r"[\d,.]", "", w) for w in kept)
 
 
 def _length(text: str) -> int:
@@ -242,7 +263,7 @@ def _polish(materials, chosen, parts, before, llm, timeout_s, prompt, call_retri
         return Polish(_apply(materials, parts, before), sent=len(chosen), error_code=outcome.error_code, **usage)
     answers, texts, failed = outcome.placement, dict(before), {}
     for m in chosen:
-        after = answers.get(m.ref)
+        after = _unlabel(answers.get(m.ref), m)
         problem = "missing" if after is None else check_line(before[m.ref], after, parts[m.ref][1])
         if problem:
             failed[problem] = failed.get(problem, 0) + 1
@@ -252,9 +273,18 @@ def _polish(materials, chosen, parts, before, llm, timeout_s, prompt, call_retri
                   failed=failed, **usage)
 
 
+def _unlabel(text: str | None, m: Material) -> str | None:
+    """답 앞에 따라 쓴 번호·종류("m3 | 요약 | ", "[요약] ", "요약 | ")를 뗀다."""
+    if text is None:
+        return None
+    label = re.escape(KIND_LABELS[m.kind])
+    return re.sub(rf"^\s*(?:{re.escape(m.ref)}\s*\|\s*)?(?:\[{label}\]\s*|{label}\s*\|\s*)", "", text)
+
+
 def build_user(chosen: list[Material], before: dict[str, str]) -> str:
     """AI 에게 줄 글. 꺾쇠는 글 안에서 바꿔 칸 밖으로 새지 않게 한다 (배치와 같음)."""
-    lines = [f"{m.ref} [{KIND_LABELS[m.kind]}] {_quote(_one_line(before[m.ref]))}" for m in chosen]
+    # 종류를 대괄호로 쓰지 않는다: 답에 "[요약] …" 처럼 따라 써서 교정 표시와 헷갈렸다 (실제 회의 33줄 모두)
+    lines = [f"{m.ref} | {KIND_LABELS[m.kind]} | {_quote(_one_line(before[m.ref]))}" for m in chosen]
     return "\n".join(["<줄>", *lines, "</줄>"])
 
 

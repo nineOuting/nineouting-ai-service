@@ -48,6 +48,7 @@ AI 는 손 시험 도구(try_draft --real)와 같은 설정이다 (환경변수,
 import argparse
 import csv
 import json
+import logging
 import re
 import statistics
 import sys
@@ -288,15 +289,43 @@ def relayout_body(body: dict, then: dict, first: dict) -> dict:
                 previousLines=previous_lines_from(first) + list(then.get("addLines", ())))
 
 
+class _DraftTag(logging.Handler):
+    """초안 완료 로그의 다듬기 개수(polish_sent·polish_done·polish_failed)를 읽는다. 글은 로그에 없다."""
+
+    def __init__(self):
+        super().__init__()
+        self.polish = None
+
+    def emit(self, record):
+        msg = record.getMessage()
+        if "초안 완료" not in msg:
+            return
+        got = dict(re.findall(r"(polish_sent|polish_done|polish_failed|polish_error)=(\S+)", msg))
+        if "polish_sent" in got:
+            failed = dict(kv.split(":") for kv in got.get("polish_failed", "").split(",") if ":" in kv)
+            self.polish = {"sent": int(got["polish_sent"]), "done": int(got["polish_done"]),
+                           "failed": {k: int(v) for k, v in failed.items()}, "error": got.get("polish_error")}
+
+
 def _one(name, body, spec, rec, kw, variant, n, timeout_s, writer, runs_out):
     start = len(rec.calls)
     t0 = time.monotonic()
-    result = make_draft(body, rec, timeout_s=timeout_s, **kw)
+    tag = _DraftTag()
+    draft_log = logging.getLogger("minutes.draft")
+    draft_log.addHandler(tag)
+    level = draft_log.level
+    draft_log.setLevel(logging.INFO)
+    try:
+        result = make_draft(body, rec, timeout_s=timeout_s, **kw)
+    finally:
+        draft_log.removeHandler(tag)
+        draft_log.setLevel(level)
     calls = rec.calls[start:]
     for c in calls:
         writer.writerow({"variant": variant, "task": name, "run": n, **c})
     sc = score(result, spec["expect"], spec.get("tables", ()), spec.get("grouping"), chosen_grouping(body, calls),
                spec.get("fixes"))
+    sc["polish"] = tag.polish
     runs_out.write(json.dumps({"variant": variant, "task": name, "run": n, "ms": _ms(t0), "calls": calls,
                                "score": sc, "result": result}, ensure_ascii=False) + "\n")
     return result
@@ -321,9 +350,9 @@ def summarize(out_dir: Path) -> str:
     groups = {}
     for r in rows:
         groups.setdefault((r["task"], r["variant"]), []).append(r)
-    out = ["| 작업 | 지시문 | 맞음 | 틀린 항목 합 | 큰 실수 | 실패 | 묶기 맞음 (필드) | 교정 맞음 (판) | 호출 |"
+    out = ["| 작업 | 지시문 | 맞음 | 틀린 항목 합 | 큰 실수 | 실패 | 묶기 맞음 (필드) | 교정 맞음 (판) | 다듬기 통과 (줄) | 호출 |"
            " 시간 중앙/최대(초) | 토큰 입력/출력 (판당 평균) |",
-           "|---|---|---|---|---|---|---|---|---|---|---|"]
+           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     misses = []
     for (task, variant), rs in groups.items():
         ok = sum(r["score"]["ok"] for r in rs)
@@ -334,11 +363,13 @@ def summarize(out_dir: Path) -> str:
         grouping = f"{sum(g['ok'] for g in grouped)}/{len(grouped)}" if grouped else "-"
         fixed = [r["score"]["fixes"] for r in rs if r["score"].get("fixes")]
         fixes = f"{sum(x['ok'] for x in fixed)}/{len(fixed)}" if fixed else "-"
+        pol = [r["score"].get("polish") for r in rs if r["score"].get("polish")]
+        polished = f"{sum(x['done'] for x in pol)}/{sum(x['sent'] for x in pol)}" if pol else "-"
         calls = [c for r in rs for c in r["calls"]]
         secs = [r["ms"] / 1000 for r in rs]
         tin = sum(c.get("input_tokens") or 0 for c in calls) / len(rs)
         tout = sum(c.get("output_tokens") or 0 for c in calls) / len(rs)
-        out.append(f"| {task} | {variant} | {ok}/{len(rs)} | {wrong} | {serious} | {failed} | {grouping} | {fixes} | {len(calls)} |"
+        out.append(f"| {task} | {variant} | {ok}/{len(rs)} | {wrong} | {serious} | {failed} | {grouping} | {fixes} | {polished} | {len(calls)} |"
                    f" {statistics.median(secs):.1f} / {max(secs):.1f} | {tin:.0f} / {tout:.0f} |")
         counts = {}
         for r in rs:
@@ -355,6 +386,10 @@ def summarize(out_dir: Path) -> str:
                 counts[(f"교정 {w}", "안 바뀜")] = counts.get((f"교정 {w}", "안 바뀜"), 0) + 1
             for w in (x or {}).get("extra", ()):
                 counts[(f"교정 {w}", "바뀌면 안 되는데 바뀜")] = counts.get((f"교정 {w}", "바뀌면 안 되는데 바뀜"), 0) + 1
+            for kind, k in ((r["score"].get("polish") or {}).get("failed") or {}).items():
+                counts[("다듬기 검사", kind)] = counts.get(("다듬기 검사", kind), 0) + k
+            if (r["score"].get("polish") or {}).get("error"):
+                counts[("다듬기", r["score"]["polish"]["error"])] = counts.get(("다듬기", r["score"]["polish"]["error"]), 0) + 1
             if x and x["touched"]:
                 counts[("교정", "사람이 고친 줄에 붙음")] = counts.get(("교정", "사람이 고친 줄에 붙음"), 0) + 1
             for t in r["score"]["tables"]:

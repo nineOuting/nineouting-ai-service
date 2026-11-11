@@ -66,8 +66,8 @@ def test_읽은_값이_인용을_다_설명할_때만_바꾼다(before, after):
 
 # ---- 숫자
 
-def test_아라비아_숫자는_쉼표를_떼고_만_억을_곱하고_대괄호_안은_보지_않는다():
-    assert digit_values("300만 원과 3,000,000원, 1.5배, [쿠버네티스 2?] 12월") == {3_000_000.0, 1.5, 12.0}
+def test_아라비아_숫자는_쉼표를_떼고_만_억을_곱하고_대괄호_안도_센다():
+    assert digit_values("300만 원과 3,000,000원, 1.5배, [쿠버네티스 2?] 12월") == {3_000_000.0, 1.5, 2.0, 12.0}
 
 
 @pytest.mark.parametrize("text, value", [
@@ -76,6 +76,17 @@ def test_아라비아_숫자는_쉼표를_떼고_만_억을_곱하고_대괄호_
 ])
 def test_한글_수_낱말로_읽을_수_있는_값(text, value):
     assert float(value) in korean_values(text)
+
+
+def test_띄어_쓴_한자_수도_읽는다():
+    assert 11.0 in korean_values("「십 일월 중순에서 말 사이」")
+
+
+def test_불확실_표시_안의_수_낱말을_숫자로_바꾼_것은_받는다():
+    before = "공통 모델에 「약을 팔 한 여섯 개」(6개로 읽힘)를 넣으면 끝이라는 설명이 나옴"
+    assert check_line(before, "공통 모델에 [약을 팔 6개?]를 넣으면 끝이라는 설명이 있음.", before) is None
+    assert check_line(before, "공통 모델에 [약을 먹 6개?]를 넣으면 끝이라는 설명이 있음.", before) == "marks"
+    assert check_line(before, "공통 모델에 [약을 팔 한 여섯 개?]를 넣으면 끝이라는 설명이 있음.", before) is None   # 한글 수로 남음
 
 
 def test_수가_아닌_한자_나열은_읽지_않는다():
@@ -104,6 +115,15 @@ def test_검사(after, problem):
     assert check_line(BEFORE, after, ORIGINAL) == problem
 
 
+@pytest.mark.parametrize("before, after, problem", [
+    ("「에이더블유에스」를 맡아 해보기", "AWS를 맡아 해보기", "latin"),
+    ("유저 플로우 아이에이 기능 명세서는 다 만들었다는 말이 나옴", "유저 플로우 AI 기능 명세서는 다 만들었음.", "latin"),
+    ("Terraform 은 프로젝트 시간에 공부한다고 했습니다", "Terraform 은 프로젝트 시간에 공부하기로 함.", None),
+])
+def test_원문에_없던_영어_낱말이_생기면_걸린다(before, after, problem):
+    assert check_line(before, after, before) == problem
+
+
 def test_만_단위로_바꿔_쓴_숫자도_같은_값으로_본다():
     before = "이번 달 예산 「삼백만 원」을 올렸고 지난달에는 2,000,000원을 썼다는 말이 나옴"
     assert check_line(before, "이번 달 예산 300만 원을 올렸고 지난달에는 200만 원을 썼음.", before) is None
@@ -117,6 +137,16 @@ def test_할_일은_담당자와_기한을_떼고_결정_확인_필요는_사항
     assert split(ms["m10"]) == ("", "식당 후보 알아보기", " (담당자 미정, 기한 미정, 할 일 확인 필요)")
     assert split(ms["m8"]) == ("회식 장소 확정 (결정 확인 필요: ", "강남역 근처로 정함", ")")
     assert split(ms["m2"]) == ("", ms["m2"].text, "")
+
+
+def test_답_앞에_따라_쓴_번호와_종류는_뗀다(materials):
+    reply = {"lines": [{"m": "m1", "text": "[결정] 1차 배포를 10월 30일(목)로 정함."},
+                       {"m": "m2", "text": "m2 | 요약 | 1차 배포 날짜를 다음 주 목요일로 하자는 제안이 있음."},
+                       {"m": "m4", "text": "할 일 | QA 일정표 공유하기"}]}
+    p = polish(materials, {"m1", "m2", "m4"}, ScriptLLM(polishes=[reply]), 10)
+    ms = by_ref(p.materials)
+    assert p.polished == 3 and ms["m1"].text == "1차 배포를 10월 30일(목)로 정함."
+    assert ms["m4"].text == "QA 일정표 공유하기 (김철수, 수요일까지)"
 
 
 def test_답에서_모양이_맞는_줄만_읽는다():
@@ -142,7 +172,7 @@ def test_사람이_고친_재료와_넣지_못한_재료는_보내지_않는다(
     sent = llm.polish_calls[0][1]
     assert "m6 " not in sent and "m7 " not in sent and "m9 " not in sent
     assert by_ref(p.materials)["m6"] is by_ref(materials)["m6"]
-    assert "m4 [할 일] QA 일정표 공유" in sent and "김철수" not in sent          # 담당자는 보내지 않는다
+    assert "m4 | 할 일 | QA 일정표 공유" in sent and "김철수" not in sent        # 담당자는 보내지 않는다
 
 
 def test_검사에_걸리거나_답에_없는_줄은_정리한_글을_쓴다(materials):

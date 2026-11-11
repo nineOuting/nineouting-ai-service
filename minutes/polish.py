@@ -17,9 +17,14 @@
                                표시   ① 글의 [맞는 표기] 는 모두 글자 그대로 남는다. 새 대괄호는 [X?] 이고 X 는 원문 「」 안 글이다
                                       (수 낱말을 숫자로 바꾼 것은 같은 글로 본다: 「팔 한 여섯 개」(6개로 읽힘) → [팔 6개?]).
                                       실제 회의에서 읽은 값이 있는 수를 표시 안에서도 숫자로 바꿨고, 읽기에는 그쪽이 낫다
-                                      「」, "(…로 읽힘)", "(STT" 는 남지 않는다 (표시를 대괄호 하나로 맞춘다)
+                                      「」, "(…로 읽힘)", "(STT" 는 남지 않는다 (표시를 대괄호 하나로 맞춘다).
+                                      "불확실" 도 원문의 "STT 불확실" 설명 수만큼 줄어야 한다 (설명 글을 남기지 않는다)
                                영어   원문에 없던 영어 낱말이 생기면 걸린다. 실제 회의에서 AI 가 「에이더블유에스」 → AWS,
                                       아이에이 → AI(IA 였음) 처럼 표시 없이 낱말을 바꿨다 (바로잡기는 교정 단계의 일이고 표시가 붙어야 한다)
+                               인용   「」 를 지우고 [X?] 로 묶지 않은 채 글을 그대로 두면 걸린다 (수·날짜 인용은 숫자로 바꿔 쓰므로 뺀다).
+                                      실제 회의에서 「태로폰」 → 태로폰 처럼 불확실한 말이 확실한 말처럼 남았다
+                               낱말   원문 낱말 뒤가 말끝·조사가 아닌 글자로 바뀌면 걸린다 (일 더블유에스 → 일 더블유스).
+                                      원문의 "A B" 가 "A 의 앞부분 B" 가 되어도 걸린다 (맡기기 어렵고 → 맡기 어렵고: 뜻이 바뀜)
                                길이   공백을 뺀 글자 수가 ① 글의 MIN_RATIO 미만이면 걸린다 (내용이 빠졌을 가능성)
                                모양   빈 글, 줄바꿈
   실패              호출 실패, 시간 초과, 읽을 수 없는 답, 예상하지 못한 예외는 모든 줄을 ① 의 글로 간다.
@@ -49,6 +54,12 @@ _BRACKET = re.compile(r"\[([^\[\]]+)\]")
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?:억|만|천)?")
 _LEFTOVER = ("「", "」", "읽힘)", "(STT")
 _LATIN = re.compile(r"[A-Za-z]+")
+_HANGUL = re.compile(r"[가-힣]+")
+_STT_NOTE = re.compile(r"STT\s*불확실")
+_DATE_WORDS = re.compile(r"[월화수목금토일]요일|오늘|내일|어제|모레|이번주|다음주|지난주|주말|오전|오후|아침|저녁|점심|밤")
+# 말끝·조사에 오는 글자. 원문 낱말 뒤에 이 글자만 붙거나 바뀌면 말끝을 바꾼 것으로 본다 (실제 회의 답 165줄로 맞춤)
+_ENDING_CHARS = set("다고는은이가를을에의로와과도만기하함음됨임있었겠지며면서아어요게냐니까데해했한할된될인일던든랑나야여것줄수께부터처럼보씩"
+                    "라되됐짐져려봄봤봐줌준둠둔씀쓴냄낸으워줬자")
 
 # 한글 수 낱말
 _SINO_DIGIT = dict(zip("일이삼사오육칠팔구", range(1, 10)))
@@ -169,7 +180,7 @@ def _sino(word: str) -> int | None:
 # ---------- ③ 검사 ----------
 
 def check_line(before: str, after: str, original: str) -> str | None:
-    """걸린 검사 이름 (numbers, marks, leftover, latin, length, shape). 통과하면 None.
+    """걸린 검사 이름 (shape, leftover, marks, latin, quote, words, numbers, length). 통과하면 None.
     before 는 ① 의 글, after 는 다듬은 글, original 은 ① 전 글 (「」 안 글을 찾는 데 쓴다)."""
     if not after.strip() or "\n" in after.strip():
         return "shape"
@@ -187,8 +198,14 @@ def check_line(before: str, after: str, original: str) -> str | None:
         inner = _letters(b[:-1])                        # 수만 든 표시([세 개?])는 빈 글: 숫자는 숫자 검사가 본다
         if not any(inner in q for q in quoted):
             return "marks"
+    if after.count("불확실") > before.count("불확실") - len(_STT_NOTE.findall(before)):
+        return "leftover"
     if not set(_LATIN.findall(after)) <= set(_LATIN.findall(before)):
         return "latin"
+    if _unmarked_quote(before, after):
+        return "quote"
+    if _changed_word(before, after):
+        return "words"
     have, allowed = digit_values(before), digit_values(before) | korean_values(before)
     got = digit_values(after)
     kept = {v for b in _BRACKET.findall(after) if b.endswith("?") for v in korean_values(b)}
@@ -197,6 +214,52 @@ def check_line(before: str, after: str, original: str) -> str | None:
     if _length(after) < MIN_RATIO * _length(before):
         return "length"
     return None
+
+
+def _unmarked_quote(before: str, after: str) -> str | None:
+    """「」 를 지웠는데 [X?] 로 묶지 않고 글을 그대로 둔 인용. 실제 회의에서 「태로폰」·「헬름 상태도」를 그대로 써서
+    읽는 사람이 확실한 말로 받아들였다. 수·날짜 인용은 숫자로 바꿔 쓰므로 빼고, 사람 말은 풀어 쓰면 글이 달라지므로 걸리지 않는다."""
+    outside = _flat(_BRACKET.sub(" ", after))
+    rest = _flat(_QUOTE.sub(" ", before))                # 인용 밖에도 있는 말은 원래 글에 있던 것
+    for q in _QUOTE.findall(before):
+        letters = _letters(q)
+        values = korean_values(q)
+        if values and values & digit_values(after):     # 「십 일월 중순에서 말 사이」 → 11월 중순에서 말 사이
+            continue
+        if not _DATE_WORDS.sub("", letters):            # 「금요일」
+            continue
+        if len(letters) >= 2 and letters not in rest and letters in outside:
+            return q
+    return None
+
+
+def _changed_word(before: str, after: str) -> str | None:
+    """원문 낱말 뒤가 말끝이 아닌 글자로 바뀐 낱말. 실제 회의: 일 더블유에스 → 일 더블유스.
+    앞 두 글자 이상이 원문에 있고, 원문에 없는 뒤 글자가 말끝·조사 글자가 아니면 표기를 바꾼 것으로 본다.
+    뒤 글자를 지운 것은 말끝을 줄인 것과 구별하기 어려워, 바로 뒤 낱말이 그대로일 때만 본다
+    (맡기기 어렵고 → 맡기 어렵고: 남에게 맡기는 것이 내가 맡는 것으로 바뀜. 실제 회의 10판 중 7판)."""
+    source = _flat(before.replace("「", "").replace("」", ""))
+    after_words = _words(after)
+    for word in after_words:
+        stem = next((n for n in range(len(word), 0, -1) if word[:n] in source), 0)
+        if 2 <= stem < len(word) and not set(word[stem:]) <= _ENDING_CHARS:
+            return word
+    before_words = _words(before.replace("「", " ").replace("」", " "))
+    pairs = set(zip(after_words, after_words[1:]))
+    for word, nxt in zip(before_words, before_words[1:]):
+        for short, same in pairs:
+            if same == nxt and short != word and len(short) >= 2 and word.startswith(short):
+                return short
+    return None
+
+
+def _words(text: str) -> list[str]:
+    """대괄호 밖 한글 낱말."""
+    return _HANGUL.findall(_BRACKET.sub(" ", text))
+
+
+def _flat(text: str) -> str:
+    return re.sub(r"[\s\d,.~]", "", text)
 
 
 def _letters(text: str) -> str:

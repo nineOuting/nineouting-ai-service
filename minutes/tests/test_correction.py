@@ -101,11 +101,11 @@ def test_교정은_정해_둔_생각하는_양으로_부르고_칸_고르기는_
     import minutes.correction as c
     llm = ScriptLLM(answer(materials), corrections=[RIGHT])
     make_draft(body, llm)
-    assert llm.efforts == [None, None]                    # 지금은 모델 기본값
+    assert llm.efforts == [None, None, None]              # 교정·칸 고르기·다듬기. 지금은 모델 기본값
     monkeypatch.setattr(c, "EFFORT", "low")
     llm = ScriptLLM(answer(materials), corrections=[RIGHT])
     make_draft(body, llm)
-    assert llm.efforts == ["low", None]
+    assert llm.efforts == ["low", None, None]
 
 
 def test_교정_코드에서_예외가_나도_초안은_만든다(body, materials, monkeypatch):
@@ -147,15 +147,16 @@ def test_답에서_모양이_맞는_쌍만_읽는다():
 
 def test_인용_안이든_밖이든_같은_모양으로_바꾸고_원문을_남긴다(materials):
     fixed = by_ref(apply(materials, [("쿠버내티스", "쿠버네티스"), ("프로메테오스", "프로메테우스")]))
-    assert fixed["m2"].text.startswith("「쿠버네티스(STT: 쿠버내티스)」 클러스터는")
-    assert fixed["m11"].text.startswith("프로메테우스(STT: 프로메테오스) 보관 기간을")
-    assert fixed["m7"].text == "쿠버네티스(STT: 쿠버내티스) 설정 파일 정리 (박민수, 금요일까지)"
+    assert fixed["m2"].text.startswith("「[쿠버네티스]」 클러스터는")
+    assert fixed["m11"].text.startswith("[프로메테우스] 보관 기간을")
+    assert fixed["m7"].text == "[쿠버네티스] 설정 파일 정리 (박민수, 금요일까지)"
 
 
 def test_표_조각도_같이_바꾼다(materials):
     fixed = by_ref(apply(materials, [("쿠버내티스", "쿠버네티스")]))
     assert dict(fixed["m7"].parts)["할 일"] == "쿠버네티스(STT: 쿠버내티스) 설정 파일 정리"
-    assert dict(fixed["m2"].parts)["문장"] == fixed["m2"].text
+    assert dict(fixed["m2"].parts)["문장"].startswith("「쿠버네티스(STT: 쿠버내티스)」")      # 표 칸 값은 전의 모양
+    assert fixed["m2"].text.startswith("「[쿠버네티스]」")                                   # 줄 글은 대괄호
 
 
 def test_사람이_고친_재료와_해당_없는_재료는_그대로다(materials):
@@ -168,7 +169,7 @@ def test_사람이_고친_재료와_해당_없는_재료는_그대로다(materia
 def test_긴_말부터_한_번에_바꿔_겹쳐_바꾸지_않는다(materials):
     m = by_ref(materials)["m13"]
     fixed = apply([m], [("그라파냐", "그라파나"), ("그라파냐 대시보드", "그라파나 대시보드")])
-    assert fixed[0].text.startswith("그라파나 대시보드(STT: 그라파냐 대시보드) 정리")
+    assert fixed[0].text.startswith("[그라파나 대시보드] 정리")
 
 
 # ---- AI 호출
@@ -184,7 +185,7 @@ def test_교정은_통과한_쌍만_반영하고_개수를_돌려준다(material
                                         {"wrong": "다섯 개", "right": "여섯 개"}]}     # 수 낱말 → 버림
     c = correct(materials, body["agendas"], body["summary"], ScriptLLM(corrections=[reply]), 60.0)
     assert (c.fixes, c.applied, c.guessed, c.changed, c.error_code, c.attempts) == (5, 4, 1, 5, None, 1)
-    assert "「젠킨스(STT: 젠킨수)」" in by_ref(c.materials)["m3"].text                  # 보이는 모양은 출처가 있을 때와 같다
+    assert "「[젠킨스]」" in by_ref(c.materials)["m3"].text                  # 보이는 모양은 출처가 있을 때와 같다
     assert "「다섯 개」" in by_ref(c.materials)["m2"].text
 
 
@@ -209,15 +210,15 @@ def test_초안의_줄_글에_교정이_들어간다(body, materials):
     result = make_draft(body, ScriptLLM(answer(materials), corrections=[RIGHT]))
     assert result["status"] == SUCCEEDED
     content = {s["title"]: s["content"] for s in result["sections"]}
-    assert "- 배포 환경: 쿠버네티스(STT: 쿠버내티스) 설정 파일 정리 (박민수, 금요일까지)" in content["할 일"]
-    assert "프로메테우스(STT: 프로메테오스) 보관 기간을" in content["안건별 논의"]
+    assert "- 배포 환경: [쿠버네티스] 설정 파일 정리 (박민수, 금요일까지)" in content["할 일"]
+    assert "[프로메테우스] 보관 기간을" in content["안건별 논의"]
     assert "쿠버내티스 버전을 먼저 올려야 한다는 우려" in content["안건별 논의"]          # 사람이 고친 의견은 그대로
 
 
 def test_칸_고르기에도_교정된_글을_보낸다(body, materials):
     llm = ScriptLLM(answer(materials), corrections=[RIGHT])
     make_draft(body, llm)
-    assert "그라파나(STT: 그라파냐) 대시보드 정리" in llm.calls[0][1]
+    assert "[그라파나] 대시보드 정리" in llm.calls[0][1]
     assert llm.correction_calls[0][0] == load_prompt(kind=CORRECTION_KIND).text
 
 

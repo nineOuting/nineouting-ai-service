@@ -11,6 +11,9 @@
 STT 오인식 교정 (명세 7.7): 처음 초안에서 재료를 만든 뒤 칸을 고르기 전에 AI 를 한 번 더 불러 "잘못 적힌 말 → 맞는 표기" 쌍만 받고,
   코드가 검사해 통과한 것만 재료 글에 반영한다 (correction.py). 교정이 실패해도 교정 없이 초안을 만든다. 다시 배치에서는 하지 않는다.
   correction=False 면 부르지 않는다 (배포 설정 MINUTES_CORRECTION=0)
+문장 다듬기 (명세 7.8, SCRUM-218): 처음 초안에서 배치·표 채우기 뒤, 글 필드에 놓인 재료의 글을 회의록 문체로 맞춘다 (polish.py).
+  읽은 값이 붙은 수 인용은 코드가 늘 바꾸고(①), polish=True 면 AI 가 다시 쓴 글을 코드가 검사해 통과한 줄만 쓴다(②③).
+  다듬기가 실패해도 ① 의 글로 초안을 만든다. 다시 배치에서는 하지 않는다 (이전 줄 글 그대로). polish=False 면 ② 를 하지 않는다
 AI 가 채우는 표 필드 (명세 7.6): 배치 뒤 재료가 놓인 표 필드마다 AI 를 한 번 더 불러 열과 칸을 정한다 (table.py).
   표 하나라도 실패하면 초안 전체가 실패한다 (그 표만 비워 보내면 사용자가 모르고 빈 표를 받으므로)
   재료가 상한 초과  AI 를 부르지 않고 FAILED / INPUT_TOO_LONG (AI 에 넘길 재료 수. 다시 배치는 이전 줄 수)
@@ -27,6 +30,7 @@ from .lines import build_sections, group, unplaced_lines
 from .materials import build_materials
 from .models import NO_GROUPING, TABLE, Placement
 from .placement import RELAYOUT_KIND, Prompt, load_prompt, place
+from .polish import POLISH_KIND, Polish, polish as polish_lines
 from .relayout import build_relayout
 from .request import template_fields
 from .table import TABLE_KIND, fill
@@ -48,9 +52,10 @@ MESSAGES = {                                    # 실패 설명. 요약·초안 
 
 def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, prompt: Prompt | None = None,
                call_retries: int = 1, relayout_prompt: Prompt | None = None, table_prompt: Prompt | None = None,
-               correction_prompt: Prompt | None = None, correction: bool = True) -> dict:
+               correction_prompt: Prompt | None = None, correction: bool = True,
+               polish_prompt: Prompt | None = None, polish: bool = True) -> dict:
     """결과 콜백 본문(명세 3.1·3.2)을 돌려준다. 다시 배치에는 relayout_prompt, 표 채우기에는 table_prompt,
-    오인식 교정에는 correction_prompt 를 쓴다 (없으면 각 종류의 가장 큰 번호)."""
+    오인식 교정에는 correction_prompt, 문장 다듬기에는 polish_prompt 를 쓴다 (없으면 각 종류의 가장 큰 번호)."""
     t0 = time.monotonic()
     request_id, template = body["requestId"], body["template"]
     fields, v07 = template_fields(template)
@@ -119,6 +124,12 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
     if tables:
         tag += (f" tables={len(tables)} table_prompt={table_prompt.version} table_attempts={calls}"
                 f" table_in_tokens={tokens_in} table_out_tokens={tokens_out}" + _fallback_tag(fallbacks))
+    if not previous:
+        text_refs = {ref for ref, i in placement.sections.items() if fields[i].type != TABLE}
+        polish_prompt = polish_prompt or load_prompt(kind=POLISH_KIND)
+        polished = polish_lines(materials, text_refs, llm, timeout_s, polish_prompt, call_retries, enabled=polish)
+        materials = polished.materials
+        tag += _polish_tag(polish_prompt, polished, polish)
     sections, unplaced = build_sections(fields, materials, placement, v07, tables)
     unplaced = not_sent + unplaced
     lost_lines = unplaced_lines(materials, placement, previous)
@@ -136,6 +147,19 @@ def _correction_tag(prompt: Prompt, c: Correction) -> str:
     if c.fallback_calls:
         tag += f" correction_fallback_calls={c.fallback_calls}"
     return tag + (f" correction_error={c.error_code}" if c.error_code else "")
+
+
+def _polish_tag(prompt: Prompt, p: Polish, enabled: bool) -> str:
+    """다듬기 단계의 개수·토큰. sent 는 다듬을 줄 수, polished 는 다듬은 글을 쓴 줄 수, failed 는 검사별 걸린 줄 수."""
+    if not enabled:
+        return " polish=off"
+    tag = (f" polish_prompt={prompt.version} polish_attempts={p.attempts} polish_sent={p.sent} polish_done={p.polished}"
+           f" polish_in_tokens={p.input_tokens} polish_out_tokens={p.output_tokens}")
+    if p.failed:
+        tag += " polish_failed=" + ",".join(f"{k}:{v}" for k, v in sorted(p.failed.items()))
+    if p.fallback_calls:
+        tag += f" polish_fallback_calls={p.fallback_calls}"
+    return tag + (f" polish_error={p.error_code}" if p.error_code else "")
 
 
 def _fallback_tag(count) -> str:

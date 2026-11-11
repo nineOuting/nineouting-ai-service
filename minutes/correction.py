@@ -18,8 +18,10 @@
                             MIN_SIMILARITY_GAP 이상 (뜻을 바꾸는 교정을 막는다). STT 는 글자 수를 바꿔 적기도 한다
                             (실제 회의: 「기능면 시선」 ← 기능 명세). 글자 수가 다르면 뜻이 다른 말이 끼기 쉬워 기준을 높인다
                             (요고사항 문서 / 요구사항 0.57, 백앤드 서버 / 백엔드 0.58 은 막고 기능면 시선 / 기능 명세 0.62 는 받음)
-  반영              사람이 고치지 않은 재료의 글과 표 조각(parts)에서 wrong 을 "right(STT: wrong)" 로 바꾼다.
-                    「」 안이든 밖이든 같은 모양이다. 원문이 남으므로 표 검사(「」 표시)와도 어긋나지 않는다
+  반영              사람이 고치지 않은 재료의 글에서 wrong 을 "[right]" 로 바꾼다 (SCRUM-218: 대괄호는 전사문 그대로가 아니라
+                    AI 가 바로잡은 말이라는 표시. 원래 말은 줄 글에 남지 않고 근거 전사 줄로 확인한다).
+                    표 조각(parts)에서는 "right(STT: wrong)" 로 바꾼다 (표 칸 값은 SCRUM-218 범위 밖이라 전의 모양 그대로.
+                    원문이 남으므로 표 검사(「」 표시)와도 어긋나지 않는다). 「」 안이든 밖이든 같은 모양이다
   생각하는 양      EFFORT. None 이면 모델 기본값. 실제 회의 요약에서 기본값 20.5~29.9초, "low" 12.0~14.3초였지만 (각 3번)
                     "low" 는 덜 잡아(합성 사례 교정 맞음 4/10판) 기본값을 쓴다. 초안은 콜백으로 알려 사용자가 바로 기다리지 않는다
   실패              호출 실패, 시간 초과, 읽을 수 없는 답은 다시 시키지 않고 교정 없이 간다. 교정 때문에 초안이 실패하지 않게 한다.
@@ -197,13 +199,17 @@ def has_source(right: str, sources: str, written: str) -> bool:
 
 
 def apply(materials: list[Material], pairs: list[tuple[str, str]]) -> list[Material]:
-    """사람이 고치지 않은 재료의 글과 조각에서 wrong → "right(STT: wrong)". 긴 wrong 부터 한 번에 바꿔 겹쳐 바꾸지 않는다."""
+    """사람이 고치지 않은 재료의 글에서 wrong → "[right]", 조각에서 wrong → "right(STT: wrong)".
+    긴 wrong 부터 한 번에 바꿔 겹쳐 바꾸지 않는다."""
     if not pairs:
         return list(materials)
     to = dict(pairs)
     pattern = re.compile("|".join(re.escape(w) for w in sorted(to, key=len, reverse=True)))
 
     def sub(text: str) -> str:
+        return pattern.sub(lambda m: f"[{to[m.group()]}]", text)
+
+    def sub_part(text: str) -> str:
         return pattern.sub(lambda m: f"{to[m.group()]}(STT: {m.group()})", text)
 
     out = []
@@ -211,7 +217,7 @@ def apply(materials: list[Material], pairs: list[tuple[str, str]]) -> list[Mater
         if m.edited or not pattern.search(m.text):
             out.append(m)
             continue
-        out.append(replace(m, text=sub(m.text), parts=tuple((name, sub(value)) for name, value in m.parts)))
+        out.append(replace(m, text=sub(m.text), parts=tuple((name, sub_part(value)) for name, value in m.parts)))
     return out
 
 

@@ -22,6 +22,12 @@ def find(lines, kind, item_id=None):
                 and l["sources"][0]["id"] == item_id)
 
 
+def rebuilt(m) -> bool:
+    """출처대로 다시 만든 재료인가. 글은 이전 줄 글로 고정하지만(SCRUM-218) 표 칸 값 조각은 요약 항목의 것이다.
+    글만 지킨 줄(고친 줄 등)은 조각에 "줄 글" 이 있다."""
+    return "줄 글" not in dict(m.parts)
+
+
 def test_아무것도_고치지_않으면_처음_재료를_그대로_다시_만든다():
     body, lines = first_draft()
     materials, unreferenced = relayout(body, lines)
@@ -29,9 +35,13 @@ def test_아무것도_고치지_않으면_처음_재료를_그대로_다시_만�
     assert [m.previous for m in materials] == list(range(9))
     assert [m.order for m in materials] == [(i, 0, 0) for i in range(9)]       # 이전 초안의 줄 순서
     assert [m.sources() for m in materials] == [l["sources"] for l in lines]
-    assert not any(m.whole_line or m.draft_edited for m in materials)
+    assert all(rebuilt(m) and not m.draft_edited for m in materials)
+    for m, l in zip(materials, lines):                 # 글은 이전 줄 글 그대로. 요약에서 사람이 고친 항목만 요약 글로
+        assert (m.whole_line and m.text == l["sentence"]) if not m.edited else (not m.whole_line)
+    assert sum(m.edited for m in materials) >= 1
     decision = materials[find(lines, "decision")]
-    assert decision.text == "1차 배포를 10월 30일(목)로 정함" and decision.decision_point_id == 7
+    assert decision.text == "배포 일정: 1차 배포를 10월 30일(목)로 정함" and decision.decision_point_id == 7
+    assert dict(decision.parts)["결정 내용"] == "1차 배포를 10월 30일(목)로 정함"            # 표 칸 값은 요약 항목의 것
     assert [(m.kind, m.item_id) for m in unreferenced] == [("opinion", "k3f9a1-20")]   # 처음에 넣지 못한 m9
 
 
@@ -99,7 +109,7 @@ def test_복사한_줄은_첫_줄만_출처대로_나머지는_글을_지킨다(
     lines.insert(0, copy)                                                      # 고친 복사본이 앞에 와도
     materials, unreferenced = relayout(body, lines)
     assert materials[0].whole_line and materials[0].text == copy["sentence"]
-    assert not materials[i + 1].whole_line                                     # 고치지 않은 줄이 출처대로
+    assert rebuilt(materials[i + 1]) and not rebuilt(materials[0])              # 고치지 않은 줄이 출처대로
     assert materials[0].sources() == materials[i + 1].sources()            # 출처·근거는 둘 다 유지
     assert len({m.ref for m in materials}) == 10                             # 재료 번호는 따로
     assert len(unreferenced) == 1
@@ -110,7 +120,7 @@ def test_고치지_않은_복사본이_둘이면_앞의_줄만_출처대로():
     i = find(lines, "decision")
     lines.append(dict(lines[i]))
     materials, _ = relayout(body, lines)
-    assert not materials[i].whole_line and materials[-1].whole_line and not materials[-1].draft_edited
+    assert rebuilt(materials[i]) and not rebuilt(materials[-1]) and not materials[-1].draft_edited
 
 
 def test_작성자가_지운_줄의_요약_항목은_다시_넣지_않는다():
@@ -134,7 +144,7 @@ def test_출처가_둘이면_첫_출처만_쓴다():
     lines[i]["sources"].append({"agendaId": 102, "kind": "summary", "id": "k3f9a1-3"})
     materials, unreferenced = relayout(body, lines)
     assert materials[i].sources() == [{"agendaId": 101, "kind": "summary", "id": "k3f9a1-1", "decisionPointId": None}]
-    assert not materials[i].whole_line                                         # 출처대로 다시 만든 재료
+    assert rebuilt(materials[i])                                               # 출처대로 다시 만든 재료
 
 
 def test_손_시험용_다시_배치_예시는_형식이_맞고_고친_줄_새_줄_지운_줄을_담는다():

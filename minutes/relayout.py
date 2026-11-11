@@ -2,7 +2,10 @@
 
 이전 줄 하나가 재료 하나가 된다. 줄마다 재료 번호(m1, m2 …)를 따로 붙이므로 출처가 겹쳐도 검사에 걸리지 않는다.
 
-  고치지 않은 줄 (draftEdited false)   출처로 요약 항목을 찾아 처음 초안과 같은 재료로 다시 만든다
+  고치지 않은 줄 (draftEdited false)   출처로 요약 항목을 찾아 처음 초안과 같은 재료로 다시 만들고, 글만 이전 줄 글로 둔다
+                                       (SCRUM-218: 처음 초안에서 다듬은 글을 양식이 바뀌어도 그대로 쓴다. 표 칸 값의 조각은 요약 항목의 것).
+                                       요약 항목을 사람이 고쳤으면(edited) 요약 글로 다시 만든다. 그 글은 처음 초안에서도
+                                       다듬지 않으므로 모양이 같고, 초안 뒤 점검에서 고친 글이 반영된다 (명세 8.3)
   작성자가 고친 줄                     글 고정. 근거·표시·출처는 그 줄의 값 그대로. 표 칸 값의 조각은 안건·종류·줄 글
   작성자가 새로 쓴 줄 (출처 없음)      글 고정. 출처 없음
   출처 항목이 요약에 없는 줄           고친 줄처럼 (8.3)
@@ -43,7 +46,7 @@ def build_relayout(agendas: list[dict], summary: dict, previous_lines: list[dict
             referenced.add(key)
         ref = f"m{i + 1}"
         if key is not None and rebuild.get(key) == i:
-            materials.append(_rebuilt(by_source[key], ref, i))
+            materials.append(_rebuilt(by_source[key], ref, i, line))
         else:
             materials.append(_kept(line, ref, i, by_source.get(key), titles))
     unreferenced = [m for k, m in by_source.items() if k not in referenced]
@@ -61,8 +64,10 @@ def flatten(text: str) -> str:
     return re.sub(r"\s*\n\s*", " ", text).strip()
 
 
-def _rebuilt(m: Material, ref: str, i: int) -> Material:
-    return replace(m, ref=ref, order=(i, 0, 0), previous=i)
+def _rebuilt(m: Material, ref: str, i: int, line: dict) -> Material:
+    if m.edited:
+        return replace(m, ref=ref, order=(i, 0, 0), previous=i)
+    return replace(m, ref=ref, order=(i, 0, 0), previous=i, text=flatten(line["sentence"]), whole_line=True)
 
 
 def _kept(line: dict, ref: str, i: int, original: Material | None, titles: dict) -> Material:

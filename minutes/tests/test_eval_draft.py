@@ -127,8 +127,8 @@ def test_표는_열_개수와_행_수를_본다(case):
 
 def test_버전은_모자란_쪽이_마지막_값을_쓴다():
     assert variants_of(["v8", "v9"], ["v2"], ["v1"]) == [
-        {"placement": "v8", "relayout": "v2", "table": "v1", "correction": None},
-        {"placement": "v9", "relayout": "v2", "table": "v1", "correction": None}]
+        {"placement": "v8", "relayout": "v2", "table": "v1", "correction": None, "polish": None},
+        {"placement": "v9", "relayout": "v2", "table": "v1", "correction": None, "polish": None}]
     assert [v["correction"] for v in variants_of(["v9"], ["v3"], ["v1"], ["v1", "v2"])] == ["v1", "v2"]
 
 
@@ -138,11 +138,11 @@ def test_판마다_돌리고_호출과_채점을_남긴다(case, tmp_path):
     out = run_case(case, llm, 2, [{"placement": "v8", "relayout": "v2", "table": "v1"}], tmp_path, progress=lambda s: None)
     runs = [json.loads(line) for line in (out / "runs.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [(r["run"], r["score"]["ok"]) for r in runs] == [(1, False), (2, True)]
-    assert [c["kind"] for c in runs[0]["calls"]] == ["correction", "placement"]         # 교정을 먼저 한다
+    assert [c["kind"] for c in runs[0]["calls"]] == ["correction", "placement", "polish"]   # 교정 → 배치 → 다듬기
     assert runs[0]["calls"][1]["input_tokens"] == 100
-    assert (out / "calls.csv").read_text(encoding="utf-8").count("\n") == 5              # 머리 + 판마다 교정·배치
+    assert (out / "calls.csv").read_text(encoding="utf-8").count("\n") == 7              # 머리 + 판마다 교정·배치·다듬기
     text = summarize(out)
-    assert "| 배치 | placement-v8 relayout-v2 table-v1 | 1/2 | 1 | 0 | 0 | 4/8 | - | 4 |" in text     # 기준 없음 = 묶지 않음 (결정·미결만 맞음)
+    assert "| 배치 | placement-v8 relayout-v2 table-v1 | 1/2 | 1 | 0 | 0 | 4/8 | - | 6 |" in text     # 기준 없음 = 묶지 않음 (결정·미결만 맞음)
     assert '- 배치 / placement-v8 relayout-v2 table-v1: [103, "opinion", "k3f9a1-20"] → (넣지 않음) (1번)' in text
 
 
@@ -207,7 +207,7 @@ def test_교정_채점은_바뀐_쌍과_바뀌면_안_되는_교정을_센다(st
     partial = {"fixes": [{"wrong": "쿠버내티스", "right": "쿠버네티스"}, {"wrong": "회의실", "right": "회의록"}]}
     result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[partial]))
     x = score(result, stt["expect"], fixes=stt["fixes"])["fixes"]
-    assert (x["hit"], x["missed"], x["extra"], x["ok"]) == (1, ["프로메테오스", "그라파냐", "얼러트 매니져", "깃헙 액선", "알고 시디", "머지 리퀘스드"], ["회의실"], False)
+    assert (x["hit"], x["missed"], x["extra"], x["ok"]) == (1, ["프로메테오스", "그라파냐", "얼러트 매니져", "깃헙 액선", "알고 시디", "머지 리퀘스드"], ["회의록"], False)
     assert x["touched"] == 0                                    # 사람이 고친 의견에는 붙지 않는다
 
 
@@ -225,4 +225,4 @@ def test_낱말마다_나눠_고친_교정도_맞음으로_센다(stt):
 def test_바뀌어도_되는_말은_바뀌어도_틀림으로_세지_않는다(stt):
     guess = {"fixes": [{"wrong": "젠킨수", "right": "젠킨스"}, {"wrong": "회의실", "right": "회의록"}]}
     result = make_draft(stt["body"], ScriptLLM(_stt_answer(stt), corrections=[guess]))
-    assert score(result, stt["expect"], fixes=stt["fixes"])["fixes"]["extra"] == ["회의실"]
+    assert score(result, stt["expect"], fixes=stt["fixes"])["fixes"]["extra"] == ["회의록"]     # 젠킨스는 봐준다

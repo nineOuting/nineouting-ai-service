@@ -28,6 +28,9 @@
                                       실제 회의에서 「태로폰」 → 태로폰 처럼 불확실한 말이 확실한 말처럼 남았다
                                낱말   원문 낱말 뒤가 말끝·조사가 아닌 글자로 바뀌면 걸린다 (일 더블유에스 → 일 더블유스).
                                       원문의 "A B" 가 "A 의 앞부분 B" 가 되어도 걸린다 (맡기기 어렵고 → 맡기 어렵고: 뜻이 바뀜)
+                               옮김   "~다고 함", "~다고 우려함", "~자고 제안함", "~냐고 물음" 처럼 남의 말을 옮기는 꼴이 남으면 걸린다.
+                                      실제 회의 초안에서 줄마다 붙어 제3자에게 들은 글처럼 읽혔다. 내용을 바로 쓰고 제안·질문만
+                                      "~하는 것을 제안함", "~는지 물음" 으로 남긴다. [원래 말?]라고 물음 은 뺀다
                                길이   공백을 뺀 글자 수가 ① 글의 MIN_RATIO 미만이면 걸린다 (내용이 빠졌을 가능성)
                                모양   빈 글, 줄바꿈
   실패              호출 실패, 시간 초과, 읽을 수 없는 답, 예상하지 못한 예외는 모든 줄을 ① 의 글로 간다.
@@ -62,6 +65,11 @@ _HANGUL = re.compile(r"[가-힣]+")
 _NESTED = re.compile(r"\[[^\]]*\[")
 _NOTED_MARK = re.compile(r"\[([^\[\]]+)\]\s*(?:은|는|이|가)?\s*STT\s*불확실")
 _DATE_WORDS = re.compile(r"[월화수목금토일]요일|오늘|내일|어제|모레|이번주|다음주|지난주|주말|오전|오후|아침|저녁|점심|밤")
+# 남의 말을 옮기는 꼴 ("모른다고 우려함", "하겠다고 함", "보자고 제안함"). 실제 회의 초안에서 줄마다 붙어 제3자에게 들은 글처럼 읽혔다.
+# [원래 말?]라고 물음 처럼 대괄호 바로 뒤는 뺀다 (알아듣지 못한 말은 옮기는 수밖에 없다). "~다고 해서" 같은 이유 말은 동사가 달라 걸리지 않는다
+_REPORTED = re.compile(r"(?<![가-힣\]])[가-힣]*?(?:다|라|자|냐)고\s+"
+                       r"(?:함|했|하며|하고|하자|하여|물|묻|답|설명|우려|제안|반응|봄|봤|보며|보고|말|언급|확인|격려|아쉬워|덧붙|강조|동의|약속|요청|전함|밝|주장|생각)"
+                       r"[가-힣]*")
 # 말끝·조사에 오는 글자. 원문 낱말 뒤에 이 글자만 붙거나 바뀌면 말끝을 바꾼 것으로 본다 (실제 회의 답 165줄로 맞춤)
 _ENDING_CHARS = set("다고는은이가를을에의로와과도만기하함음됨임있었겠지며면서아어요게냐니까데해했한할된될인일던든랑나야여것줄수께부터처럼보씩"
                     "라되됐짐져려봄봤봐줌준둠둔씀쓴냄낸으워줬자")
@@ -186,7 +194,7 @@ def _sino(word: str) -> int | None:
 # ---------- ③ 검사 ----------
 
 def check_line(before: str, after: str, original: str) -> str | None:
-    """걸린 검사 이름 (shape, leftover, marks, latin, quote, words, numbers, length). 통과하면 None.
+    """걸린 검사 이름 (shape, leftover, marks, latin, quote, words, numbers, reported, length). 통과하면 None.
     before 는 ① 의 글, after 는 다듬은 글, original 은 ① 전 글 (「」 안 글을 찾는 데 쓴다)."""
     if not after.strip() or "\n" in after.strip():
         return "shape"
@@ -205,6 +213,8 @@ def check_line(before: str, after: str, original: str) -> str | None:
     kept = {v for b in _BRACKET.findall(after) if b.endswith("?") for v in korean_values(b)}
     if not have <= got | kept or not got <= allowed:
         return "numbers"
+    if _REPORTED.search(after):
+        return "reported"
     if _length(after) < MIN_RATIO * _length(before):
         return "length"
     return None
@@ -237,7 +247,9 @@ def _unmarked_quote(before: str, after: str) -> str | None:
     읽는 사람이 확실한 말로 받아들였다. 수·날짜 인용은 숫자로 바꿔 쓰므로 빼고, 사람 말은 풀어 쓰면 글이 달라지므로 걸리지 않는다."""
     outside = _flat(_BRACKET.sub(" ", after))
     rest = _flat(_QUOTE.sub(" ", before))                # 인용 밖에도 있는 말은 원래 글에 있던 것
-    for q in _QUOTE.findall(before):
+    for quoted in _QUOTE.findall(before):
+        # 「[AWS] 클린」 처럼 교정 표시가 섞인 인용은 표시 밖 글만 본다 (실제 회의: 「」 만 지워 "클린" 이 표시 없이 남음)
+        q = " ".join(_BRACKET.sub(" ", quoted).split())
         letters = _letters(q)
         values = korean_values(q)
         if values and values & digit_values(after):     # 「십 일월 중순에서 말 사이」 → 11월 중순에서 말 사이
@@ -397,6 +409,9 @@ def _hint(problem: str, before: str, after: str | None, original: str = "") -> s
         return f"\"{_changed_word(before, after)}\" 처럼 낱말의 글자를 바꾸거나 빼지 말 것. 바꾸는 것은 말끝, 겉말, 숫자뿐임"
     if problem == "marks":
         return _mark_issue(before, after, original)
+    if problem == "reported":
+        return (f"\"{_REPORTED.search(after).group()}\" 처럼 남의 말을 옮기는 꼴로 쓰지 말고 말한 내용을 사실이나 결과로 바로 쓸 것 "
+                "(모른다고 우려함 → 모름, 주겠다고 함 → 주기로 함). 제안·질문은 \"~하는 것을 제안함\", \"~는지 물음\" 으로 쓸 것")
     return _HINTS[problem]
 
 

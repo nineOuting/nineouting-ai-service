@@ -22,6 +22,11 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+if ROOT not in sys.path:                  # summary 폴더에서 직접 돌리는 도구도 shared 를 불러올 수 있게 한다
+    sys.path.insert(0, ROOT)
+from shared.masking import masked_call  # noqa: E402  (표준 라이브러리만 쓴다)
+
 HEDGE = re.compile(r"STT|불확실|불명확")          # 프롬프트 규칙 4와 같은 말
 RECOVERED_DELAY_MS = 2000                          # recovered 줄은 말소리 끝 약 2초 뒤 도착 (규격 문서)
 
@@ -418,11 +423,14 @@ def _fallback_cooldown_sec():
     return v if 0 <= v < float("inf") else float(FALLBACK_COOLDOWN_SEC)
 
 
+@masked_call
 def call_llm(provider, model, system, user, mock_file=None, task=None):
     """모델을 부른다. LLM_FALLBACK_MODEL 이 설정돼 있고 기본 모델 호출이 예외로 실패하면 폴백 모델로 한 번 더 부른다.
     기본 모델이 실패하면 LLM_FALLBACK_COOLDOWN_SEC(기본 60초) 동안은 기본 모델을 건너뛰고 폴백만 부른다
     (장애 중에 호출마다 제한 시간을 기다리지 않도록). 이후 한 번 다시 기본 모델을 시험한다.
-    검증 실패(근거 번호 오류 등)는 호출 성공이므로 폴백하지 않는다. 로그에는 내용 없이 작업·모델·예외 이름만 남긴다."""
+    검증 실패(근거 번호 오류 등)는 호출 성공이므로 폴백하지 않는다. 로그에는 내용 없이 작업·모델·예외 이름만 남긴다.
+    외부로 나가는 user 글의 개인정보는 @masked_call 이 가리고(shared/masking.py), 돌아온 글에서 되돌린다. 폴백 모델도 같은 가린 글을 받는다.
+    가리다 오류가 나면 모델을 부르지 않고 그대로 던진다(원문을 보내지 않는다). system 은 고정 문구라 가리지 않는다."""
     fb = fallback_target(provider, model)
     if fb is None:
         return _call_once(provider, model, system, user, mock_file, task)
@@ -968,6 +976,76 @@ def _selftest_fallback():
                 os.environ[k] = v
 
 
+def _selftest_masking():
+    """모델로 나가는 user 글의 개인정보를 가리고, 돌아온 글에서 되돌린다. 폴백 모델도 가린 글만 받는다. 가리다 실패하면 부르지 않는다."""
+    global _call_once, FALLBACK_ENABLED
+    from shared import masking
+    real_enabled, real, real_mask = FALLBACK_ENABLED, _call_once, masking.mask
+    saved = {k: os.environ.get(k) for k in ("LLM_PROVIDER", "LLM_MODEL", "LLM_FALLBACK_MODEL", "LLM_FALLBACK_PROVIDER")}
+    seen = []
+
+    def fake(provider, model, system, user, mock_file=None, task=None):
+        seen.append({"model": model, "system": system, "user": user, "task": task, "mock_file": mock_file})
+        if model == "primary" and fake.primary_down:
+            raise ConnectionError("down")
+        return user                              # 받은 글을 그대로 돌려줘 되돌리기를 본다
+    fake.primary_down = False
+    _call_once = fake
+    try:
+        for k in saved:
+            os.environ.pop(k, None)
+        sysmsg = "시스템 규칙 010-0000-0000 이 글은 가리지 않는다"
+        user = "[1] 00:01 제 번호는 010-1234-5678이고 메일은 kim@example.com 이에요\n[2] 00:09 다음 주에 보자"
+        # 1) 나가는 글에는 원래 값이 없고, 돌아온 글은 원래대로다. system 과 task 는 그대로 넘어간다
+        out = call_llm("openai", "m", sysmsg, user, task="agenda_summary")
+        assert out == user, out
+        assert len(seen) == 1
+        sent = seen[0]
+        assert "010-1234-5678" not in sent["user"] and "kim@example.com" not in sent["user"], "원본이 나갔다"
+        assert "<PHONE_1>" in sent["user"] and "<EMAIL_1>" in sent["user"], sent["user"]
+        assert sent["system"] == sysmsg and sent["task"] == "agenda_summary", sent
+        # 2) 개인정보가 없는 글, 줄 머리 시간, STT 불확실 표시는 그대로 나간다
+        seen.clear()
+        plain = "[3] 03:21 ⟨다음⟩ 주 회의는 2026-11-05 에 한다\n[4] 03:30 예산은 1,500,000원이다"
+        assert call_llm("openai", "m", "s", plain) == plain and seen[0]["user"] == plain
+        # 3) mock 공급자와 mock_file 도 같은 길로 지난다
+        seen.clear()
+        call_llm("mock", "m", "s", user, mock_file="x.json")
+        assert "010-1234-5678" not in seen[0]["user"] and seen[0]["mock_file"] == "x.json"
+        # 4) 폴백 모델도 가린 글만 받는다
+        for k, v in {"LLM_PROVIDER": "openai", "LLM_MODEL": "primary", "LLM_FALLBACK_MODEL": "fallback"}.items():
+            os.environ[k] = v
+        FALLBACK_ENABLED = True
+        fake.primary_down = True
+        seen.clear(); _primary_down_until.clear()
+        assert call_llm("openai", "primary", "s", user) == user
+        assert [c["model"] for c in seen] == ["primary", "fallback"], seen
+        assert all("010-1234-5678" not in c["user"] and "<PHONE_1>" in c["user"] for c in seen), seen
+        # 5) 가리다 실패하면 모델을 부르지 않고 오류를 그대로 던진다 (원문을 보내지 않는다)
+        FALLBACK_ENABLED = False
+        fake.primary_down = False
+        seen.clear()
+
+        def broken(text):
+            raise RuntimeError("mask boom")
+        masking.mask = broken
+        try:
+            call_llm("openai", "m", "s", user)
+            raise SystemExit("가리기가 실패했는데 모델을 불렀다")
+        except RuntimeError:
+            pass
+        assert seen == [], "가리기 실패 때 원문이 나갔다"
+    finally:
+        masking.mask = real_mask
+        _call_once, FALLBACK_ENABLED = real, real_enabled
+        _primary_down_until.clear()
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def selftest():
     # 1) 전송 규격: rev가 큰 것만 반영, deleted는 제거, 늦게 온 recovered는 제자리에 정렬
     st = TranscriptStore("t")
@@ -1036,6 +1114,7 @@ def selftest():
         assert unknown_terms(f"그 일을 {w}.", "전혀다른전사") == [], w
     assert unknown_terms("그 일은 컨플루언스에서 했어요.", "전혀다른전사") == ["컨플루언스"], unknown_terms("그 일은 컨플루언스에서 했어요.", "전혀다른전사")
     _selftest_fallback()
+    _selftest_masking()
     # 숫자·날짜·요일을 「」 없이 전사 표기 그대로 쓰는 문체(plain_numbers): 값이 바뀐 것만 잡는다
     pk = [{"start_ms": 0, "end_ms": 1000, "text": "가입 전환율이 18퍼센트까지 떨어졌고 한 달 6만 원 정도예요 목요일에 시작해요",
            "text_marked": "가입 전환율이 18퍼센트까지 떨어졌고 한 달 6만 원 정도예요 목요일에 시작해요"}]

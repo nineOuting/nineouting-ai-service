@@ -1,6 +1,6 @@
 # shared
 
-RAG 답변(`rag/`)과 회의록 초안(`minutes/`)이 같이 쓰는 코드다. 요약 기능(`summary/`, `server/`)은 대상이 아니다.
+RAG 답변(`rag/`)과 회의록 초안(`minutes/`)이 같이 쓰는 코드다. 요약 기능(`summary/`, `server/`)은 `llm.py`·`callback.py` 같은 AI 연결 코드는 쓰지 않지만, 외부로 나가는 글을 가리는 `masking.py` 의 `masked_call` 만은 예외로 쓴다 (`summary/meeting_summary.py` 의 `call_llm`, SCRUM-169).
 
 | 파일 | 하는 일 |
 |---|---|

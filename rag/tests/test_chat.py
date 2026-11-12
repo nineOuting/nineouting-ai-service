@@ -1,4 +1,4 @@
-"""챗봇 시험 (SCRUM-223). 앞부분은 검색을 가짜로 바꿔 DB 없이, 뒷부분은 시험 DB 로 실제 검색까지 돈다. LLM 은 모두 가짜."""
+"""챗봇 시험 (SCRUM-223·224). 앞부분은 검색을 가짜로 바꿔 DB 없이, 뒷부분은 시험 DB 로 실제 검색까지 돈다. LLM 은 모두 가짜."""
 import contextlib
 import logging
 import os
@@ -193,6 +193,59 @@ def test_볼_문서가_없으면_DB도_AI도_부르지_않고_no_result(searched
     assert llm.calls == [] and connection.opened == 0 and searched == []
 
 
+# ---- 진행 중 회의 (SCRUM-224) ----
+
+BOARD = ({"agendaId": 102, "title": "디자인 시안 수정", "status": "DISCUSSING",
+          "decisionPoints": [{"decisionPointId": 9, "status": "DECIDED", "decisionText": "시안은 수요일까지 다시 보기로 함",
+                              "evidenceSeqs": [30]}],
+          "todos": [{"id": "t1", "task": "색상 대비 고치기", "assigneeName": "김하늘", "assigneeStatus": "MATCHED",
+                     "assigneeUserId": 42, "dueText": "수요일까지", "evidenceSeqs": [31]}]},)
+LINES = ({"seq": 30, "startMs": 1_820_000, "endMs": 1_826_500, "text": "시안은 수요일까지 다시 보죠", "kind": None,
+          "lowConfidence": False},
+         {"seq": 31, "startMs": 1_827_000, "text": "네네", "kind": "backchannel"})
+
+
+def live_req(**over):
+    return req(live_agendas=BOARD, recent_lines=LINES, current_agenda_id=102, **over)
+
+
+def test_진행_중_회의가_먼저이고_지난_자료가_뒤(searched):
+    llm = QueueLLM(REWRITTEN, "수요일까지 다시 보기로 했어요 [1]. 지난 회의에선 [4] 였어요.")
+    r = run(llm, live_req())
+    user = llm.calls[1][1]
+    assert user.index("[1] (진행 중 회의 · 지금 진행 중 · 지금 안건, 디자인 시안 수정 안건의 결정)") \
+        < user.index("[2] (진행 중 회의 · 지금 진행 중 · 지금 안건 · 질문한 사용자의 할 일, 디자인 시안 수정 안건의 할 일)") \
+        < user.index("[3] (진행 중 회의 · 지금 진행 중, 30:20)\n시안은 수요일까지 다시 보죠") \
+        < user.index("[4] (회의 1, 결정 사항)")
+    assert "네네" not in user                                       # 맞장구는 뺌
+    assert r["status"] == "answered" and [c["ref"] for c in r["citations"]] == [1, 4]
+    assert r["citations"][0] == {"ref": 1, "sourceType": "live", "docId": None, "title": "진행 중 회의",
+                                 "text": "디자인 시안 수정 / 결정: 시안은 수요일까지 다시 보기로 함",
+                                 "location": {"type": "agenda", "agendaId": 102, "item": "decision", "itemId": 9,
+                                              "evidenceSeqs": [30], "label": "디자인 시안 수정 안건의 결정"}}
+
+
+def test_문서가_없어도_진행_중_회의로_답하고_DB는_열지_않음(searched):
+    llm, connection = QueueLLM("수요일까지예요 [1]."), NoConnection()
+    r = run(llm, live_req(docs=(), history=()), connection)
+    assert r["status"] == "answered" and r["citations"][0]["sourceType"] == "live"
+    assert connection.opened == 0 and searched == []
+
+
+def test_질문한_사람_이름은_있을_때만_넘김(searched):
+    llm = QueueLLM("답 [1].")
+    run(llm, req(history=(), user_name=" 김하늘 "))
+    assert "<질문한 사람>\n김하늘\n</질문한 사람>\n\n<질문>" in llm.calls[0][1]
+    llm = QueueLLM("답 [1].")
+    run(llm, req(history=(), user_name="  "))
+    assert "<질문한 사람>" not in llm.calls[0][1]
+
+
+def test_가짜_AI로_진행_중_회의까지_끝까지(searched):
+    r = run(FakeLLM(), live_req(history=()))
+    assert r["status"] == "answered" and [c["ref"] for c in r["citations"]] == [1, 2, 3, 4, 5]
+
+
 def test_찾은_근거가_없으면_답하기를_부르지_않음(monkeypatch):
     monkeypatch.setattr(chat_mod, "doc_evidence", lambda *a, **k: [])
     llm = QueueLLM(REWRITTEN)
@@ -225,12 +278,14 @@ def test_가짜_AI로_끝까지(searched):
 
 def test_로그에_질문과_대화와_답과_근거_글이_없음(searched, caplog):
     caplog.set_level(logging.DEBUG, logger="rag")
-    run(QueueLLM(REWRITTEN, "비밀스러운 답 [1]."), req(user_name="김하늘"))
+    run(QueueLLM(REWRITTEN, "비밀스러운 답 [1]."), live_req(user_name="김하늘"))
     run(QueueLLM(LLMError("오류"), "번호 없는 답."))
     logged = "\n".join(r.getMessage() for r in caplog.records)
-    for secret in (QUERY, REWRITTEN, "디자인 시안", "박서준", "비밀스러운 답", "번호 없는 답", "근거 원문", "김하늘"):
+    for secret in (QUERY, REWRITTEN, "디자인 시안", "박서준", "비밀스러운 답", "번호 없는 답", "근거 원문", "김하늘",
+                   "수요일", "색상 대비", "네네"):
         assert secret not in logged
     assert "request_id=req-1" in logged and "meeting=310 user=42 history=2" in logged
+    assert "live_board=2 live_lines=1" in logged and "docs_found=2 evidence=5" in logged
     assert "rewrite=ok" in logged and "rewrite=fallback_error" in logged
     assert f"prompt={PROMPTS.chat.version}/{PROMPTS.rewrite.version}" in logged
 
@@ -325,11 +380,12 @@ def test_마감이_지났으면_AI를_부르지_않고_llm_timeout(searched):
 # ---- 지시문·설정 ----
 
 def test_지시문을_읽고_버전이_있음():
-    assert PROMPTS.chat.version == "chat-v3" and NO_ANSWER in PROMPTS.chat.text and "<고친 질문>" in PROMPTS.chat.text
-    assert "올린 날" in PROMPTS.chat.text
-    assert chat_prompts("v1").chat.version == "chat-v1" and chat_prompts("v2").chat.version == "chat-v2"
+    assert PROMPTS.chat.version == "chat-v4" and NO_ANSWER in PROMPTS.chat.text and "<고친 질문>" in PROMPTS.chat.text
+    for word in ("올린 날", "지금 진행 중", "결정 확인 필요", "지금 안건", "질문한 사용자의 할 일", "<질문한 사람>"):
+        assert word in PROMPTS.chat.text
+    assert [chat_prompts(v).chat.version for v in ("v1", "v2", "v3")] == ["chat-v1", "chat-v2", "chat-v3"]
     assert PROMPTS.rewrite.version == "rewrite-v1"
-    assert chat_prompts("chat-v3", "v1") == PROMPTS
+    assert chat_prompts("chat-v4", "v1") == PROMPTS
 
 
 def test_없는_지시문_버전이면_챗봇만_503():
@@ -417,8 +473,8 @@ def app_with(chatter, pool=None):
 
 
 def test_요청_읽기():
-    r = parse_chat(body(userName="김하늘", currentAgendaId=102, liveAgendas=[{"agendaId": 102}],
-                        recentLines=[{"seq": 1, "text": "안녕하세요"}], 모르는칸=1))
+    r = parse_chat(body(userName="김하늘", currentAgendaId=102, liveAgendas=[{"agendaId": 102, "title": "안건"}],
+                        recentLines=[{"seq": 1, "startMs": 0, "text": "안녕하세요"}], 모르는칸=1))
     assert (r.workspace_id, r.meeting_id, r.user_id, r.docs) == (WS, 310, 42, (("minutes", 1),))
     assert r.history == HISTORY and r.user_name == "김하늘" and r.current_agenda_id == 102
     assert len(r.live_agendas) == 1 and len(r.recent_lines) == 1
@@ -441,13 +497,39 @@ def test_선택_필드는_없거나_null이어도_됨():
     ({"history": {}}, "history"), ({"history": [{"role": "user", "text": "가"}] * 21}, "20"),
     ({"history": [{"role": "system", "text": "가"}]}, "role"), ({"history": [{"role": "user"}]}, "text"),
     ({"history": [{"role": "user", "text": "가" * 4001}]}, "4000"),
-    ({"liveAgendas": [{}] * 51}, "50"), ({"liveAgendas": ["안건"]}, "liveAgendas"),
-    ({"recentLines": [{"seq": 1, "text": "가"}] * 501}, "500"), ({"recentLines": [{"text": "가"}]}, "seq"),
-    ({"recentLines": [{"seq": 1, "text": "가" * 30001}]}, "30000"),
+    ({"liveAgendas": [{"agendaId": 1, "title": "가"}] * 51}, "50"), ({"liveAgendas": ["안건"]}, "liveAgendas"),
+    ({"recentLines": [{"seq": 1, "startMs": 0, "text": "가"}] * 501}, "500"), ({"recentLines": [{"text": "가"}]}, "seq"),
+    ({"recentLines": [{"seq": 1, "startMs": 0, "text": "가" * 30001}]}, "30000"),
+    ({"recentLines": [{"seq": 1, "text": "가"}]}, "startMs"),
+    ({"recentLines": [{"seq": 1, "startMs": 0, "endMs": "1", "text": "가"}]}, "endMs"),
+    ({"recentLines": [{"seq": 1, "startMs": 0, "text": "가", "kind": 1}]}, "kind"),
+    ({"recentLines": [{"seq": 1, "startMs": 0, "text": "가", "lowConfidence": "no"}]}, "lowConfidence"),
+    ({"liveAgendas": [{"title": "가"}]}, "agendaId"), ({"liveAgendas": [{"agendaId": True, "title": "가"}]}, "agendaId"),
+    ({"liveAgendas": [{"agendaId": 1}]}, "title"), ({"liveAgendas": [{"agendaId": 1, "title": "가", "status": 3}]}, "status"),
+    ({"liveAgendas": [{"agendaId": 1, "title": "가", "todos": {}}]}, "todos 는 배열"),
+    ({"liveAgendas": [{"agendaId": 1, "title": "가", "decisionPoints": [{"decisionPointId": 1}]}]}, "decisionText"),
+    ({"liveAgendas": [{"agendaId": 1, "title": "가", "summary": [{"text": "가"}]}]}, "summary[0].id"),
+    ({"liveAgendas": [{"agendaId": 1, "title": "가", "opinions": [{"id": "o", "text": "가", "kind": 1}]}]}, "kind"),
+    ({"liveAgendas": [{"agendaId": 1, "title": "가", "opinions": [{"id": "o", "text": "가", "evidenceSeqs": ["1"]}]}]},
+     "evidenceSeqs"),
+    ({"liveAgendas": [{"agendaId": 1, "title": "가", "todos": [{"id": "t", "task": "가", "assigneeUserId": 1.5}]}]},
+     "assigneeUserId"),
+    ({"liveAgendas": [{"agendaId": 1, "title": "가", "todos": [{"id": "t", "task": "가", "dueText": 3}]}]}, "dueText"),
+    ({"liveAgendas": [{"agendaId": 1, "title": "가", "todos": [{"id": "t", "task": "가", "unclear": "no"}]}]}, "unclear"),
 ])
 def test_API_입력이_틀리면_400(over, word):
     r = app_with(Chatter(lambda: object(), FakeLLM())).post(URL, json=body(**over))
     assert r.status_code == 400 and r.json()["error"] == "INVALID_INPUT" and word in r.json()["detail"]
+
+
+def test_API_명세_예시_요청을_받음():
+    import json
+    import re
+    from pathlib import Path
+    spec = (Path(__file__).parents[2] / "docs/api/rag-chat-contract.md").read_text(encoding="utf-8")
+    example = json.loads(re.search(r"## 3\. 요청\s+```json\n(.*?)```", spec, re.S).group(1))
+    r = parse_chat(example)
+    assert len(r.live_agendas) == 1 and len(r.recent_lines) == 1
 
 
 def test_API_빈_docs는_DB를_열지_않고_no_result():

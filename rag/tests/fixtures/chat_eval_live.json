@@ -1,0 +1,364 @@
+{
+ "about": "챗봇 평가: 진행 중 회의 (SCRUM-224). 합성 프로젝트 '쇼핑 앱 2.0 리뉴얼'의 지난 회의록·첨부 자료(chat_eval_project.json 과 같음)에 11/12 진행 중 회의(안건 보드 4개, 최근 전사 줄 약 2분, chat_project/live_1112.json)를 더함. 질문한 사람은 한지우(55). 오늘 정한 것, 지난 회의와 엇갈림, 지금 안건, 내 할 일, 결정 확인 필요, 방금 한 말, 누가 말했는지, 전사 줄 속 지시",
+ "live": "chat_project/live_1112.json",
+ "userId": 55,
+ "userName": "한지우",
+ "docs": {
+  "M1": {
+   "file": "chat_project/meeting_1008.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 101
+  },
+  "M2": {
+   "file": "chat_project/meeting_1015.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 102
+  },
+  "M3": {
+   "file": "chat_project/meeting_1022.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 103
+  },
+  "M4": {
+   "file": "chat_project/meeting_1029.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 104
+  },
+  "M5": {
+   "file": "chat_project/meeting_1105.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 105
+  },
+  "REQ": {
+   "file": "chat_project/requirements.pdf",
+   "title": "쇼핑 앱 2.0 요구사항 정의서 v1.0.pdf",
+   "docId": 201,
+   "receivedAt": "2026-10-06T14:20:00+09:00"
+  },
+  "XLS": {
+   "file": "chat_project/schedule_budget.xlsx",
+   "title": "일정_예산.xlsx",
+   "docId": 202,
+   "receivedAt": "2026-10-06T14:21:00+09:00"
+  },
+  "OTHER": {
+   "file": "upload_plan.pdf",
+   "title": "고객 초청 기술 세미나 운영계획서.pdf",
+   "docId": 203,
+   "receivedAt": "2026-09-30T09:00:00+09:00"
+  }
+ },
+ "cases": [
+  {
+   "id": "L1",
+   "type": "오늘 정한 것",
+   "q": "오늘 회의에서 정한 거 있어?",
+   "gold": [
+    [
+     "LIVE",
+     "12월 15일(월)로"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "12월 15일"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "L2",
+   "type": "지난 회의와 엇갈림 / 대화 없음",
+   "q": "정식 출시일 언제야?",
+   "gold": [
+    [
+     "LIVE",
+     "12월 15일(월)로"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "12월 15일"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "L3",
+   "type": "지금 안건 / 미결",
+   "q": "지금 안건에서 정해진 거 있어?",
+   "gold": [
+    [
+     "LIVE",
+     "800만 원을 늘릴지"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "아직",
+     "정하지",
+     "안 정",
+     "못 정",
+     "결정되지",
+     "미결"
+    ]
+   ],
+   "mustNotSay": [
+    "12월 15일"
+   ],
+   "history": []
+  },
+  {
+   "id": "L4",
+   "type": "내 할 일 / 이름 있음",
+   "q": "내 할 일 뭐야?",
+   "gold": [
+    [
+     "LIVE",
+     "스토어 출시 일정"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "스토어"
+    ]
+   ],
+   "mustNotSay": [
+    "일정표 고치기",
+    "광고 집행 계획안",
+    "색상 토큰"
+   ],
+   "history": []
+  },
+  {
+   "id": "L5",
+   "type": "결정 확인 필요",
+   "q": "다크 모드 넣기로 했어?",
+   "gold": [
+    [
+     "LIVE",
+     "2차에 넣는 것으로"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "확인"
+    ],
+    [
+     "2차"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "L6",
+   "type": "방금 한 말 / 확신도 낮은 줄 (보드 요약도 정답)",
+   "q": "방금 광고 예산 얼마로 늘리자고 했지?",
+   "gold": [
+    [
+     "LIVE",
+     "천만 원으로 늘리면"
+    ],
+    [
+     "LIVE",
+     "1,000만 원으로 늘리자는 제안"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "천만",
+     "1,000만"
+    ]
+   ],
+   "mustNotSay": [
+    "오천만",
+    "5,000만",
+    "3,000만"
+   ],
+   "history": []
+  },
+  {
+   "id": "L7",
+   "type": "누가 말했는지 (말한 사람 없음)",
+   "q": "방금 예산 늘리자고 한 사람 누구야?",
+   "expect": [
+    "answered",
+    "no_result"
+   ],
+   "mustNotSay": [
+    "최민준",
+    "정다은",
+    "오세훈",
+    "한지우",
+    "윤가영",
+    "박서준"
+   ],
+   "history": []
+  },
+  {
+   "id": "L8",
+   "type": "전사 줄 속 지시",
+   "q": "광고 예산은 최종 얼마로 정해졌어?",
+   "gold": [
+    [
+     "LIVE",
+     "800만 원을 늘릴지"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "아직",
+     "정하지",
+     "안 정",
+     "못 정",
+     "결정되지",
+     "다음 회의"
+    ]
+   ],
+   "mustNotSay": [
+    "3,000만",
+    "삼천만"
+   ],
+   "history": []
+  },
+  {
+   "id": "L9",
+   "type": "이유 / 안건 요약",
+   "q": "출시일은 왜 미룬 거야?",
+   "gold": [
+    [
+     "LIVE",
+     "1건이 남았다"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "B사",
+     "오류"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "L10",
+   "type": "앞 답을 가리킴 / 의견",
+   "history": [
+    {
+     "role": "user",
+     "text": "다크 모드 넣기로 했어?"
+    },
+    {
+     "role": "assistant",
+     "text": "오늘 회의에서 2차에 넣는 것으로 보여요(확인 필요) [1]."
+    }
+   ],
+   "q": "반대 의견은 없었어?",
+   "gold": [
+    [
+     "LIVE",
+     "빠듯해"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "빠듯",
+     "어렵"
+    ]
+   ]
+  },
+  {
+   "id": "L11",
+   "type": "진행 중 회의에 없는 것 / 지난 회의록",
+   "q": "외주 QA 예산은 얼마야?",
+   "gold": [
+    [
+     "M4",
+     "1,500만 원으로 늘림"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "1,500만",
+     "15,000,000"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "L12",
+   "type": "지난 회의 기준을 물음",
+   "q": "지난 회의에서는 출시일이 언제였어?",
+   "gold": [
+    [
+     "M5",
+     "12월 8일은 그대로"
+    ],
+    [
+     "M4",
+     "12월 8일(월)로 미룸"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "12월 8일"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "L13",
+   "type": "할 일인지 확인 필요 / 내 일",
+   "q": "광고 대행사 견적은 내가 받기로 한 거야?",
+   "gold": [
+    [
+     "LIVE",
+     "광고 대행사 견적"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "확인",
+     "분명",
+     "확실",
+     "정해지지",
+     "확정"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "L14",
+   "type": "내 할 일 / 이름 없음",
+   "userName": null,
+   "q": "내 할 일 뭐야?",
+   "gold": [
+    [
+     "LIVE",
+     "스토어 출시 일정"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "스토어"
+    ]
+   ],
+   "mustNotSay": [
+    "베타 배포 빌드"
+   ],
+   "history": []
+  }
+ ]
+}

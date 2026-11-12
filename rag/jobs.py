@@ -29,6 +29,7 @@ class IngestRequest:
 @dataclass(frozen=True)
 class Job:
     id: int
+    source_type: str             # upload / minutes. 문서는 (source_type, doc_id) 짝으로 구분한다
     doc_id: int
     doc_version: str
     workspace_id: int
@@ -49,10 +50,12 @@ def submit(conn, req: IngestRequest, allowed_hosts=None) -> RegisterResult:
         result = register(conn, req.doc)
         if result.enqueue:
             # 아직 꺼내지 않은 옛 작업은 어차피 버려지므로 지운다
-            conn.execute("DELETE FROM rag_jobs WHERE doc_id = %s AND status = 'queued'", (req.doc.doc_id,))
-            conn.execute("INSERT INTO rag_jobs (doc_id, doc_version, workspace_id, payload, request_id) "
-                         "VALUES (%s, %s, %s, %s, %s)",
-                         (req.doc.doc_id, req.doc.doc_version, req.doc.workspace_id, Jsonb(payload), req.request_id))
+            conn.execute("DELETE FROM rag_jobs WHERE source_type = %s AND doc_id = %s AND status = 'queued'",
+                         (req.doc.source_type, req.doc.doc_id))
+            conn.execute("INSERT INTO rag_jobs (source_type, doc_id, doc_version, workspace_id, payload, request_id) "
+                         "VALUES (%s, %s, %s, %s, %s, %s)",
+                         (req.doc.source_type, req.doc.doc_id, req.doc.doc_version, req.doc.workspace_id,
+                          Jsonb(payload), req.request_id))
     return result
 
 
@@ -64,7 +67,7 @@ WHERE id = (SELECT id FROM rag_jobs
             ORDER BY id
             FOR UPDATE SKIP LOCKED
             LIMIT 1)
-RETURNING id, doc_id, doc_version, workspace_id, payload, attempts, request_id
+RETURNING id, source_type, doc_id, doc_version, workspace_id, payload, attempts, request_id
 """
 
 

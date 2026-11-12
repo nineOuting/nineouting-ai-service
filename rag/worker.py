@@ -61,21 +61,21 @@ class Worker:
         if job is None:
             return False
         started = time.monotonic()
-        tag = f"job={job.id} doc={job.doc_id} version={job.doc_version} attempt={job.attempts} request_id={job.request_id}"
+        tag = f"job={job.id} doc={job.source_type}/{job.doc_id} version={job.doc_version} attempt={job.attempts} request_id={job.request_id}"
 
         if job.attempts > self.max_attempts:          # 멈춘 작업을 다시 잡다 보면 횟수를 넘을 수 있다
             self._fail(job, INTERNAL_ERROR, "시도 횟수 초과", tag)
             return True
-        if not is_current(self.conn, job.doc_id, job.doc_version):
+        if not is_current(self.conn, job.source_type, job.doc_id, job.doc_version):
             finish(self.conn, job.id, "done", "stale")
             log.info("결과 버림(처리 전) %s", tag)
             return True
 
         try:
-            mark_processing(self.conn, job.doc_id, job.doc_version)
+            mark_processing(self.conn, job.source_type, job.doc_id, job.doc_version)
             chunks, vectors = self._prepare(job)
             tokens = sum(c.token_count for c in chunks)
-            count = store(self.conn, job.doc_id, job.doc_version, chunks, vectors, self.embedder.model_id)
+            count = store(self.conn, job.source_type, job.doc_id, job.doc_version, chunks, vectors, self.embedder.model_id)
         except StaleJob:
             finish(self.conn, job.id, "done", "stale")
             log.info("결과 버림(저장 시) %s", tag)
@@ -95,7 +95,7 @@ class Worker:
         return True
 
     def _prepare(self, job):
-        source = job.payload.get("sourceType")
+        source = job.source_type
         if source == "minutes":
             pieces = load_minutes(job.payload.get("minutes")).pieces
         elif source == "upload":
@@ -116,7 +116,7 @@ class Worker:
 
     def _fail(self, job, code, detail, tag):
         last_error = f"{code}: {detail}" if detail else code
-        if not mark_failed(self.conn, job.doc_id, job.doc_version, code):
+        if not mark_failed(self.conn, job.source_type, job.doc_id, job.doc_version, code):
             finish(self.conn, job.id, "done", "stale")    # 그 사이 지워졌거나 새 버전이 왔다
             log.info("결과 버림(실패 기록 시) %s", tag)
             return
@@ -125,9 +125,9 @@ class Worker:
         log.warning("처리 실패 %s code=%s", tag, code)
 
     def _notify(self, job, status, error_code, chunk_count):
-        body = {"docId": job.doc_id, "docVersion": job.doc_version, "status": status,
+        body = {"sourceType": job.source_type, "docId": job.doc_id, "docVersion": job.doc_version, "status": status,
                 "errorCode": error_code, "chunkCount": chunk_count}
-        return self.callback.send(job.payload.get("callbackUrl"), body, job.request_id, ref=f"doc={job.doc_id}")
+        return self.callback.send(job.payload.get("callbackUrl"), body, job.request_id, ref=f"doc={job.source_type}/{job.doc_id}")
 
     def run(self, stop: threading.Event, poll_s=POLL_S, cleanup_every_s=CLEANUP_EVERY_S):
         """stop 이 켜질 때까지 반복한다. 처리 중인 작업은 끝까지 마친 뒤 멈춘다."""

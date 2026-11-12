@@ -73,7 +73,7 @@ def ingest(server, args, doc_id, title, minutes, callback_url):
     if code != 202:
         sys.exit(f"  회의록 넣기 실패: {code} {body}")
     while time.monotonic() - t0 < args.wait:
-        code, st = call(server, "GET", f"{PREFIX}/documents/{doc_id}")
+        code, st = call(server, "GET", f"{PREFIX}/documents/minutes/{doc_id}")
         if code == 200 and st["docVersion"] == version and st["status"] in ("ready", "failed"):
             if st["status"] == "failed":
                 sys.exit(f"  처리 실패: errorCode={st['errorCode']}")
@@ -97,10 +97,10 @@ class Searcher:
         self.conn = connect(url)
         self.embedder = E5Embedder(threads=2)
 
-    def show(self, workspace, doc_ids, query, top_k, cited):
+    def show(self, workspace, docs, query, top_k, cited):
         from .search import search
 
-        hits = search(self.conn, self.embedder, workspace, doc_ids, query, top_k)
+        hits = search(self.conn, self.embedder, workspace, [(d["sourceType"], d["docId"]) for d in docs], query, top_k)
         print(f"  ─ 검색 결과 (상위 {len(hits)}개, ✔ = 답에 쓰임, 숫자는 유사도)")
         for i, h in enumerate(hits, 1):
             mark = "✔" if i in cited else " "
@@ -140,6 +140,7 @@ def main(argv=None):
         p.error("--title 이 --file 보다 많음")
     docs = [(args.doc_id + i, (args.title[i] if i < len(args.title) else f.stem), f) for i, f in enumerate(files)]
     doc_ids = [d for d, _, _ in docs]
+    doc_refs = [{"sourceType": "minutes", "docId": d} for d in doc_ids]
     server = args.server.rstrip("/")
 
     print("[1/3] 서버 확인 ...", end=" ", flush=True)
@@ -176,13 +177,13 @@ def main(argv=None):
                 break
             t0 = time.monotonic()
             code, result = call(server, "POST", f"{PREFIX}/answer",
-                                {"workspaceId": args.workspace, "docIds": doc_ids, "query": q, "topK": args.top_k})
+                                {"workspaceId": args.workspace, "docs": doc_refs, "query": q, "topK": args.top_k})
             if code != 200:
                 print(f"  ─ 오류 {code}: {result}\n")
                 continue
             show(result, time.monotonic() - t0)
             if searcher:
-                searcher.show(args.workspace, doc_ids, q, args.top_k, {c["ref"] for c in result.get("citations", [])})
+                searcher.show(args.workspace, doc_refs, q, args.top_k, {c["ref"] for c in result.get("citations", [])})
             print()
     finally:
         cb.shutdown()

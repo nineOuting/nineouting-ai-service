@@ -1,8 +1,8 @@
 """RAG 내부 API (백엔드 → AI 서버). 원본 명세: 노션 "RAG 인터페이스 명세".
 
-  POST   {prefix}/documents                 문서 넣기 → 202 {docId, docVersion, status: "accepted" | "ignored"}
-  GET    {prefix}/documents/{docId}         상태 조회 → 200 / 404
-  DELETE {prefix}/documents/{docId}         문서 지우기 → 204 (없어도)
+  POST   {prefix}/documents                          문서 넣기 → 202 {sourceType, docId, docVersion, status}
+  GET    {prefix}/documents/{sourceType}/{docId}     상태 조회 → 200 / 404
+  DELETE {prefix}/documents/{sourceType}/{docId}     문서 지우기 → 204 (없어도)
   DELETE {prefix}/workspaces/{workspaceId}  워크스페이스 지우기 → 204
   POST   {prefix}/answer                    답변 → 200 {status, answer, citations, errorCode}
 
@@ -12,6 +12,8 @@
 저장된 것보다 낮은 회의록 버전은 처리하지 않고 status "ignored" 로 답한다 (콜백 없음). 회의록 초안 명세 4.3.
 명세에 없어서 AI 쪽이 정한 것: 입력 오류 400 INVALID_INPUT, 다른 워크스페이스로 온 같은 docId 409 CONFLICT,
 DB 를 쓸 수 없음 503 NOT_READY. 오류 형식은 server/main.py 와 같다.
+문서는 (sourceType, docId) 짝으로 구분한다 (회의 중 챗봇 명세 v0.2 9장). 회의록 200번과 첨부 자료 200번은 다른 문서다.
+옛 모양(docIds, 번호만 있는 주소)은 받지 않는다. 번호만으로는 종류를 알 수 없다.
 답변은 answered·no_result·failed 모두 200 이고 본문의 status 로 구분한다. ID 는 명세 문구와 달리 모두 정수다.
 
 본문은 dict 로 받아 직접 검사한다 (server/ 쪽과 같은 방식, 앱의 검사 오류 처리기에 기대지 않으려고).
@@ -38,7 +40,7 @@ MAX_REQUEST_ID = 200
 MAX_DOC_VERSION = 200
 MAX_TITLE = 500
 MAX_QUERY = 2000
-MAX_DOC_IDS = 1000
+MAX_DOCS = 1000                      # 답변·챗봇 요청의 docs (명세 v0.2 3.1)
 DEFAULT_TOP_K = 5
 MAX_TOP_K = 20                       # search.MAX_TOP_K 와 같다
 SOURCE_TYPES = ("minutes", "upload")  # upload 는 허용 저장소(RAG_UPLOAD_ALLOWED_HOSTS)가 있을 때만 받는다
@@ -77,15 +79,21 @@ INGEST_SCHEMA = {
         "callbackUrl": {"type": "string", "description": "처리가 끝나면 AI 서버가 POST 할 백엔드 주소. 허용한 호스트만"},
     },
 }
-STATUS_EXAMPLE = {"docId": 200, "docVersion": "2", "status": "ready", "errorCode": None, "chunkCount": 4}
-ANSWER_EXAMPLE = {"workspaceId": 1, "docIds": [200, 123], "query": "1분기 예산은 얼마로 하기로 했어?", "topK": 5}
+STATUS_EXAMPLE = {"sourceType": "minutes", "docId": 200, "docVersion": "2", "status": "ready", "errorCode": None, "chunkCount": 4}
+ANSWER_EXAMPLE = {"workspaceId": 1, "docs": [{"sourceType": "minutes", "docId": 200},
+                                             {"sourceType": "upload", "docId": 200}],
+                  "query": "1분기 예산은 얼마로 하기로 했어?", "topK": 5}
+DOCS_SCHEMA = {"type": "array", "maxItems": MAX_DOCS,
+               "description": "볼 수 있는 문서. (sourceType, docId) 짝으로 구분하고 같은 짝은 하나로 본다. 비면 문서 검색을 하지 않는다",
+               "items": {"type": "object", "required": ["sourceType", "docId"], "properties": {
+                   "sourceType": {"type": "string", "enum": ["minutes", "upload"]},
+                   "docId": {"type": "integer", "minimum": 1}}}}
 ANSWER_SCHEMA = {
     "type": "object",
-    "required": ["workspaceId", "docIds", "query"],
+    "required": ["workspaceId", "docs", "query"],
     "properties": {
         "workspaceId": {"type": "integer", "minimum": 1, "description": "소속 워크스페이스"},
-        "docIds": {"type": "array", "items": {"type": "integer", "minimum": 1}, "maxItems": MAX_DOC_IDS,
-                   "description": "이 사용자가 볼 수 있는 문서 목록. 비면 no_result"},
+        "docs": DOCS_SCHEMA,
         "query": {"type": "string", "maxLength": MAX_QUERY, "description": "사용자 질문"},
         "topK": {"type": "integer", "minimum": 1, "maximum": MAX_TOP_K, "default": DEFAULT_TOP_K,
                  "description": "근거로 찾을 조각 수"},
@@ -109,6 +117,7 @@ def _error_doc(description, error, detail):
 ERR_400 = _error_doc("입력 오류", "INVALID_INPUT", "docId 는 양의 정수여야 함")
 ERR_503 = _error_doc("DB 를 쓸 수 없음", "NOT_READY", "DB 를 쓸 수 없음")
 DOC_ID = Path(description="문서 번호 (양의 정수)", examples=["200"])
+SOURCE_TYPE = Path(description="문서 종류: minutes(회의록) / upload(첨부 자료)", examples=["minutes"])
 WORKSPACE_ID = Path(description="워크스페이스 번호 (양의 정수)", examples=["1"])
 
 
@@ -161,22 +170,35 @@ def parse_ingest(body, request_id=None, upload: UploadSettings | None = None) ->
 
 
 def parse_answer(body):
-    """답변 요청 → (workspaceId, docIds, query, topK). history 등 다른 필드는 무시한다."""
+    """답변 요청 → (workspaceId, docs, query, topK). docs 는 (sourceType, docId) 짝 목록. history 등 다른 필드는 무시한다."""
     if not isinstance(body, dict):
         raise InvalidInput("본문이 JSON 객체가 아님")
     workspace_id = _positive_int(body, "workspaceId")
-    doc_ids = body.get("docIds")
-    if not isinstance(doc_ids, list):
-        raise InvalidInput("docIds 는 배열이어야 함")
-    if len(doc_ids) > MAX_DOC_IDS:
-        raise InvalidInput(f"docIds 는 {MAX_DOC_IDS}개 이하여야 함")
-    if any(not _is_positive_int(d) for d in doc_ids):
-        raise InvalidInput("docIds 의 값은 양의 정수여야 함")
+    docs = parse_docs(body)
     query = _text(body, "query", MAX_QUERY)
     top_k = body.get("topK", DEFAULT_TOP_K)
     if not _is_positive_int(top_k) or top_k > MAX_TOP_K:
         raise InvalidInput(f"topK 는 1~{MAX_TOP_K} 정수여야 함")
-    return workspace_id, doc_ids, query, top_k
+    return workspace_id, docs, query, top_k
+
+
+def parse_docs(body) -> list[tuple[str, int]]:
+    """docs: [{sourceType, docId}] → 겹치지 않는 (sourceType, docId) 짝 목록 (받은 순서). 옛 docIds 는 받지 않는다."""
+    docs = body.get("docs")
+    if docs is None and "docIds" in body:
+        raise InvalidInput("docIds 는 더 받지 않음. docs 에 {sourceType, docId} 짝으로 보낸다 (챗봇 명세 v0.2 9장)")
+    if not isinstance(docs, list):
+        raise InvalidInput("docs 는 배열이어야 함")
+    if len(docs) > MAX_DOCS:
+        raise InvalidInput(f"docs 는 {MAX_DOCS}개 이하여야 함")
+    pairs = []
+    for i, d in enumerate(docs):
+        if not isinstance(d, dict) or d.get("sourceType") not in SOURCE_TYPES:
+            raise InvalidInput(f"docs[{i}].sourceType 은 {' 또는 '.join(SOURCE_TYPES)} 이어야 함")
+        if not _is_positive_int(d.get("docId")):
+            raise InvalidInput(f"docs[{i}].docId 는 양의 정수여야 함")
+        pairs.append((d["sourceType"], d["docId"]))
+    return list(dict.fromkeys(pairs))
 
 
 def _is_positive_int(v):
@@ -197,6 +219,12 @@ def _text(body, key, max_len):
     if len(v) > max_len:
         raise InvalidInput(f"{key} 는 {max_len}자 이하여야 함")
     return v
+
+
+def _path_source(raw):
+    if raw not in SOURCE_TYPES:
+        raise InvalidInput(f"sourceType 은 {' 또는 '.join(SOURCE_TYPES)} 이어야 함")
+    return raw
 
 
 def _path_id(raw, name):
@@ -228,7 +256,8 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
             "schema": INGEST_SCHEMA, "example": INGEST_EXAMPLE}}}},
         responses={202: {"description": "접수됨 (accepted). 저장된 것보다 낮은 회의록 버전이면 처리하지 않음 (ignored, 콜백 없음)",
                          "content": {"application/json": {
-                             "example": {"docId": 200, "docVersion": "2", "status": "accepted"}}}},
+                             "example": {"sourceType": "minutes", "docId": 200, "docVersion": "2",
+                                         "status": "accepted"}}}},
                    400: ERR_400,
                    409: _error_doc("같은 docId 가 다른 워크스페이스로 옴", "CONFLICT", "docId 200 의 workspaceId 가 기존과 다름"),
                    503: ERR_503},
@@ -248,48 +277,49 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
         except db_down as e:
             log.error("문서 넣기 DB 오류 request_id=%s error=%s", rid, type(e).__name__)
             return not_ready("DB 를 쓸 수 없음")
-        log.info("문서 넣기 doc=%s version=%s status=%s enqueue=%s ignored=%s request_id=%s",
-                 req.doc.doc_id, req.doc.doc_version, result.status, result.enqueue, result.ignored, rid)
-        return JSONResponse(status_code=202, content={"docId": req.doc.doc_id, "docVersion": req.doc.doc_version,
+        log.info("문서 넣기 doc=%s/%s version=%s status=%s enqueue=%s ignored=%s request_id=%s",
+                 req.doc.source_type, req.doc.doc_id, req.doc.doc_version, result.status, result.enqueue, result.ignored, rid)
+        return JSONResponse(status_code=202, content={"sourceType": req.doc.source_type, "docId": req.doc.doc_id,
+                                                      "docVersion": req.doc.doc_version,
                                                       "status": "ignored" if result.ignored else "accepted"})
 
     @router.get(
-        "/documents/{doc_id}", summary="상태 조회",
+        "/documents/{source_type}/{doc_id}", summary="상태 조회",
         description="status: accepted(접수됨) / processing(처리 중) / ready(검색 가능) / failed(실패, errorCode 참고)",
         responses={200: {"description": "문서 상태", "content": {"application/json": {"example": STATUS_EXAMPLE}}},
                    400: ERR_400,
                    404: _error_doc("넣은 적 없는 문서", "NOT_FOUND", "넣은 적 없는 문서"),
                    503: ERR_503},
     )
-    def get_document(doc_id: str = DOC_ID):
+    def get_document(source_type: str = SOURCE_TYPE, doc_id: str = DOC_ID):
         try:
-            did = _path_id(doc_id, "docId")
+            source, did = _path_source(source_type), _path_id(doc_id, "docId")
             with pool.connection() as conn:
-                status = get_status(conn, did)
+                status = get_status(conn, source, did)
         except InvalidInput as e:
             return invalid(str(e))
         except db_down as e:
-            log.error("상태 조회 DB 오류 doc=%s error=%s", doc_id, type(e).__name__)
+            log.error("상태 조회 DB 오류 doc=%s/%s error=%s", source_type, doc_id, type(e).__name__)
             return not_ready("DB 를 쓸 수 없음")
         if status is None:
             return JSONResponse(status_code=404, content={"error": "NOT_FOUND", "detail": "넣은 적 없는 문서"})
         status["status"] = API_STATUS.get(status["status"], status["status"])
         return status
 
-    @router.delete("/documents/{doc_id}", summary="문서 지우기", status_code=204,
+    @router.delete("/documents/{source_type}/{doc_id}", summary="문서 지우기", status_code=204,
                    description="문서와 저장한 조각, 대기 중인 작업을 지운다. 없는 문서여도 204.",
                    responses={400: ERR_400, 503: ERR_503})
-    def remove_document(request: Request, doc_id: str = DOC_ID):
+    def remove_document(request: Request, source_type: str = SOURCE_TYPE, doc_id: str = DOC_ID):
         try:
-            did = _path_id(doc_id, "docId")
+            source, did = _path_source(source_type), _path_id(doc_id, "docId")
             with pool.connection() as conn:
-                delete_document(conn, did)
+                delete_document(conn, source, did)
         except InvalidInput as e:
             return invalid(str(e))
         except db_down as e:
-            log.error("문서 지우기 DB 오류 doc=%s error=%s", doc_id, type(e).__name__)
+            log.error("문서 지우기 DB 오류 doc=%s/%s error=%s", source_type, doc_id, type(e).__name__)
             return not_ready("DB 를 쓸 수 없음")
-        log.info("문서 지우기 doc=%s request_id=%s", did, request_id_of(request))
+        log.info("문서 지우기 doc=%s/%s request_id=%s", source, did, request_id_of(request))
         return Response(status_code=204)
 
     @router.delete("/workspaces/{workspace_id}", summary="워크스페이스 지우기", status_code=204,
@@ -310,7 +340,7 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
 
     @router.post(
         "/answer", summary="답변",
-        description="볼 수 있는 문서(docIds) 안에서 질문과 가까운 조각을 찾아, LLM 이 그 조각만 근거로 답한다. "
+        description="볼 수 있는 문서(docs, {sourceType, docId} 짝) 안에서 질문과 가까운 조각을 찾아, LLM 이 그 조각만 근거로 답한다. "
                     "답의 문장마다 근거 번호 [n] 이 붙고, citations 에 그 번호의 원문과 위치가 담긴다. "
                     "status: answered(답함) / no_result(근거 없음, LLM 을 부르지 않음) / failed(errorCode 참고). "
                     "세 경우 모두 200 이다. 지금 LLM 은 시험용 가짜라 답 앞에 [시험용 답변] 이 붙는다.",
@@ -318,13 +348,13 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
             "schema": ANSWER_SCHEMA, "example": ANSWER_EXAMPLE}}}},
         responses={200: {"description": "답변 결과 (status 로 구분)", "content": {"application/json": {
                        "example": ANSWER_RESULT_EXAMPLE}}},
-                   400: _error_doc("입력 오류", "INVALID_INPUT", "docIds 의 값은 양의 정수여야 함"),
+                   400: _error_doc("입력 오류", "INVALID_INPUT", "docs[0].docId 는 양의 정수여야 함"),
                    503: _error_doc("DB·임베딩 모델·LLM 설정이 준비되지 않음", "NOT_READY", "DB 를 쓸 수 없음")},
     )
     def post_answer(request: Request, body: Any = Body(...)):
         rid = request_id_of(request)
         try:
-            workspace_id, doc_ids, query, top_k = parse_answer(body)
+            workspace_id, docs, query, top_k = parse_answer(body)
         except InvalidInput as e:
             log.info("답변 거부 request_id=%s reason=%s", rid, e)
             return invalid(str(e))
@@ -333,7 +363,7 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
             log.error("답변 준비 안 됨 request_id=%s reason=%s", rid, reason)
             return not_ready(reason)
         try:
-            return answerer.run(pool.connection, workspace_id, doc_ids, query, top_k, request_id=rid)
+            return answerer.run(pool.connection, workspace_id, docs, query, top_k, request_id=rid)
         except db_down as e:
             log.error("답변 DB 오류 request_id=%s error=%s", rid, type(e).__name__)
             return not_ready("DB 를 쓸 수 없음")

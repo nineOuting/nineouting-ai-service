@@ -1,6 +1,6 @@
 """답변: 검색 → LLM → 근거 번호 검사. 원본 명세: 노션 "RAG 인터페이스 명세"의 답변.
 
-  docIds 가 비었거나 찾은 조각이 없으면 LLM 을 부르지 않고 no_result
+  docs 가 비었거나 찾은 조각이 없으면 LLM 을 부르지 않고 no_result
   LLM 이 NO_ANSWER 를 내면 no_result
   답에 [n] 이 하나도 없으면 no_result. 근거 없는 글은 보여 주지 않는다 ("없다"는 말인지 지어낸 답인지 코드로 가릴 수 없다)
   넘긴 번호(1..k) 밖의 [n] 이 있으면 failed / llm_failed (근거를 지어냈을 수 있다)
@@ -138,19 +138,20 @@ def _result(status, answer=None, citations=None, error_code=None):
     return {"status": status, "answer": answer, "citations": citations or [], "errorCode": error_code}
 
 
-def answer(connection: Callable[[], ContextManager], embedder, llm, workspace_id: int, doc_ids: list[int],
+def answer(connection: Callable[[], ContextManager], embedder, llm, workspace_id: int, docs: list[tuple[str, int]],
            query: str, top_k: int = 5, timeout_s: float = 30.0, request_id=None, prompt: Prompt | None = None) -> dict:
-    """명세의 응답 dict 를 돌려준다. connection() 은 DB 연결을 여는 컨텍스트 (docIds 가 비면 열지 않는다).
+    """명세의 응답 dict 를 돌려준다. connection() 은 DB 연결을 여는 컨텍스트 (docs 가 비면 열지 않는다).
+    docs 는 (sourceType, docId) 짝 목록이다.
     prompt 를 주지 않으면 가장 큰 번호의 답변 지시문을 쓴다. DB 오류는 그대로 올린다 (API 가 503 으로 바꾼다)."""
     prompt = prompt or answer_prompt()
     t0 = time.monotonic()
-    tag = f"request_id={request_id} workspace={workspace_id} docs={len(doc_ids)}"
-    if not doc_ids:
+    tag = f"request_id={request_id} workspace={workspace_id} docs={len(docs)}"
+    if not docs:
         log.info("답변 no_result(볼 문서 없음) %s", tag)
         return _result("no_result")
 
     with connection() as conn:
-        hits = search(conn, embedder, workspace_id, doc_ids, query, top_k)
+        hits = search(conn, embedder, workspace_id, docs, query, top_k)
     search_ms = round((time.monotonic() - t0) * 1000)
     tag += f" hits={len(hits)} search_ms={search_ms}"
     if not hits:
@@ -215,6 +216,6 @@ class Answerer:
             return "임베딩 모델을 아직 불러오지 않음"
         return None
 
-    def run(self, connection, workspace_id, doc_ids, query, top_k, request_id=None) -> dict:
-        return answer(connection, self.get_embedder(), self.llm, workspace_id, doc_ids, query, top_k,
+    def run(self, connection, workspace_id, docs, query, top_k, request_id=None) -> dict:
+        return answer(connection, self.get_embedder(), self.llm, workspace_id, docs, query, top_k,
                       self.timeout_s, request_id, self.prompt)

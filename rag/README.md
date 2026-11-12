@@ -7,7 +7,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 | 단계 | 상태 |
 |---|---|
 | 회의록 로더, 256토큰 나누기, 임베딩 | 구현. 확정 회의록(`formatVersion` 1.0, 칸의 줄 하나·표의 행 하나·머리글·바닥글이 각각 조각 하나)과 임시 형식(`schema_version` 0.1)을 받음 |
-| 저장(pgvector, 버전 교체), 검색(workspaceId + docIds) | 구현 |
+| 저장(pgvector, 버전 교체), 검색(workspaceId + 문서 짝 docs) | 구현. 문서는 `sourceType`+`docId` 짝으로 구분 (SCRUM-227, 챗봇 명세 v0.2 9장) |
 | 대기열·작업자, 완료 콜백 | 구현 |
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
 | 배포 이미지 (`ghcr.io/nineouting/nineouting-ai-service`) | 구현. 아래 "이미지·배포" |
@@ -109,13 +109,15 @@ cd <저장소 루트> && set -a && . ./.env && set +a
 
 | 주소 | 응답 |
 |---|---|
-| `POST /internal/rag/documents` | 202 `{docId, docVersion, status: "accepted"}`. 저장된 것보다 낮은 회의록 버전이면 `"ignored"` (처리·콜백 없음) |
-| `GET /internal/rag/documents/{docId}` | 200 `{docId, docVersion, status, errorCode, chunkCount}`, 없으면 404 |
-| `DELETE /internal/rag/documents/{docId}` | 204 (없어도) |
+| `POST /internal/rag/documents` | 202 `{sourceType, docId, docVersion, status: "accepted"}`. 저장된 것보다 낮은 회의록 버전이면 `"ignored"` (처리·콜백 없음) |
+| `GET /internal/rag/documents/{sourceType}/{docId}` | 200 `{sourceType, docId, docVersion, status, errorCode, chunkCount}`, 없으면 404 |
+| `DELETE /internal/rag/documents/{sourceType}/{docId}` | 204 (없어도) |
 | `DELETE /internal/rag/workspaces/{workspaceId}` | 204 |
 
+- 문서는 `sourceType`(`minutes` 회의록 / `upload` 첨부 자료)과 `docId` 의 짝으로 구분한다. 회의록 200번과 첨부 자료 200번은 다른 문서다. 완료 콜백에도 `sourceType` 이 들어간다 (`{sourceType, docId, docVersion, status, errorCode, chunkCount}`)
+- 옛 모양(`/documents/{docId}`, 답변의 `docIds`)은 받지 않는다 (2026-11-12, SCRUM-227). 번호만으로는 종류를 알 수 없다. 옛 주소는 404, `docIds` 만 보내면 400
 - 상태 값은 `accepted` / `processing` / `ready` / `failed` (DB 의 `queued` 를 `accepted` 로 보여 줌)
-- 명세에 없어서 AI 쪽이 정한 것 (확인 필요): 입력 오류 400 `{"error": "INVALID_INPUT"}`, 같은 `docId` 가 다른 워크스페이스로 오면 409 `CONFLICT`, DB 를 쓸 수 없으면 503 `NOT_READY`, 넣기 응답 코드 202
+- 명세에 없어서 AI 쪽이 정한 것 (확인 필요): 입력 오류 400 `{"error": "INVALID_INPUT"}`, 같은 `sourceType`+`docId` 가 다른 워크스페이스로 오면 409 `CONFLICT`, DB 를 쓸 수 없으면 503 `NOT_READY`, 넣기 응답 코드 202
 - `sourceType=upload` 는 허용 저장소(`RAG_UPLOAD_ALLOWED_HOSTS`)가 설정됐을 때만 받는다. 없으면 400. `fileUrl` 의 호스트가 허용 저장소가 아니어도 400
   - 작업자가 파일을 메모리로 받아(디스크에 쓰지 않음) 안쪽 모양으로 형식을 알아낸다. 확장자는 믿지 않는다
   - 실패: 서명 만료 `url_expired`, 그 밖에 받지 못함 `download_failed` (둘 다 다시 시도하지 않음. 백엔드가 다시 호출), 크기·푼 크기 초과와 조각 토큰 합계 초과(`RAG_MAX_DOC_TOKENS`) `too_large`, 암호 `encrypted`, pdf·docx·xlsx 가 아님(사용자가 묶은 zip, 옛 doc·xls, hwp 포함) `unsupported_format`
@@ -134,12 +136,12 @@ cd <저장소 루트> && set -a && . ./.env && set +a
 
 ### 답변 `POST /internal/rag/answer`
 
-요청 `{workspaceId, docIds, query, topK?}` (ID 는 모두 정수, topK 1~20 기본 5, 그 밖의 필드는 무시) → 200 `{status, answer, citations, errorCode}`
+요청 `{workspaceId, docs: [{sourceType, docId}], query, topK?}` (`docs` 최대 1,000개, 같은 짝은 하나로. ID 는 모두 정수, topK 1~20 기본 5, 그 밖의 필드는 무시) → 200 `{status, answer, citations, errorCode}`
 
 | 단계 | 결과 |
 |---|---|
-| `docIds` 가 비었음 | `no_result` (DB·LLM 을 부르지 않음) |
-| `workspaceId`·`docIds` 로 거른 검색에서 조각 0개 | `no_result` (LLM 을 부르지 않음) |
+| `docs` 가 비었음 | `no_result` (DB·LLM 을 부르지 않음) |
+| `workspaceId`·`docs` 로 거른 검색에서 조각 0개 | `no_result` (LLM 을 부르지 않음) |
 | 조각에 `[1]..[k]` 를 붙여 LLM 에 넘김. LLM 이 `NO_ANSWER` | `no_result` |
 | LLM 시간 초과 / 그 밖의 오류 | 폴백 모델이 있으면 폴백으로 한 번 더. 그래도 실패하면 `failed` + `llm_timeout` / `llm_failed` |
 | 답에 `[n]` 이 하나도 없음 | `no_result` (근거 없는 글은 보여 주지 않음. AI 가 `NO_ANSWER` 대신 "자료에 없습니다" 같은 문장을 쓰는 경우) |

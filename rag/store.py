@@ -2,6 +2,8 @@
 
 나중에 API 가 register() 를, 작업자가 store() / mark_failed() 를 부른다.
 
+문서는 (sourceType, docId) 짝으로 구분한다 (챗봇 명세 v0.2 9장). 회의록 200번과 첨부 자료 200번은 다른 문서다.
+
 버전 규칙
   - 마지막으로 접수한 버전이 현재 버전이다 (docVersion 은 해시라 순서를 비교할 수 없다)
   - 같은 docId+docVersion 이 다시 오면 결과는 하나다. 단 failed 였으면 다시 처리한다
@@ -22,7 +24,7 @@ class StaleJob(Exception):
 
 
 class WorkspaceMismatch(ValueError):
-    """같은 docId 가 다른 workspaceId 로 들어왔다."""
+    """같은 sourceType+docId 가 다른 workspaceId 로 들어왔다."""
 
 
 @dataclass(frozen=True)
@@ -53,27 +55,28 @@ def register(conn, doc: DocumentMeta) -> RegisterResult:
         for _ in range(3):
             inserted = conn.execute(
                 "INSERT INTO rag_documents (doc_id, doc_version, workspace_id, source_type, title, status) "
-                "VALUES (%s, %s, %s, %s, %s, 'queued') ON CONFLICT (doc_id) DO NOTHING",
+                "VALUES (%s, %s, %s, %s, %s, 'queued') ON CONFLICT (source_type, doc_id) DO NOTHING",
                 (doc.doc_id, doc.doc_version, doc.workspace_id, doc.source_type, doc.title)).rowcount
             if inserted:
                 return RegisterResult("queued", True)
             row = conn.execute("SELECT doc_version, status, workspace_id FROM rag_documents "
-                               "WHERE doc_id = %s FOR UPDATE", (doc.doc_id,)).fetchone()
+                               "WHERE source_type = %s AND doc_id = %s FOR UPDATE",
+                               (doc.source_type, doc.doc_id)).fetchone()
             if row is not None:
                 break
         else:
-            raise RuntimeError(f"docId {doc.doc_id}: 접수 중 같은 문서의 추가·삭제가 반복됨")
+            raise RuntimeError(f"{doc.source_type} {doc.doc_id}: 접수 중 같은 문서의 추가·삭제가 반복됨")
 
         version, status, workspace_id = row
         if workspace_id != doc.workspace_id:
-            raise WorkspaceMismatch(f"docId {doc.doc_id} 의 workspaceId 가 기존과 다름")
+            raise WorkspaceMismatch(f"{doc.source_type} {doc.doc_id} 의 workspaceId 가 기존과 다름")
         if version == doc.doc_version and status != "failed":
             return RegisterResult(status, False)
         if doc.source_type == "minutes" and older_version(doc.doc_version, version):
             return RegisterResult(status, False, ignored=True)
-        conn.execute("UPDATE rag_documents SET doc_version = %s, source_type = %s, title = %s, "
-                     "status = 'queued', error_code = NULL, updated_at = now() WHERE doc_id = %s",
-                     (doc.doc_version, doc.source_type, doc.title, doc.doc_id))
+        conn.execute("UPDATE rag_documents SET doc_version = %s, title = %s, "
+                     "status = 'queued', error_code = NULL, updated_at = now() WHERE source_type = %s AND doc_id = %s",
+                     (doc.doc_version, doc.title, doc.source_type, doc.doc_id))
         return RegisterResult("queued", True)
 
 
@@ -83,7 +86,7 @@ def older_version(new: str, stored: str) -> bool:
     return new.isdigit() and stored.isdigit() and new.isascii() and stored.isascii() and int(new) < int(stored)
 
 
-def store(conn, doc_id: int, doc_version: str, chunks: Sequence[Chunk], vectors, embed_model: str) -> int:
+def store(conn, source_type: str, doc_id: int, doc_version: str, chunks: Sequence[Chunk], vectors, embed_model: str) -> int:
     """조각을 저장하고 문서를 ready 로 바꾼다. 저장한 조각 수를 돌려준다."""
     if len(chunks) != len(vectors):
         raise ValueError(f"조각 {len(chunks)}개와 벡터 {len(vectors)}개의 수가 다름")
@@ -91,59 +94,60 @@ def store(conn, doc_id: int, doc_version: str, chunks: Sequence[Chunk], vectors,
 
     with conn.transaction():
         row = conn.execute("SELECT doc_version, workspace_id FROM rag_documents "
-                           "WHERE doc_id = %s FOR UPDATE", (doc_id,)).fetchone()
+                           "WHERE source_type = %s AND doc_id = %s FOR UPDATE", (source_type, doc_id)).fetchone()
         if row is None or row[0] != doc_version:
-            raise StaleJob(f"docId {doc_id}: 문서가 지워졌거나 더 새 버전이 접수됨")
+            raise StaleJob(f"{source_type} {doc_id}: 문서가 지워졌거나 더 새 버전이 접수됨")
         workspace_id = row[1]
-        conn.execute("DELETE FROM rag_chunks WHERE doc_id = %s", (doc_id,))
+        conn.execute("DELETE FROM rag_chunks WHERE source_type = %s AND doc_id = %s", (source_type, doc_id))
         with conn.cursor() as cur:
             cur.executemany(
-                "INSERT INTO rag_chunks (doc_id, doc_version, workspace_id, chunk_index, content, "
-                "location, token_count, embedding) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                [(doc_id, doc_version, workspace_id, c.chunk_index, c.content, Jsonb(c.location),
+                "INSERT INTO rag_chunks (source_type, doc_id, doc_version, workspace_id, chunk_index, content, "
+                "location, token_count, embedding) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                [(source_type, doc_id, doc_version, workspace_id, c.chunk_index, c.content, Jsonb(c.location),
                   c.token_count, np.asarray(v, dtype=np.float32)) for c, v in zip(chunks, vectors)])
         conn.execute("UPDATE rag_documents SET status = 'ready', error_code = NULL, chunk_count = %s, "
-                     "embed_model = %s, updated_at = now() WHERE doc_id = %s",
-                     (len(chunks), embed_model, doc_id))
+                     "embed_model = %s, updated_at = now() WHERE source_type = %s AND doc_id = %s",
+                     (len(chunks), embed_model, source_type, doc_id))
     return len(chunks)
 
 
-def mark_failed(conn, doc_id: int, doc_version: str, error_code: str) -> bool:
+def mark_failed(conn, source_type: str, doc_id: int, doc_version: str, error_code: str) -> bool:
     """그 버전이 아직 현재 버전일 때만 failed 로 바꾼다. 바꿨으면 True."""
     cur = conn.execute("UPDATE rag_documents SET status = 'failed', error_code = %s, updated_at = now() "
-                       "WHERE doc_id = %s AND doc_version = %s", (error_code, doc_id, doc_version))
+                       "WHERE source_type = %s AND doc_id = %s AND doc_version = %s",
+                       (error_code, source_type, doc_id, doc_version))
     return cur.rowcount == 1
 
 
-def get_status(conn, doc_id: int) -> dict | None:
+def get_status(conn, source_type: str, doc_id: int) -> dict | None:
     """상태 조회 API 의 응답 모양. 문서가 없으면 None."""
     row = conn.execute("SELECT doc_version, status, error_code, chunk_count FROM rag_documents "
-                       "WHERE doc_id = %s", (doc_id,)).fetchone()
+                       "WHERE source_type = %s AND doc_id = %s", (source_type, doc_id)).fetchone()
     if row is None:
         return None
-    return {"docId": doc_id, "docVersion": row[0], "status": row[1], "errorCode": row[2], "chunkCount": row[3]}
+    return {"sourceType": source_type, "docId": doc_id, "docVersion": row[0], "status": row[1], "errorCode": row[2], "chunkCount": row[3]}
 
 
-def mark_processing(conn, doc_id: int, doc_version: str) -> bool:
+def mark_processing(conn, source_type: str, doc_id: int, doc_version: str) -> bool:
     """작업자가 처리를 시작할 때. 그 버전이 아직 현재 버전이면 processing 으로 바꾸고 True."""
     cur = conn.execute("UPDATE rag_documents SET status = 'processing', updated_at = now() "
-                       "WHERE doc_id = %s AND doc_version = %s AND status IN ('queued', 'processing')",
-                       (doc_id, doc_version))
+                       "WHERE source_type = %s AND doc_id = %s AND doc_version = %s "
+                       "AND status IN ('queued', 'processing')", (source_type, doc_id, doc_version))
     return cur.rowcount == 1
 
 
-def is_current(conn, doc_id: int, doc_version: str) -> bool:
+def is_current(conn, source_type: str, doc_id: int, doc_version: str) -> bool:
     """문서가 남아 있고 그 버전이 현재 버전인가."""
-    return conn.execute("SELECT 1 FROM rag_documents WHERE doc_id = %s AND doc_version = %s",
-                        (doc_id, doc_version)).fetchone() is not None
+    return conn.execute("SELECT 1 FROM rag_documents WHERE source_type = %s AND doc_id = %s AND doc_version = %s",
+                        (source_type, doc_id, doc_version)).fetchone() is not None
 
 
-def delete_document(conn, doc_id: int) -> None:
+def delete_document(conn, source_type: str, doc_id: int) -> None:
     """문서와 조각, 그 문서의 작업을 지운다. 없어도 오류가 아니다.
     처리 중인 작업은 저장할 때 StaleJob 으로 버려진다."""
     with conn.transaction():
-        conn.execute("DELETE FROM rag_jobs WHERE doc_id = %s", (doc_id,))
-        conn.execute("DELETE FROM rag_documents WHERE doc_id = %s", (doc_id,))
+        conn.execute("DELETE FROM rag_jobs WHERE source_type = %s AND doc_id = %s", (source_type, doc_id))
+        conn.execute("DELETE FROM rag_documents WHERE source_type = %s AND doc_id = %s", (source_type, doc_id))
 
 
 def delete_workspace(conn, workspace_id: int) -> int:

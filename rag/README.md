@@ -133,7 +133,7 @@ cd <저장소 루트> && set -a && . ./.env && set +a
   - 임시 형식 `schema_version: "0.1"` (summary.json): 전환 기간에만. 근거 위치는 녹음 시간 `{type: "time", startMs, endMs, label}`
   - 둘 다 아니거나 확정 회의록 모양이 틀리면 400 (어느 칸이 틀렸는지 알려 줌)
 - 회의록 버전이 저장된 것과 새 것 모두 정수 모양(`"5"`)이면 숫자로 비교해 낮은 버전은 무시한다. 재시도로 옛 확정본이 늦게 와서 새 확정본을 덮어쓰지 않게 하려는 것. 정수 모양이 아니면 마지막에 받은 것을 쓴다
-- 서버 간 인증은 `api.verify_internal_request` 자리만 있다 (CN팀 방식 대기)
+- 서버 간 인증은 지금 없다. 내부망으로만 연다 (백엔드와 합의, 2026-11-12). 서비스 간 토큰은 보안 점검의 "내부 주소 인증" 과제 때 백엔드·인프라와 정하고, 그때 `api.verify_internal_request` 와 `shared.callback.auth_headers` 를 채운다
 
 ### 답변 `POST /internal/rag/answer`
 
@@ -313,7 +313,7 @@ set -a; . ./.env; set +a                 # DB 시험을 돌리려면 (없으면 
 | `RAG_DB_POOL_MAX`, `RAG_DB_POOL_TIMEOUT_S` | API 의 DB 연결 풀 최대 개수(기본 5), 연결을 기다리는 시간(기본 5초, 넘으면 503) |
 | `RAG_CALLBACK_ALLOWED_HOSTS` | 콜백을 보내도 되는 호스트 (`host` 또는 `host:port`, 쉼표로). 비어 있으면 모두 허용(개발용, 경고 로그). 운영에서는 반드시 설정 |
 | `RAG_UPLOAD_ALLOWED_HOSTS` | 업로드 문서를 받을 저장소 호스트 (S3 버킷 주소 등, 쉼표로). **비어 있으면 업로드 문서를 받지 않음** (콜백과 달리 모두 허용이 없음) |
-| `RAG_UPLOAD_MAX_MB` | 업로드 파일 최대 크기(MB). 정해 둔 값이며 SCRUM-110 에서 재서 조정. 기본 20 |
+| `RAG_UPLOAD_MAX_MB` | 업로드 파일 최대 크기(MB). 백엔드의 사전 자료 상한과 같게 둔다. 이보다 작은 파일도 글이 많으면 `RAG_MAX_DOC_TOKENS` 로 `too_large` 가 난다. 기본 50 |
 | `RAG_UPLOAD_TIMEOUT_S` | 파일 받기 시간 제한(초). 기본 30 |
 | `RAG_MAX_DOC_TOKENS` | 문서 하나의 조각 토큰 합계 상한. 넘으면 임베딩 전에 `too_large`. 임베딩 시간이 토큰 수에 비례해서 둔다 (기본 100000, 합성 문서로 PDF 약 145쪽·엑셀 약 2,000행). 처리 완료 로그의 `tokens`·`걸린시간`으로 서버 속도를 보고 조정 |
 | `RAG_TORCH_THREADS` | 임베딩 스레드 수 (작업자·답변이 같이 씀) (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |

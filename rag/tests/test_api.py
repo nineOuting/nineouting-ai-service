@@ -21,7 +21,7 @@ BASE = "/internal/rag"
 
 
 def body(**over):
-    b = {"docId": 1, "docVersion": "v1", "workspaceId": WS, "sourceType": "minutes", "title": "주간 회의",
+    b = {"sourceType": "minutes", "docId": 1, "docVersion": "v1", "workspaceId": WS, "sourceType": "minutes", "title": "주간 회의",
          "minutes": copy.deepcopy(MINUTES), "callbackUrl": CB}
     b.update(over)
     return {k: v for k, v in b.items() if v is not _DROP}
@@ -55,7 +55,7 @@ def jobs(conn):
 def test_넣기는_202_accepted_이고_작업이_생김(client, conn):
     r = client.post(f"{BASE}/documents", json=body(), headers={"X-Request-Id": "req-1"})
     assert r.status_code == 202
-    assert r.json() == {"docId": 1, "docVersion": "v1", "status": "accepted"}
+    assert r.json() == {"sourceType": "minutes", "docId": 1, "docVersion": "v1", "status": "accepted"}
     assert jobs(conn) == [(1, "v1", "queued", "req-1")]
 
 
@@ -74,9 +74,9 @@ def test_확정_회의록_형식도_202_accepted(client, conn):
 def test_낮은_회의록_버전은_202_ignored이고_작업을_넣지_않음(client, conn):
     client.post(f"{BASE}/documents", json=body(docVersion="5", minutes=copy.deepcopy(CONFIRMED)))
     r = client.post(f"{BASE}/documents", json=body(docVersion="4", minutes=copy.deepcopy(CONFIRMED)))
-    assert r.status_code == 202 and r.json() == {"docId": 1, "docVersion": "4", "status": "ignored"}
+    assert r.status_code == 202 and r.json() == {"sourceType": "minutes", "docId": 1, "docVersion": "4", "status": "ignored"}
     assert jobs(conn) == [(1, "5", "queued", None)]
-    assert client.get(f"{BASE}/documents/1").json()["docVersion"] == "5"
+    assert client.get(f"{BASE}/documents/minutes/1").json()["docVersion"] == "5"
 
 
 @pytest.fixture
@@ -160,49 +160,60 @@ def test_같은_docId가_다른_워크스페이스로_오면_409(client):
 
 def test_상태_조회는_queued를_accepted로_보여줌(client):
     client.post(f"{BASE}/documents", json=body())
-    r = client.get(f"{BASE}/documents/1")
+    r = client.get(f"{BASE}/documents/minutes/1")
     assert r.status_code == 200
-    assert r.json() == {"docId": 1, "docVersion": "v1", "status": "accepted", "errorCode": None, "chunkCount": 0}
+    assert r.json() == {"sourceType": "minutes", "docId": 1, "docVersion": "v1", "status": "accepted", "errorCode": None, "chunkCount": 0}
 
 
 def test_상태_조회는_처리_결과를_그대로_보여줌(client, conn):
     client.post(f"{BASE}/documents", json=body())
     conn.execute("UPDATE rag_documents SET status = 'failed', error_code = 'no_text'")
-    assert client.get(f"{BASE}/documents/1").json()["status"] == "failed"
-    assert client.get(f"{BASE}/documents/1").json()["errorCode"] == "no_text"
+    assert client.get(f"{BASE}/documents/minutes/1").json()["status"] == "failed"
+    assert client.get(f"{BASE}/documents/minutes/1").json()["errorCode"] == "no_text"
 
 
 def test_넣은_적_없는_문서는_404(client):
-    r = client.get(f"{BASE}/documents/999")
+    r = client.get(f"{BASE}/documents/minutes/999")
     assert r.status_code == 404 and r.json()["error"] == "NOT_FOUND"
 
 
 @pytest.mark.parametrize("bad", ["abc", "0", "-1", "1.5"])
 def test_주소의_ID가_정수가_아니면_400(client, bad):
-    assert client.get(f"{BASE}/documents/{bad}").status_code == 400
-    assert client.delete(f"{BASE}/documents/{bad}").status_code == 400
+    assert client.get(f"{BASE}/documents/minutes/{bad}").status_code == 400
+    assert client.delete(f"{BASE}/documents/minutes/{bad}").status_code == 400
     assert client.delete(f"{BASE}/workspaces/{bad}").status_code == 400
+
+
+@pytest.mark.parametrize("bad", ["meeting", "MINUTES", "1"])
+def test_주소의_문서_종류가_틀리면_400(client, bad):
+    assert client.get(f"{BASE}/documents/{bad}/1").status_code == 400
+    assert client.delete(f"{BASE}/documents/{bad}/1").status_code == 400
+
+
+def test_옛_주소는_없음(client):
+    assert client.get(f"{BASE}/documents/1").status_code == 404
+    assert client.delete(f"{BASE}/documents/1").status_code in (404, 405)
 
 
 # ---- 지우기 ----
 
 def test_문서_지우기는_204이고_작업도_지움(client, conn):
     client.post(f"{BASE}/documents", json=body())
-    r = client.delete(f"{BASE}/documents/1")
+    r = client.delete(f"{BASE}/documents/minutes/1")
     assert r.status_code == 204 and r.content == b""
-    assert client.get(f"{BASE}/documents/1").status_code == 404 and jobs(conn) == []
+    assert client.get(f"{BASE}/documents/minutes/1").status_code == 404 and jobs(conn) == []
 
 
 def test_없는_문서를_지워도_204(client):
-    assert client.delete(f"{BASE}/documents/12345").status_code == 204
+    assert client.delete(f"{BASE}/documents/minutes/12345").status_code == 204
 
 
 def test_워크스페이스_지우기는_그_워크스페이스만(client):
     client.post(f"{BASE}/documents", json=body(docId=1, workspaceId=WS))
     client.post(f"{BASE}/documents", json=body(docId=2, workspaceId=OTHER_WS))
     assert client.delete(f"{BASE}/workspaces/{WS}").status_code == 204
-    assert client.get(f"{BASE}/documents/1").status_code == 404
-    assert client.get(f"{BASE}/documents/2").status_code == 200
+    assert client.get(f"{BASE}/documents/minutes/1").status_code == 404
+    assert client.get(f"{BASE}/documents/minutes/2").status_code == 200
 
 
 # ---- /docs 화면 ----
@@ -217,11 +228,11 @@ def test_docs_화면에_한글_제목과_본문_필드와_예시가_나옴():
     assert {"docId", "docVersion", "workspaceId", "sourceType", "title", "minutes", "callbackUrl"} \
         <= set(content["schema"]["properties"])
     assert content["example"]["sourceType"] == "minutes"
-    assert spec["paths"][f"{BASE}/documents/{{doc_id}}"]["get"]["summary"] == "상태 조회"
-    assert spec["paths"][f"{BASE}/documents/{{doc_id}}"]["delete"]["summary"] == "문서 지우기"
+    assert spec["paths"][f"{BASE}/documents/{{source_type}}/{{doc_id}}"]["get"]["summary"] == "상태 조회"
+    assert spec["paths"][f"{BASE}/documents/{{source_type}}/{{doc_id}}"]["delete"]["summary"] == "문서 지우기"
     assert spec["paths"][f"{BASE}/workspaces/{{workspace_id}}"]["delete"]["summary"] == "워크스페이스 지우기"
-    doc_id = spec["paths"][f"{BASE}/documents/{{doc_id}}"]["get"]["parameters"][0]
-    assert "양의 정수" in doc_id["description"]
+    source, doc_id = spec["paths"][f"{BASE}/documents/{{source_type}}/{{doc_id}}"]["get"]["parameters"][:2]
+    assert "minutes" in source["description"] and "양의 정수" in doc_id["description"]
 
 
 # ---- DB 를 쓸 수 없을 때 ----
@@ -233,6 +244,6 @@ def test_DB를_쓸_수_없으면_503_NOT_READY():
     with TestClient(app) as c:
         r = c.post(f"{BASE}/documents", json=body())
         assert r.status_code == 503 and r.json()["error"] == "NOT_READY"
-        assert c.get(f"{BASE}/documents/1").status_code == 503
-        assert c.delete(f"{BASE}/documents/1").status_code == 503
+        assert c.get(f"{BASE}/documents/minutes/1").status_code == 503
+        assert c.delete(f"{BASE}/documents/minutes/1").status_code == 503
     pool.close(timeout=1)

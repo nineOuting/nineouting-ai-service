@@ -20,7 +20,7 @@ def test_DB에_접속할_수_없어도_RAG를_켠_서버는_뜨고_멈춤(monkey
     try:
         assert rt.thread.is_alive()
         with TestClient(app) as c:
-            r = c.get(f"{PREFIX}/documents/1")
+            r = c.get(f"{PREFIX}/documents/minutes/1")
             assert r.status_code == 503 and r.json()["error"] == "NOT_READY"
     finally:
         rt.stop(timeout_s=5)                          # 한 번도 접속하지 못한 채로 멈춰도 오류가 없어야 한다

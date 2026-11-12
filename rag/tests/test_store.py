@@ -31,9 +31,67 @@ def test_마이그레이션은_두_번_돌려도_그대로(conn):
     assert migrate(conn) == []
 
 
+# ---- 문서를 (sourceType, docId) 짝으로 구분 (SCRUM-227) ----
+
+def test_같은_번호의_회의록과_첨부_자료는_서로_덮어쓰지_않음(conn, fake_embedder):
+    put(conn, fake_embedder, doc(200, "5"), "회의록 글")
+    put(conn, fake_embedder, doc(200, "sha256:a", source="upload"), "첨부 자료 글")
+    assert get_status(conn, "minutes", 200)["docVersion"] == "5"
+    assert get_status(conn, "upload", 200)["docVersion"] == "sha256:a"
+    assert chunk_rows(conn, 200) == [("5", 0, "회의록 글")]
+    assert chunk_rows(conn, 200, "upload") == [("sha256:a", 0, "첨부 자료 글")]
+
+
+def test_같은_번호라도_종류별로_따로_검색되고_지워짐(conn, fake_embedder):
+    put(conn, fake_embedder, doc(200), "회의록 글")
+    put(conn, fake_embedder, doc(200, source="upload"), "첨부 자료 글")
+    only_upload = search(conn, fake_embedder, WS, [("upload", 200)], "회의록 글", top_k=5)
+    assert [(h.source_type, h.content) for h in only_upload] == [("upload", "첨부 자료 글")]
+    both = search(conn, fake_embedder, WS, [("minutes", 200), ("upload", 200), ("minutes", 200)], "회의록 글")
+    assert [(h.source_type, h.doc_id) for h in both] == [("minutes", 200), ("upload", 200)]
+    delete_document(conn, "upload", 200)
+    assert get_status(conn, "upload", 200) is None and get_status(conn, "minutes", 200)["status"] == "ready"
+    assert chunk_rows(conn, 200) == [("v1", 0, "회의록 글")]
+
+
+def test_같은_짝이_다른_워크스페이스로_오면_거부하지만_종류가_다르면_받음(conn):
+    register(conn, doc(1))
+    with pytest.raises(WorkspaceMismatch):
+        register(conn, doc(1, ws=OTHER_WS))
+    assert register(conn, doc(1, ws=OTHER_WS, source="upload")) == QUEUED_NEW
+
+
+def test_0003_마이그레이션은_들어_있는_데이터를_옮김(conn):
+    """옛 표(0001·0002)에 데이터를 넣고 0003 을 돌린다. 시험 DB 안의 따로 만든 스키마에서 한다."""
+    from rag.migrate import MIGRATIONS
+    conn.execute("DROP SCHEMA IF EXISTS rag_mig_test CASCADE")
+    conn.execute("CREATE SCHEMA rag_mig_test")
+    try:
+        conn.execute("SET search_path TO rag_mig_test, public")
+        for name in ("0001_init", "0002_jobs"):
+            conn.execute((MIGRATIONS / f"{name}.sql").read_text(encoding="utf-8"))
+        conn.execute("INSERT INTO rag_documents (doc_id, doc_version, workspace_id, source_type, title, status) "
+                     "VALUES (1, 'v1', 10, 'upload', '자료', 'ready'), (2, 'v1', 10, 'minutes', '회의', 'queued')")
+        conn.execute("INSERT INTO rag_chunks (doc_id, doc_version, workspace_id, chunk_index, content, location, "
+                     "token_count, embedding) VALUES (1, 'v1', 10, 0, '가', '{}', 1, %s)", (str([0.0] * 384),))
+        conn.execute("INSERT INTO rag_jobs (doc_id, doc_version, workspace_id, payload) VALUES "
+                     "(2, 'v1', 10, '{\"sourceType\": \"minutes\"}'), (1, 'v1', 10, '{}'), (9, 'v1', 10, '{}')")
+        conn.execute((MIGRATIONS / "0003_source_key.sql").read_text(encoding="utf-8"))
+        assert conn.execute("SELECT source_type, doc_id FROM rag_chunks").fetchall() == [("upload", 1)]
+        assert conn.execute("SELECT doc_id, source_type FROM rag_jobs ORDER BY id").fetchall() == [
+            (2, "minutes"), (1, "upload"), (9, "minutes")]          # 9 는 문서가 지워진 끝난 작업
+        conn.execute("INSERT INTO rag_documents (doc_id, doc_version, workspace_id, source_type, title, status) "
+                     "VALUES (1, 'v1', 10, 'minutes', '같은 번호의 회의록', 'queued')")   # 전에는 기본 키 충돌
+        conn.execute("DELETE FROM rag_documents WHERE source_type = 'upload' AND doc_id = 1")
+        assert conn.execute("SELECT count(*) FROM rag_chunks").fetchone()[0] == 0      # 짝 외래 키로 함께 지워짐
+    finally:
+        conn.execute("RESET search_path")
+        conn.execute("DROP SCHEMA rag_mig_test CASCADE")
+
+
 def test_새_문서는_queued(conn):
     assert register(conn, doc()) == QUEUED_NEW
-    assert get_status(conn, 1) == {"docId": 1, "docVersion": "v1", "status": "queued",
+    assert get_status(conn, "minutes", 1) == {"sourceType": "minutes", "docId": 1, "docVersion": "v1", "status": "queued",
                                    "errorCode": None, "chunkCount": 0}
 
 
@@ -68,8 +126,8 @@ def test_새_문서를_동시에_두_번_접수해도_오류_없이_하나(conn,
 
 def test_저장하면_ready(conn, fake_embedder):
     assert put(conn, fake_embedder, doc(), "가", "나") == 2
-    assert get_status(conn, 1)["status"] == "ready"
-    assert get_status(conn, 1)["chunkCount"] == 2
+    assert get_status(conn, "minutes", 1)["status"] == "ready"
+    assert get_status(conn, "minutes", 1)["chunkCount"] == 2
     assert [r[2] for r in chunk_rows(conn, 1)] == ["가", "나"]
 
 
@@ -87,7 +145,7 @@ def test_새_버전은_교체되고_교체_전까지_옛_버전이_남음(conn, 
     assert chunk_rows(conn, 1) == [("v1", 0, "옛 글")]       # 처리 중에도 옛 버전은 그대로
     put(conn, fake_embedder, doc(version="v2"), "새 글 하나", "새 글 둘")
     assert [r[0] for r in chunk_rows(conn, 1)] == ["v2", "v2"]
-    assert get_status(conn, 1)["docVersion"] == "v2"
+    assert get_status(conn, "minutes", 1)["docVersion"] == "v2"
 
 
 def test_넣다가_실패하면_지운_것까지_롤백되어_옛_버전이_남음(conn, fake_embedder):
@@ -99,9 +157,9 @@ def test_넣다가_실패하면_지운_것까지_롤백되어_옛_버전이_남�
     vecs = fake_embedder.embed_passages([c.embed_text for c in cs])
     vecs[1] = vecs[1][:383]                          # 차원이 틀린 벡터 -> 지우기 뒤 넣기에서 DB 가 거부
     with pytest.raises(psycopg.Error):
-        store(conn, 1, "v2", cs, vecs, fake_embedder.model_id)
+        store(conn, "minutes", 1, "v2", cs, vecs, fake_embedder.model_id)
     assert chunk_rows(conn, 1) == [("v1", 0, "옛 글")]
-    status = get_status(conn, 1)
+    status = get_status(conn, "minutes", 1)
     assert (status["status"], status["chunkCount"]) == ("queued", 1)
 
 
@@ -115,7 +173,7 @@ def test_교체_도중에도_다른_연결에서는_옛_버전이_보이고_검�
 
     def work():
         try:
-            store(conn, 1, "v2", cs, vecs, fake_embedder.model_id)
+            store(conn, "minutes", 1, "v2", cs, vecs, fake_embedder.model_id)
         except Exception as e:                       # 시험 실패로 보고하려고 모아 둔다
             errors.append(e)
 
@@ -124,7 +182,7 @@ def test_교체_도중에도_다른_연결에서는_옛_버전이_보이고_검�
     try:
         assert reached.wait(timeout=5)               # 지우기는 끝났고 넣기 직전에 멈춤
         assert chunk_rows(other_conn, 1) == [("v1", 0, "옛 글")]
-        assert search(other_conn, fake_embedder, WS, [1], "옛 글")[0].content == "옛 글"
+        assert search(other_conn, fake_embedder, WS, [("minutes", 1)], "옛 글")[0].content == "옛 글"
     finally:
         go.set()
         t.join(timeout=5)
@@ -137,27 +195,27 @@ def test_처리_도중_새_버전이_오면_옛_작업은_버려짐(conn, fake_e
     register(conn, doc(version="v2"))
     cs = chunks_of("옛 글")
     with pytest.raises(StaleJob):
-        store(conn, 1, "v1", cs, fake_embedder.embed_passages(["옛 글"]), fake_embedder.model_id)
+        store(conn, "minutes", 1, "v1", cs, fake_embedder.embed_passages(["옛 글"]), fake_embedder.model_id)
     assert chunk_rows(conn, 1) == []
-    assert get_status(conn, 1)["status"] == "queued"
+    assert get_status(conn, "minutes", 1)["status"] == "queued"
 
 
 def test_처리_도중_지우면_다시_넣지_않음(conn, fake_embedder):
     register(conn, doc())
-    delete_document(conn, 1)
+    delete_document(conn, "minutes", 1)
     with pytest.raises(StaleJob):
-        store(conn, 1, "v1", chunks_of("가"), fake_embedder.embed_passages(["가"]), fake_embedder.model_id)
-    assert get_status(conn, 1) is None
+        store(conn, "minutes", 1, "v1", chunks_of("가"), fake_embedder.embed_passages(["가"]), fake_embedder.model_id)
+    assert get_status(conn, "minutes", 1) is None
     assert chunk_rows(conn, 1) == []
 
 
 def test_없는_문서를_지워도_오류_아님(conn):
-    delete_document(conn, 999)
+    delete_document(conn, "minutes", 999)
 
 
 def test_문서를_지우면_조각도_지워짐(conn, fake_embedder):
     put(conn, fake_embedder, doc(), "가")
-    delete_document(conn, 1)
+    delete_document(conn, "minutes", 1)
     assert chunk_rows(conn, 1) == []
 
 
@@ -166,30 +224,30 @@ def test_워크스페이스_지우기는_그_워크스페이스만(conn, fake_em
     put(conn, fake_embedder, doc(2, ws=WS), "나")
     put(conn, fake_embedder, doc(3, ws=OTHER_WS), "다")
     assert delete_workspace(conn, WS) == 2
-    assert get_status(conn, 1) is None and get_status(conn, 2) is None
-    assert get_status(conn, 3)["status"] == "ready"
+    assert get_status(conn, "minutes", 1) is None and get_status(conn, "minutes", 2) is None
+    assert get_status(conn, "minutes", 3)["status"] == "ready"
 
 
 def test_실패한_버전이_다시_오면_재시도(conn):
     register(conn, doc())
-    assert mark_failed(conn, 1, "v1", "no_text")
-    assert get_status(conn, 1)["errorCode"] == "no_text"
+    assert mark_failed(conn, "minutes", 1, "v1", "no_text")
+    assert get_status(conn, "minutes", 1)["errorCode"] == "no_text"
     assert register(conn, doc()) == QUEUED_NEW
-    assert get_status(conn, 1)["errorCode"] is None
+    assert get_status(conn, "minutes", 1)["errorCode"] is None
 
 
 def test_새_버전이_실패해도_옛_버전_조각은_남음(conn, fake_embedder):
     put(conn, fake_embedder, doc(version="v1"), "옛 글")
     register(conn, doc(version="v2"))
-    mark_failed(conn, 1, "v2", "internal_error")
+    mark_failed(conn, "minutes", 1, "v2", "internal_error")
     assert chunk_rows(conn, 1) == [("v1", 0, "옛 글")]
 
 
 def test_옛_버전의_실패는_현재_상태를_바꾸지_않음(conn):
     register(conn, doc(version="v1"))
     register(conn, doc(version="v2"))
-    assert not mark_failed(conn, 1, "v1", "internal_error")
-    assert get_status(conn, 1)["status"] == "queued"
+    assert not mark_failed(conn, "minutes", 1, "v1", "internal_error")
+    assert get_status(conn, "minutes", 1)["status"] == "queued"
 
 
 def test_같은_docId_가_다른_워크스페이스로_오면_거부(conn):
@@ -201,7 +259,7 @@ def test_같은_docId_가_다른_워크스페이스로_오면_거부(conn):
 def test_조각과_벡터_수가_다르면_거부(conn, fake_embedder):
     register(conn, doc())
     with pytest.raises(ValueError):
-        store(conn, 1, "v1", chunks_of("가", "나"), fake_embedder.embed_passages(["가"]), fake_embedder.model_id)
+        store(conn, "minutes", 1, "v1", chunks_of("가", "나"), fake_embedder.embed_passages(["가"]), fake_embedder.model_id)
 
 
 
@@ -218,7 +276,7 @@ def test_회의록_버전은_둘_다_정수_모양일_때만_비교(new, stored,
 def test_낮은_회의록_버전은_무시하고_상태를_바꾸지_않음(conn):
     register(conn, doc(version="5"))
     assert register(conn, doc(version="4")) == RegisterResult("queued", False, ignored=True)
-    assert get_status(conn, 1)["docVersion"] == "5"
+    assert get_status(conn, "minutes", 1)["docVersion"] == "5"
 
 
 def test_업로드_문서는_버전을_비교하지_않음(conn):

@@ -98,7 +98,7 @@ def test_새_버전을_접수하면_꺼내지_않은_옛_작업은_지움(conn):
 def test_허용하지_않은_콜백_주소는_접수하지_않음(conn):
     with pytest.raises(CallbackNotAllowed):
         submit(conn, request(cb="http://169.254.169.254/latest/meta-data"), allowed_hosts={"backend.test:8080"})
-    assert get_status(conn, 1) is None and job_rows(conn) == []
+    assert get_status(conn, "minutes", 1) is None and job_rows(conn) == []
 
 
 # ---- 처리 ----
@@ -108,10 +108,10 @@ def test_처리하면_ready_콜백과_추적_ID가_가고_payload를_비움(conn
     submit(conn, request())
     worker = make_worker(conn, fake_embedder, backend)
     assert worker.process_one()
-    assert get_status(conn, 1)["status"] == "ready" and chunk_count(conn, 1) == MINUTES_PIECES
+    assert get_status(conn, "minutes", 1)["status"] == "ready" and chunk_count(conn, 1) == MINUTES_PIECES
     (url, body, headers), = backend.calls
     assert url == CB and headers["X-Request-Id"] == "req-1"
-    assert body == {"docId": 1, "docVersion": "v1", "status": "ready", "errorCode": None, "chunkCount": MINUTES_PIECES}
+    assert body == {"sourceType": "minutes", "docId": 1, "docVersion": "v1", "status": "ready", "errorCode": None, "chunkCount": MINUTES_PIECES}
     (_, _, _, status, attempts, last_error, payload, _), = job_rows(conn)
     assert (status, attempts, last_error, payload) == ("done", 1, None, {})
     assert not worker.process_one()                  # 더 꺼낼 것이 없음
@@ -119,7 +119,7 @@ def test_처리하면_ready_콜백과_추적_ID가_가고_payload를_비움(conn
 
 def test_처리하는_동안_문서는_processing(conn, other_conn, fake_embedder):
     seen = []
-    emb = HookEmbedder(fake_embedder, on_embed=lambda: seen.append(get_status(other_conn, 1)["status"]))
+    emb = HookEmbedder(fake_embedder, on_embed=lambda: seen.append(get_status(other_conn, "minutes", 1)["status"]))
     submit(conn, request())
     make_worker(conn, emb, FakeBackend()).process_one()
     assert seen == ["processing"]
@@ -130,9 +130,9 @@ def test_넣을_항목이_없으면_재시도_없이_failed_콜백(conn, fake_em
     empty = {"schema_version": "0.1", "summary": [{"text": " ", "evidence": [{"start": 1, "end": 2}]}]}
     submit(conn, request(minutes=empty))
     make_worker(conn, fake_embedder, backend).process_one()
-    assert backend.bodies == [{"docId": 1, "docVersion": "v1", "status": "failed", "errorCode": "no_text",
+    assert backend.bodies == [{"sourceType": "minutes", "docId": 1, "docVersion": "v1", "status": "failed", "errorCode": "no_text",
                                "chunkCount": 0}]
-    status = get_status(conn, 1)
+    status = get_status(conn, "minutes", 1)
     assert (status["status"], status["errorCode"]) == ("failed", "no_text")
     (_, _, _, job_status, attempts, last_error, payload, _), = job_rows(conn)
     assert (job_status, attempts, payload) == ("failed", 1, {}) and last_error.startswith("no_text")
@@ -172,8 +172,9 @@ def test_조각_토큰_합계가_상한을_넘으면_임베딩_전에_too_large(
     worker.process_one()
     assert embedded == []                                       # 임베딩하지 않고 막음
     body = backend.bodies[0]
-    assert (body["status"], body["errorCode"]) == ("failed", "too_large")
-    assert get_status(conn, 1)["status"] == "failed"
+    assert (body["status"], body["errorCode"], body["sourceType"]) == ("failed", "too_large", "upload")
+    assert get_status(conn, "upload", 1)["status"] == "failed"
+    assert get_status(conn, "minutes", 1) is None                # 같은 번호의 회의록과 섞이지 않는다
 
 
 def test_토큰_상한은_환경변수로_바꾼다(fake_embedder):
@@ -226,7 +227,7 @@ def test_일시_실패를_세_번_하면_internal_error(conn, fake_embedder):
     for _ in range(3):
         conn.execute("UPDATE rag_jobs SET run_after = now()")
         worker.process_one()
-    assert backend.bodies == [{"docId": 1, "docVersion": "v1", "status": "failed", "errorCode": "internal_error",
+    assert backend.bodies == [{"sourceType": "minutes", "docId": 1, "docVersion": "v1", "status": "failed", "errorCode": "internal_error",
                                "chunkCount": 0}]
     assert job_rows(conn)[0][3:5] == ("failed", 3)
 
@@ -246,9 +247,9 @@ def test_꺼낼_때_이미_새_버전이면_임베딩하지_않고_버림(conn, 
 def test_처리_도중_지워지면_콜백_없이_버림(conn, other_conn, fake_embedder):
     backend = FakeBackend()
     submit(conn, request())
-    emb = HookEmbedder(fake_embedder, on_embed=lambda: delete_document(other_conn, 1))
+    emb = HookEmbedder(fake_embedder, on_embed=lambda: delete_document(other_conn, "minutes", 1))
     make_worker(conn, emb, backend).process_one()
-    assert backend.calls == [] and get_status(conn, 1) is None and chunk_count(conn, 1) == 0
+    assert backend.calls == [] and get_status(conn, "minutes", 1) is None and chunk_count(conn, 1) == 0
 
 
 # ---- 동시성·회수 ----
@@ -296,7 +297,7 @@ def test_콜백이_끝내_실패해도_문서는_ready_로_남음(conn, fake_emb
     backend = FakeBackend((False, False, 400))
     submit(conn, request())
     make_worker(conn, fake_embedder, backend).process_one()
-    assert get_status(conn, 1)["status"] == "ready"
+    assert get_status(conn, "minutes", 1)["status"] == "ready"
     assert job_rows(conn)[0][3:6] == ("done", 1, "callback_failed")
 
 
@@ -305,7 +306,7 @@ def test_콜백이_끝내_실패해도_문서는_ready_로_남음(conn, fake_emb
 def test_문서를_지우면_그_문서의_작업도_지움(conn):
     submit(conn, request(doc_id=1))
     submit(conn, request(doc_id=2))
-    delete_document(conn, 1)
+    delete_document(conn, "minutes", 1)
     assert [r[1] for r in job_rows(conn)] == [2]
 
 

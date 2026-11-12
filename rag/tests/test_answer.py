@@ -53,8 +53,8 @@ def two_hits(monkeypatch):
     return hits
 
 
-def run(llm, doc_ids=(101, 102), connection=None):
-    return answer(connection or NoConnection(), None, llm, WS, list(doc_ids), QUERY, 5, 3.0, request_id="req-1")
+def run(llm, docs=(("minutes", 101), ("minutes", 102)), connection=None):
+    return answer(connection or NoConnection(), None, llm, WS, list(docs), QUERY, 5, 3.0, request_id="req-1")
 
 
 # ---- 근거 번호 읽기·프롬프트 ----
@@ -95,7 +95,7 @@ def test_프롬프트에_번호와_구분과_지시_규칙이_들어감():
 
 def test_볼_문서가_없으면_DB도_LLM도_부르지_않고_no_result():
     llm, conn = ScriptLLM("x [1]"), NoConnection()
-    assert run(llm, doc_ids=[], connection=conn) == {"status": "no_result", "answer": None, "citations": [],
+    assert run(llm, docs=[], connection=conn) == {"status": "no_result", "answer": None, "citations": [],
                                                      "errorCode": None}
     assert conn.opened == 0 and llm.calls == []
 
@@ -328,7 +328,7 @@ def db(conn):
 
 def test_DB_답변은_볼_수_있는_문서의_원문과_위치를_돌려줌(conn, fake_embedder):
     put(conn, fake_embedder, doc(1), "1분기 예산은 3천만 원으로 하자는 제안이 나옴", "디자인 시안은 금요일에 검토")
-    r = answer(db(conn), fake_embedder, FakeLLM(), WS, [1], "1분기 예산은 3천만 원으로 하자는 제안이 나옴")
+    r = answer(db(conn), fake_embedder, FakeLLM(), WS, [("minutes", 1)], "1분기 예산은 3천만 원으로 하자는 제안이 나옴")
     assert r["status"] == "answered"
     c = r["citations"][0]
     assert c["docId"] == 1 and isinstance(c["docId"], int)
@@ -342,7 +342,7 @@ def test_DB_다른_워크스페이스와_목록에_없는_문서는_섞이지_�
     put(conn, fake_embedder, doc(3), "목록에 없는 문서 조각")
     llm = ScriptLLM("가 [1].")
     # 2번은 목록에 있지만 다른 워크스페이스, 3번은 같은 워크스페이스지만 목록에 없음
-    answer(db(conn), fake_embedder, llm, WS, [1, 2], "다른 워크스페이스 조각", top_k=20)
+    answer(db(conn), fake_embedder, llm, WS, [("minutes", 1), ("minutes", 2)], "다른 워크스페이스 조각", top_k=20)
     data = llm.calls[0][1].split("<질문>")[0]          # 질문 칸을 뺀 자료 칸
     assert "보이는 문서의 조각" in data
     assert "다른 워크스페이스 조각" not in data and "목록에 없는 문서 조각" not in data
@@ -351,7 +351,7 @@ def test_DB_다른_워크스페이스와_목록에_없는_문서는_섞이지_�
 
 def test_DB_조각이_없으면_LLM을_부르지_않음(conn, fake_embedder):
     llm = ScriptLLM("가 [1].")
-    assert answer(db(conn), fake_embedder, llm, WS, [999], "아무 질문")["status"] == "no_result"
+    assert answer(db(conn), fake_embedder, llm, WS, [("minutes", 999)], "아무 질문")["status"] == "no_result"
     assert llm.calls == []
 
 
@@ -368,7 +368,7 @@ URL = "/internal/rag/answer"
 
 
 def body(**over):
-    b = {"workspaceId": WS, "docIds": [1], "query": QUERY}
+    b = {"workspaceId": WS, "docs": [{"sourceType": "minutes", "docId": 1}], "query": QUERY}
     b.update(over)
     return b
 
@@ -380,8 +380,12 @@ def app_with(answerer, pool=None):
 
 
 @pytest.mark.parametrize("over, word", [
-    ({"workspaceId": "10"}, "workspaceId"), ({"docIds": "1"}, "docIds"), ({"docIds": ["1"]}, "docIds"),
-    ({"docIds": [0]}, "docIds"), ({"docIds": [True]}, "docIds"), ({"docIds": list(range(1, 1002))}, "1000"),
+    ({"workspaceId": "10"}, "workspaceId"), ({"docs": "1"}, "docs"), ({"docs": [1]}, "sourceType"),
+    ({"docs": [{"sourceType": "meeting", "docId": 1}]}, "sourceType"),
+    ({"docs": [{"sourceType": "minutes", "docId": "1"}]}, "docId"), ({"docs": [{"sourceType": "minutes", "docId": 0}]}, "docId"),
+    ({"docs": [{"sourceType": "upload", "docId": True}]}, "docId"),
+    ({"docs": [{"sourceType": "minutes", "docId": i} for i in range(1, 1002)]}, "1000"),
+    ({"docs": None, "docIds": [1]}, "docIds 는 더 받지 않음"),
     ({"query": "  "}, "query"), ({"query": "가" * 2001}, "2000"), ({"topK": 0}, "topK"), ({"topK": 21}, "topK"),
     ({"topK": "5"}, "topK"),
 ])
@@ -390,9 +394,9 @@ def test_API_입력이_틀리면_400(over, word):
     assert r.status_code == 400 and r.json()["error"] == "INVALID_INPUT" and word in r.json()["detail"]
 
 
-def test_API_history는_무시하고_빈_docIds는_DB를_열지_않고_no_result():
+def test_API_history는_무시하고_빈_docs는_DB를_열지_않고_no_result():
     pool = type("Pool", (), {"connection": NoConnection()})()
-    r = app_with(Answerer(lambda: object(), FakeLLM()), pool).post(URL, json=body(docIds=[], history=[{"q": "이전"}]))
+    r = app_with(Answerer(lambda: object(), FakeLLM()), pool).post(URL, json=body(docs=[], history=[{"q": "이전"}]))
     assert r.status_code == 200 and r.json()["status"] == "no_result"
     assert pool.connection.opened == 0
 

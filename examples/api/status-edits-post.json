@@ -1,0 +1,11 @@
+{
+  "meetingId": "m_1234",
+  "edits": [
+    {
+      "agendaId": 102,
+      "decisionPointId": 11,
+      "status": "DECIDED",
+      "rev": 1
+    }
+  ]
+}

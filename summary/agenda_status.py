@@ -4,7 +4,7 @@
 안건 상태 판정 (AI-04) — 결정할 사항 단위
 
 안건 안의 결정할 사항마다 상태, 결정 내용 한 줄, 근거 줄을 만들고, 안건 상태는 그 결과에서 모델 없이 규칙으로 정한다.
-형식은 docs/api/agenda-status-contract.md (v0.2), 예시는 examples/api/.
+형식은 docs/api/agenda-status-contract.md (v0.3), 예시는 examples/api/.
 
 결정할 사항의 상태 (보드 agendas[].decisionPoints[].status)
   NOT_STARTED    논의 전       그 사항을 다룬 줄이 없다 (모델이 none 으로 판정하거나 안건에 연결된 줄이 없다)
@@ -34,7 +34,14 @@
     고친 사항의 needsCheck: 근거 줄의 글이 바뀌었거나 사라졌거나 다른 안건으로 옮겨 가면 켠다(한 번 켜지면 다시 고칠 때까지 유지).
     flag_conflict 가 켜져 있으면 AI의 판정이 결정(DECIDED, DECISION_CHECK)이 아닐 때도 켠다 (AI 판정이 바뀌면 따라 꺼진다).
   - 호출이 연속 3번 실패하거나 호출 상한에 닿으면 이 회의의 모델 판정만 멈춘다. 이미 내린 판정은 유지하고 안건 상태는 계속 도출한다.
-  - 사람이 사항이나 안건의 상태를 직접 고치는 것은 받지 않는다 (받는 것은 결정 내용 문장뿐).
+  - 상태 고정 (계약 7.5, v0.3). 우선순위는 사용자가 정한 값 > AI가 낸 결정(잠금) > AI 판정이다.
+    * 사용자가 정한 상태(apply_status_edits): 사항 단위로 DECIDED 또는 UNDECIDED 를 정한다. 그 사항의 상태는 AI가 바꾸지 않는다.
+      AUTO 로 보내면 사용자 지정을 풀고 AI 판정으로 돌아간다(AI의 결정 잠금도 함께 푼다). 안건 상태는 이 상태들에서 그대로 규칙으로 정한다.
+      결정으로 정했는데 결정 내용이 없으면 고정 문구를 쓰고 needsCheck 를 켠다 (결정 내용은 decision-edits 로 적는다).
+    * AI가 낸 결정(DECIDED)은 잠근다: 다시 판정해도 상태·결정 내용·근거를 바꾸지 않는다. 그 뒤 판정이 미결(undecided)로 뒤집으면
+      바꾸지는 않고 needsCheck 만 켠다. 결정(decided)으로 다시 나오면 꺼진다. 확인 필요(check)와 미결은 잠그지 않는다.
+      결정할 사항의 문구가 바뀌면 그 사항의 잠금은 풀린다 (이전 결정은 새 문구의 결정이 아니다).
+    * 모든 사항을 사용자가 정한 안건은 모델을 부르지 않는다.
 
 스레드: 일꾼 스레드(process, board_status)와 요청 스레드(apply_edits, info)가 함께 쓴다. 상태 변경은 락 안에서 하고 모델 호출은 락 밖에서 한다.
         분류기의 락은 읽을 때만 잠깐 잡고(_view), 판정기의 락과 겹쳐 잡지 않는다.
@@ -73,6 +80,9 @@ VERDICTS = ("decided", "check", "undecided", "none")
 VERDICT_STATUS = {"decided": DECIDED, "check": DECISION_CHECK, "undecided": UNDECIDED, "none": NOT_STARTED}
 
 FIXED_NOT_STARTED = "아직 논의되지 않았어요"      # 논의 전 사항의 고정 문구 (모델 없이)
+FIXED_USER_DECIDED = "직접 결정으로 표시했어요. 결정 내용을 적어 주세요"   # 사용자가 결정으로 정했는데 결정 내용이 아직 없을 때의 고정 문구
+AUTO = "AUTO"                         # 사용자 지정을 풀고 AI 판정으로 돌아간다 (status-edits 의 status 값)
+PIN_STATUSES = (DECIDED, UNDECIDED)   # 사용자가 정할 수 있는 사항 상태
 
 
 def fixed_undecided(text):
@@ -235,11 +245,13 @@ class AgendaStatusJudge:
         self.cfg = cfg or StatusCfg()
         self.llm = llm or make_llm(self.cfg)
         self.lock = threading.RLock()
-        self.ag = {}                  # 안건 key -> 상태 {"pts", "reflected", "wait_since", "dirty", "sig"}. pts: 사항 key -> {"status", "text", "evidence", "fixed"}
+        self.ag = {}                  # 안건 key -> 상태 {"pts", "reflected", "wait_since", "dirty", "sig"}. pts: 사항 key -> {"status", "text", "evidence", "fixed", "locked", "contested"}
         self.known = set()            # 안건 목록에 한 번이라도 있었던 key (사라졌는지 가리는 데 쓴다)
         self.known_points = set()     # 안건 목록에 한 번이라도 있었던 (안건 key, 사항 key)
         self.edits = {}               # (안건 key, 사항 key) -> 사람이 고친 결정 내용 {"text", "evidence", "needs_check", "sig", "ack"}
         self.edit_rev = {}            # (안건 key, 사항 key) -> 마지막으로 반영한 rev
+        self.pins = {}                # (안건 key, 사항 key) -> 사용자가 정한 사항 상태 {"status": DECIDED 또는 UNDECIDED}
+        self.pin_rev = {}             # (안건 key, 사항 key) -> 마지막으로 반영한 status-edits 의 rev
         self.calls = 0
         self.errors = 0
         self.err_streak = 0
@@ -320,6 +332,35 @@ class AgendaStatusJudge:
         log.info("고친 결정 내용 반영 meeting=%s edits=%s applied=%s", self.c.meeting_id, len(edits), applied)
         return {"applied": applied, "ignored": ignored}
 
+    def apply_status_edits(self, edits):
+        """edits: [{"agenda_id", "point_id", "status", "rev"}] (어댑터를 거친 것). status 는 DECIDED, UNDECIDED, AUTO.
+        반환: {"applied", "ignored": [{"decisionPointId", "reason": "stale"}]}.
+        DECIDED, UNDECIDED 는 그 사항의 상태를 사용자가 정한 값으로 고정한다. AUTO 는 사용자 지정과 AI 결정 잠금을 풀고 AI 판정으로 돌아간다.
+        모르는 안건·사항도 보관한다 (안건 목록이 늦게 도착한 경우). 같은 사항은 rev 가 큰 것만 반영한다."""
+        with self.c.lock:
+            for e in edits:
+                self.c.orig.setdefault(str(e["agenda_id"]), e["agenda_id"])   # 안건 목록보다 먼저 와도 같은 타입으로 돌려주기 위해
+        applied, ignored = 0, []
+        with self.lock:
+            for e in edits:
+                ek = (str(e["agenda_id"]), str(e["point_id"]))
+                if e["rev"] <= self.pin_rev.get(ek, e["rev"] - 1):
+                    ignored.append({"decisionPointId": e["point_id"], "reason": "stale"})
+                    continue
+                self.pin_rev[ek] = e["rev"]
+                st = self.ag.setdefault(ek[0], _new_state())
+                if e["status"] == AUTO:
+                    self.pins.pop(ek, None)
+                    r = st["pts"].get(ek[1])
+                    if r is not None:
+                        r["locked"] = r["contested"] = False      # 풀면 AI가 다시 자유롭게 판정한다
+                else:
+                    self.pins[ek] = {"status": e["status"]}
+                st["dirty"] = True                                # 다음 주기에 바로 다시 판정한다 (모두 사용자가 정한 안건이면 모델 없이 넘어간다)
+                applied += 1
+        log.info("사용자가 정한 사항 상태 반영 meeting=%s edits=%s applied=%s", self.c.meeting_id, len(edits), applied)
+        return {"applied": applied, "ignored": ignored}
+
     def _refresh_flags(self, view):
         """고친 사항의 needsCheck 를 켠다 (계약 7.3의 6번 (가)(나)). 한 번 켜지면 다시 고칠 때까지 유지한다."""
         by_id, deleted = view["by_id"], view["deleted"]
@@ -367,10 +408,16 @@ class AgendaStatusJudge:
         for ek in [ek for ek in self.edits if ek[0] in self.known and ek[0] not in keys]:
             del self.edits[ek]                               # 사라진 안건의 고친 결정 내용도 버린다
             self.edit_rev.pop(ek, None)
+        for ek in [ek for ek in self.pins if ek[0] in self.known and ek[0] not in keys]:
+            del self.pins[ek]                                # 사라진 안건의 사용자 지정 상태도 버린다
+            self.pin_rev.pop(ek, None)
         cur_pts = {(a["key"], p["key"]) for a in view["agendas"] for p in agenda_points(a)}
         for ek in [ek for ek in self.edits if ek in self.known_points and ek not in cur_pts and ek[0] in keys]:
             del self.edits[ek]                               # 사라진 사항의 고친 결정 내용도 버린다
             self.edit_rev.pop(ek, None)
+        for ek in [ek for ek in self.pins if ek in self.known_points and ek not in cur_pts and ek[0] in keys]:
+            del self.pins[ek]                                # 사라진 사항의 사용자 지정 상태도 버린다
+            self.pin_rev.pop(ek, None)
         self.known |= keys
         self.known_points |= cur_pts
         jobs = []
@@ -385,6 +432,11 @@ class AgendaStatusJudge:
             psig = tuple((p["key"], p["text"]) for p in points)
             if st["sig"] is not None and st["sig"] != psig:
                 st["dirty"] = True                           # 결정할 사항의 문구나 구성이 바뀜: 기다리지 않는다
+                old_text = dict(st["sig"])
+                for p in points:
+                    r0 = st["pts"].get(p["key"])
+                    if r0 is not None and r0.get("locked") and old_text.get(p["key"]) != p["text"]:
+                        r0["locked"] = r0["contested"] = False   # 문구가 바뀌면 이전 결정은 새 문구의 결정이 아니다
             cur = {ln["id"]: _h(ln["text"]) for ln, _bc in rows}
             refl = st["reflected"]
             lost = [i for i in refl if i not in cur]
@@ -405,6 +457,9 @@ class AgendaStatusJudge:
                 st["wait_since"] = None
                 trigger = False
             if not trigger:
+                continue
+            if all((key, p["key"]) in self.pins for p in points):
+                st["dirty"], st["wait_since"], st["reflected"], st["sig"] = False, None, cur, psig   # 사용자가 모두 정한 안건: 모델 없이 넘어간다
                 continue
             jobs.append(self._make_job(a, points, psig, rows, cur))
             st["dirty"] = False
@@ -492,12 +547,20 @@ class AgendaStatusJudge:
         counts = {}
         for k, p in enumerate(job["points"], 1):
             verdict, text, ids = outcome[k]
+            counts[verdict] = counts.get(verdict, 0) + 1
+            old = st["pts"].get(p["key"])
+            if old is not None and old.get("locked"):        # AI가 낸 결정은 잠겨 있다: 상태·내용·근거를 바꾸지 않는다
+                if verdict == "undecided":
+                    old["contested"] = True                  # 뒤집는 말이 나왔다: 바꾸지는 않고 확인 필요만 켠다
+                elif verdict == "decided":
+                    old["contested"] = False
+                continue                                     # 판정 없음, 확인 필요, 검증 탈락은 잡음일 수 있어 건드리지 않는다
             if verdict == "rejected":                        # 근거 없는 결정은 내지 않는다: 미결 고정 문구로 대신한다
                 self.rejected += 1
-                st["pts"][p["key"]] = {"status": UNDECIDED, "text": "", "evidence": [], "fixed": True}
+                st["pts"][p["key"]] = {"status": UNDECIDED, "text": "", "evidence": [], "fixed": True, "locked": False, "contested": False}
             else:
-                st["pts"][p["key"]] = {"status": VERDICT_STATUS[verdict], "text": text, "evidence": list(ids), "fixed": False}
-            counts[verdict] = counts.get(verdict, 0) + 1
+                st["pts"][p["key"]] = {"status": VERDICT_STATUS[verdict], "text": text, "evidence": list(ids), "fixed": False,
+                                       "locked": verdict == "decided", "contested": False}
         live = {p["key"] for p in job["points"]}
         for pk in [pk for pk in st["pts"] if pk not in live]:
             del st["pts"][pk]                                # 목록에서 사라진 사항의 결과
@@ -509,15 +572,37 @@ class AgendaStatusJudge:
 
     # ---------------- 출력 ----------------
     def _point_out(self, akey, p, st, has_lines):
-        """사항 하나의 보드 항목. 반환: (보드 항목, AI가 판정한 상태, AI가 낸 근거 줄)."""
+        """사항 하나의 보드 항목. 반환: (보드 항목, 보드에 나가는 상태, 근거 줄).
+        사용자가 정한 상태가 있으면 그것이 보드 상태다(statusEdited). 없으면 AI가 판정한 상태이고, 잠긴 결정은 그대로 나간다."""
         r = st["pts"].get(p["key"]) if has_lines else None
-        status = r["status"] if r else NOT_STARTED
+        ai_status = r["status"] if r else NOT_STARTED
         ai_ev = list(r["evidence"]) if r else []
         e = self.edits.get((akey, p["key"]))
+        pin = self.pins.get((akey, p["key"]))
+        contested = bool(r and r.get("contested"))
+        if pin is not None:                                  # 사용자가 정한 상태가 가장 우선이다
+            status = pin["status"]
+            usable = r is not None and not r["fixed"]
+            if e is not None:
+                text, ev, need = e["text"], list(e["evidence"]), bool(e["needs_check"])
+            elif status == DECIDED:
+                if usable and ai_status in (DECIDED, DECISION_CHECK):
+                    text, ev, need = r["text"], list(r["evidence"]), ai_status != DECIDED   # AI의 결정 후보 문장은 확인이 필요하다
+                else:
+                    text, ev, need = FIXED_USER_DECIDED, [], True
+            else:
+                if usable and ai_status == UNDECIDED:
+                    text, ev = r["text"], list(r["evidence"])
+                else:
+                    text, ev = fixed_undecided(p["text"]), []
+                need = False
+            return ({"decisionPointId": p["id"], "status": status, "decisionText": text, "evidenceSeqs": ev,
+                     "edited": e is not None, "needsCheck": need, "statusEdited": True}, status, ev)
+        status = ai_status
         if e is not None:
             text, ev = e["text"], list(e["evidence"])
             conflict = self.cfg.flag_conflict and has_lines and status not in (DECIDED, DECISION_CHECK)
-            need = bool(e["needs_check"] or conflict)
+            need = bool(e["needs_check"] or conflict or contested)
         else:
             if r is not None and r["fixed"]:
                 text, ev = fixed_undecided(p["text"]), []
@@ -525,9 +610,9 @@ class AgendaStatusJudge:
                 text, ev = FIXED_NOT_STARTED, []
             else:
                 text, ev = r["text"], list(r["evidence"])
-            need = False
+            need = contested
         return ({"decisionPointId": p["id"], "status": status, "decisionText": text, "evidenceSeqs": ev,
-                 "edited": e is not None, "needsCheck": need}, status, ai_ev)
+                 "edited": e is not None, "needsCheck": need, "statusEdited": False}, status, ai_ev)
 
     def board_status(self, preview_final=False):
         """안건 key -> {"status", "reason": {"text", "evidenceSeqs"} 또는 None, "points": [보드의 decisionPoints 항목]}.
@@ -543,12 +628,13 @@ class AgendaStatusJudge:
                 st = self.ag.get(key) or _new_state()
                 rows = view["rows"].get(key, [])
                 outs, stats, evs = [], [], []
-                for p in agenda_points(a):
+                pts_a = agenda_points(a)
+                for p in pts_a:
                     po, s, ev = self._point_out(key, p, st, bool(rows))
                     outs.append(po)
                     stats.append(s)
                     evs.append(ev)
-                if not rows:
+                if not rows and not any((key, p["key"]) in self.pins for p in pts_a):
                     out[key] = {"status": NOT_STARTED, "reason": None, "points": outs}
                     continue
                 open_current = view["current"] == key and not self.final and not preview_final
@@ -557,7 +643,7 @@ class AgendaStatusJudge:
                     ids = sorted({s for s_, ev in zip(stats, evs) if s_ in (DECIDED, DECISION_CHECK) for s in ev})
                 else:
                     ids = []
-                if not ids:                                  # 규칙 근거: 연결된 마지막 발언 줄 (불확실 줄은 뺀다)
+                if not ids and rows:                         # 규칙 근거: 연결된 마지막 발언 줄 (불확실 줄은 뺀다). 줄이 없으면 비어 있다
                     sure = [r for r in rows if not r[0].get("low_confidence")] or rows
                     ids = [sure[-1][0]["id"]]
                 out[key] = {"status": status, "reason": {"text": _reason_text(stats), "evidenceSeqs": ids}, "points": outs}
@@ -628,7 +714,7 @@ def selftest():
     bs = j.board_status()
     assert bs["a1"]["status"] == NOT_STARTED and bs["a1"]["reason"] is None and bs["a2"]["status"] == NOT_STARTED
     assert bs["a1"]["points"] == [{"decisionPointId": None, "status": NOT_STARTED, "decisionText": FIXED_NOT_STARTED,
-                                   "evidenceSeqs": [], "edited": False, "needsCheck": False}], bs["a1"]["points"]
+                                   "evidenceSeqs": [], "edited": False, "needsCheck": False, "statusEdited": False}], bs["a1"]["points"]
 
     # 2) 줄이 새로 2개 이상이면 바로 판정. 결정 없음이면 현재 안건은 논의 중, 아니면 미결 (모델 없이)
     feed(c, [ln(1, 0, "배포는 언제 할까요"), ln(2, 4000, "배포 날짜 후보를 모아봐요"), ln(3, 8000, "비용 한도 얘기해요")], 9000)
@@ -653,7 +739,7 @@ def selftest():
     s = stat(j)
     assert s["status"] == DECIDED and s["reason"] == {"text": "결정할 사항 1개가 모두 결정됐어요", "evidenceSeqs": [1, 2]}, s
     assert s["points"] == [{"decisionPointId": None, "status": DECIDED, "decisionText": "배포는 다음 주 목요일로 정함",
-                            "evidenceSeqs": [1, 2], "edited": False, "needsCheck": False}], s
+                            "evidenceSeqs": [1, 2], "edited": False, "needsCheck": False, "statusEdited": False}], s
     # 5) check
     answers = [answer("check", "목요일이 맞는지 확신하기 어려움", [(2, 2)])]
     c, j = fresh(llm=lambda u: answers.pop(0))
@@ -690,14 +776,24 @@ def selftest():
     u = seen[-1]
     assert "[맞장구] 네 좋아요" in u and "음" not in u.split("[전사]")[1].replace("좋아요", "") and "흐릿한" not in u, u
     assert "네네" not in u, "간격이 길면 붙이지 않음"
-    # 10) 줄이 빠지거나 글이 바뀌면 기다리지 않고 다시 판정, 결정/확인 필요도 새 줄이 오면 다시 판정
-    answers = [answer("decided", "배포는 목요일", [(1, 2)]), answer("none")]
+    # 10) 결정이 난 안건도 새 줄이 오면 다시 판정하지만, AI가 낸 결정은 잠겨 있다 (v0.3).
+    #     뒤집는 말(미결)이 나오면 바꾸지 않고 확인 필요만 켠다. 판정 없음은 잡음일 수 있어 그대로 두고, 다시 결정으로 나오면 끈다
+    answers = [answer("decided", "배포는 목요일", [(1, 2)]), answer("undecided", "배포를 다시 생각해 보자는 말이 나왔어요", [(3, 4)]),
+               answer("none"), answer("decided", "배포는 목요일", [(1, 2)])]
     c, j = fresh(llm=lambda u: answers.pop(0))
     feed(c, [ln(1, 0, "배포는 목요일로"), ln(2, 4000, "배포 동의해요")], 5000)
     j.process()
-    assert stat(j)["status"] == DECIDED
+    assert stat(j)["status"] == DECIDED and stat(j)["points"][0]["needsCheck"] is False
     feed(c, [ln(3, 8000, "배포 다시 생각해봐요"), ln(4, 9000, "배포 이전 결정은 보류해요")], 10000)
-    assert j.process() == 1 and stat(j)["status"] != DECIDED, "결정 뒤 새 줄이 오면 다시 판정"
+    assert j.process() == 1, "결정 뒤 새 줄이 오면 다시 판정한다"
+    s = stat(j)
+    pt = s["points"][0]
+    assert s["status"] == DECIDED and pt["status"] == DECIDED and pt["decisionText"] == "배포는 목요일" and pt["evidenceSeqs"] == [1, 2], "AI가 낸 결정은 잠겨 있다"
+    assert pt["needsCheck"] is True and pt["statusEdited"] is False, "뒤집는 말이 나오면 확인 필요"
+    feed(c, [ln(5, 12000, "배포 얘기 계속"), ln(6, 13000, "배포 일정 더 얘기")], 14000)
+    assert j.process() == 1 and stat(j)["points"][0]["needsCheck"] is True and stat(j)["status"] == DECIDED, "판정 없음은 그대로 둔다"
+    feed(c, [ln(7, 16000, "배포는 목요일로 가요"), ln(8, 17000, "배포 목요일 좋아요")], 18000)
+    assert j.process() == 1 and stat(j)["points"][0]["needsCheck"] is False and stat(j)["status"] == DECIDED, "다시 결정으로 나오면 꺼진다"
 
     # 11) 현재 안건이 바뀌면 이전 안건의 논의 중이 미결로 바뀐다 (모델 없이)
     c, j = fresh(llm=lambda u: answer("none"))
@@ -958,7 +1054,7 @@ def selftest():
     assert r == {"applied": 1, "ignored": []}
     p = j.board_status()["p1"]["points"][1]
     assert p == {"decisionPointId": 8, "status": DECISION_CHECK, "decisionText": "담당은 인프라 팀으로 확정",
-                 "evidenceSeqs": [3], "edited": True, "needsCheck": False}, p
+                 "evidenceSeqs": [3], "edited": True, "needsCheck": False, "statusEdited": False}, p
     assert j.apply_edits([edit(1)]) == {"applied": 0, "ignored": [{"decisionPointId": 8, "reason": "stale"}]}
     assert j.apply_edits([edit(0, text="옛 글")])["applied"] == 0 and j.board_status()["p1"]["points"][1]["decisionText"] == "담당은 인프라 팀으로 확정"
     # 20-1) 고친 사항이 있는 안건은 기다리지 않고 다시 판정한다. 고친 글과 근거는 덮어쓰지 않고, 상태만 새로 낸다
@@ -966,7 +1062,8 @@ def selftest():
     assert j.process() == 1
     pts = j.board_status()["p1"]["points"]
     assert pts[1]["status"] == UNDECIDED and pts[1]["decisionText"] == "담당은 인프라 팀으로 확정" and pts[1]["evidenceSeqs"] == [3] and pts[1]["edited"]
-    assert pts[0]["decisionText"] == "새 문장" and not pts[0]["edited"], "고치지 않은 사항은 새 판정으로 바뀐다"
+    assert pts[0]["decisionText"] == "1차 배포는 다음 주 목요일로 정함" and not pts[0]["edited"], "AI가 낸 결정은 잠겨 있어 새 판정으로 바뀌지 않는다"
+    assert pts[2]["status"] == NOT_STARTED, "잠기지 않은 사항은 새 판정으로 바뀐다"
     # 사람이 결정으로 적었는데 AI는 결정을 못 찾았으면 확인 필요 (flag_conflict). 끄면 켜지지 않는다
     assert pts[1]["needsCheck"] is True
     c2, j2 = fresh(agendas=(P1, A2), llm=lambda u: answer_pts([("decided", "새 문장", [(1, 2)]), ("undecided", "담당이 갈림", [(3, 3)]), ("none", "", [])]),
@@ -1026,7 +1123,7 @@ def selftest():
     bs = j6.board_status()["p1"]
     assert bs["status"] == NOT_STARTED and bs["reason"] is None
     assert bs["points"][0] == {"decisionPointId": 7, "status": NOT_STARTED, "decisionText": "회의 전에 미리 적은 결정",
-                               "evidenceSeqs": [], "edited": True, "needsCheck": False}, bs["points"][0]
+                               "evidenceSeqs": [], "edited": True, "needsCheck": False, "statusEdited": False}, bs["points"][0]
     j6.process()
     c6.set_agendas(2, [A2, A3])
     j6.process()
@@ -1039,6 +1136,113 @@ def selftest():
     info = j3.info()
     assert info["decided"] == 1 and info["decisionCheck"] == 1
 
+
+    # 21) 상태 고정 (v0.3): 사용자가 정한 상태가 가장 우선이고, AI가 낸 결정은 잠긴다
+    def sedit(rev, status, pid=7, aid="p1"):
+        return {"agenda_id": aid, "point_id": pid, "status": status, "rev": rev}
+
+    def pts_of(j, k="p1"):
+        return j.board_status()[k]["points"]
+
+    # 21-1) 사용자가 미결로 정하면 AI가 결정으로 낸 사항도 미결이 되고, AI가 다시 판정해도 바뀌지 않는다. 확인 필요(check)는 잠기지 않는다
+    plan = [ANS3()]
+    c, j = fresh(agendas=(P1, A2), llm=lambda u: plan.pop(0))
+    feed(c, L4, 7000)
+    j.process()
+    assert [p["status"] for p in pts_of(j)] == [DECIDED, DECISION_CHECK, UNDECIDED] and not any(p["statusEdited"] for p in pts_of(j))
+    assert j.apply_status_edits([sedit(1, UNDECIDED)]) == {"applied": 1, "ignored": []}
+    p0 = pts_of(j)[0]
+    assert p0 == {"decisionPointId": 7, "status": UNDECIDED, "decisionText": fixed_undecided("1차 배포 날짜 확정"), "evidenceSeqs": [],
+                  "edited": False, "needsCheck": False, "statusEdited": True}, p0
+    assert j.board_status()["p1"]["status"] in (DISCUSSING, UNDECIDED), "사항 하나가 미결이면 안건은 결정이 아니다"
+    plan = [answer_pts([("decided", "새 문장", [(1, 2)]), ("decided", "담당은 백엔드로 정함", [(3, 3)]), ("decided", "점검 항목은 월요일에 정함", [(4, 4)])])]
+    assert j.process() == 1, "사용자가 정한 사항이 있어도 나머지 사항 때문에 판정한다"
+    ps = pts_of(j)
+    assert ps[0]["status"] == UNDECIDED and ps[0]["statusEdited"] is True, "사용자가 정한 상태는 AI가 바꾸지 않는다"
+    assert ps[1]["status"] == DECIDED and ps[1]["decisionText"] == "담당은 백엔드로 정함", "확인 필요는 잠기지 않아 결정으로 올라간다"
+    assert ps[2]["status"] == DECIDED and j.board_status()["p1"]["status"] in (DISCUSSING, UNDECIDED)
+    # 21-2) 결정으로 정하면: 결정 내용이 없으면 고정 문구와 확인 필요, AI 후보가 있으면 그 문장과 확인 필요, AI도 결정이면 그대로
+    c, j = fresh(agendas=(P1, A2), llm=lambda u: ANS3())
+    feed(c, L4, 7000)
+    j.process()
+    j.apply_status_edits([sedit(1, DECIDED, pid=9)])
+    assert pts_of(j)[2] == {"decisionPointId": 9, "status": DECIDED, "decisionText": FIXED_USER_DECIDED, "evidenceSeqs": [],
+                            "edited": False, "needsCheck": True, "statusEdited": True}, pts_of(j)[2]
+    j.apply_status_edits([sedit(1, DECIDED, pid=8)])
+    q = pts_of(j)[1]
+    assert q["status"] == DECIDED and q["decisionText"] == "담당은 백엔드 쪽으로 보임" and q["evidenceSeqs"] == [3] and q["needsCheck"] is True and q["statusEdited"]
+    assert j.board_status()["p1"]["status"] == DECIDED, "AI가 결정으로 낸 7번과 사용자가 정한 8, 9번이 모두 결정이면 안건은 결정"
+    j.apply_status_edits([sedit(1, DECIDED, pid=7)])
+    q = pts_of(j)[0]
+    assert q["decisionText"] == "1차 배포는 다음 주 목요일로 정함" and q["needsCheck"] is False and q["statusEdited"] is True
+    bs = j.board_status()["p1"]
+    assert bs["status"] == DECIDED and bs["reason"]["text"] == "결정할 사항 3개가 모두 결정됐어요", "모든 사항이 결정이면 안건은 결정"
+    # 결정 내용을 따로 고치면(decision-edits) 그 글을 쓰고 확인 필요가 꺼진다
+    j.apply_edits([edit(1, text="점검 항목은 월요일에 정함", ev=(4,), pid=9)])
+    q = pts_of(j)[2]
+    assert q["decisionText"] == "점검 항목은 월요일에 정함" and q["edited"] and q["statusEdited"] and q["needsCheck"] is False and q["evidenceSeqs"] == [4], q
+    # 21-3) 모든 사항을 사용자가 정한 안건은 모델을 부르지 않는다
+    j.llm = lambda u: (_ for _ in ()).throw(AssertionError("모든 사항을 사용자가 정했으면 모델을 부르면 안 된다"))
+    feed(c, [ln(5, 9000, "배포 얘기 더 해요"), ln(6, 10000, "배포 일정 또 얘기해요")], 11000)
+    assert j.process() == 0 and j.board_status()["p1"]["status"] == DECIDED
+    assert j.board_status(preview_final=True)["p1"]["status"] == DECIDED, "종료를 가정해도 사용자가 정한 결정은 결정이다"
+    # 21-4) AUTO: 사용자 지정과 AI 결정 잠금을 풀고 AI 판정으로 돌아간다. rev 가 같거나 작으면 무시한다
+    plan = [ANS3(), answer_pts([("undecided", "배포 날짜가 갈림", [(1, 2)]), ("decided", "담당은 백엔드로 정함", [(3, 3)]), ("decided", "점검 항목은 월요일에 정함", [(4, 4)])])]
+    c, j = fresh(agendas=(P1, A2), llm=lambda u: plan.pop(0))
+    feed(c, L4, 7000)
+    j.process()
+    assert j.apply_status_edits([sedit(2, UNDECIDED)])["applied"] == 1
+    assert j.apply_status_edits([sedit(1, DECIDED)]) == {"applied": 0, "ignored": [{"decisionPointId": 7, "reason": "stale"}]}
+    assert j.apply_status_edits([sedit(2, DECIDED)])["applied"] == 0, "같은 rev 도 무시"
+    assert j.apply_status_edits([sedit(3, AUTO)])["applied"] == 1
+    assert j.apply_status_edits([sedit(3, UNDECIDED)])["applied"] == 0, "AUTO 의 rev 도 기억한다"
+    assert pts_of(j)[0]["statusEdited"] is False
+    assert j.process() == 1
+    assert pts_of(j)[0]["status"] == UNDECIDED and pts_of(j)[0]["statusEdited"] is False, "AUTO 뒤에는 AI 판정이 새로 나온다 (결정 잠금도 풀렸다)"
+    # 21-5) 줄이 없는 안건에서도 사용자가 정할 수 있다 (모델 없이). 일부만 정하면 안건은 결정이 아니다
+    c, j = fresh(agendas=(P1, A2), llm=lambda u: (_ for _ in ()).throw(AssertionError("줄이 없으면 모델을 부르지 않는다")))
+    for pid in (7, 8, 9):
+        j.apply_status_edits([sedit(1, DECIDED, pid=pid)])
+    bs = j.board_status()["p1"]
+    assert bs["status"] == DECIDED and bs["reason"] == {"text": "결정할 사항 3개가 모두 결정됐어요", "evidenceSeqs": []}, bs
+    assert j.process() == 0 and j.board_status()["a2"]["status"] == NOT_STARTED, "정하지 않은 안건은 그대로 아직 안 다룸"
+    assert j.board_status(preview_final=True)["p1"]["status"] == DECIDED
+    j.apply_status_edits([sedit(2, UNDECIDED, pid=7)])
+    assert j.board_status()["p1"]["status"] == UNDECIDED, "일부만 결정이면 안건은 결정이 아니다 (현재 안건이 아니면 미결)"
+    # 21-6) 모르는 사항의 지정도 보관했다가 목록에 생기면 적용하고, 목록에서 사라지면 버린다
+    c, j = fresh(agendas=(P1, A2), llm=lambda u: ANS3())
+    feed(c, L4, 7000)
+    j.process()
+    assert j.apply_status_edits([sedit(1, DECIDED, pid=99)])["applied"] == 1
+    assert [p["decisionPointId"] for p in pts_of(j)] == [7, 8, 9], "목록에 없는 사항은 담지 않는다"
+    P1c = agp("p1", "배포 일정", PTS + [(99, "추가된 사항")], 1)
+    c.set_agendas(2, [P1c, A2])
+    plan = [answer_pts([("decided", "a", [(1, 2)]), ("check", "b", [(3, 3)]), ("undecided", "c", [(4, 4)]), ("none", "", [])])]
+    j.llm = lambda u: plan.pop(0)
+    j.process()
+    q = pts_of(j)[3]
+    assert q["decisionPointId"] == 99 and q["status"] == DECIDED and q["statusEdited"] is True, q
+    c.set_agendas(3, [P1, A2])
+    j.process()
+    assert ("p1", "99") not in j.pins and [p["decisionPointId"] for p in pts_of(j)] == [7, 8, 9]
+    # 21-7) 결정할 사항의 문구가 바뀌면 그 사항의 AI 결정 잠금이 풀린다 (이전 결정은 새 문구의 결정이 아니다)
+    c, j = fresh(agendas=(P1, A2), llm=lambda u: ANS3())
+    feed(c, L4, 7000)
+    j.process()
+    P1b = agp("p1", "배포 일정", [(7, "2차 배포 날짜 확정"), (8, "배포 담당 지정"), (9, "사항기밀 점검 항목 확정")], 1)
+    c.set_agendas(2, [P1b, A2])
+    j.llm = lambda u: answer_pts([("undecided", "배포 날짜가 갈림", [(1, 2)]), ("decided", "담당은 백엔드로 정함", [(3, 3)]), ("undecided", "점검 항목이 갈림", [(4, 4)])])
+    assert j.process() == 1
+    assert pts_of(j)[0]["status"] == UNDECIDED and pts_of(j)[0]["needsCheck"] is False, "문구가 바뀐 사항은 새 판정이 반영된다"
+    assert pts_of(j)[1]["status"] == DECIDED and pts_of(j)[1]["decisionText"] == "담당은 백엔드로 정함", "문구가 같은 사항은 확인 필요가 결정으로 올라간다"
+    # 21-8) 결정한 줄이 모델에 주는 범위(max_lines)를 벗어나도 잠긴 결정은 풀리지 않는다
+    answers = [answer("decided", "배포는 목요일", [(1, 2)]), answer("none")]
+    c, j = fresh(llm=lambda u: answers.pop(0), max_lines=2)
+    feed(c, [ln(1, 0, "배포는 목요일로"), ln(2, 4000, "배포 동의해요")], 5000)
+    j.process()
+    feed(c, [ln(3, 8000, "배포 이야기 하나 더"), ln(4, 9000, "배포 이야기 둘 더")], 10000)
+    assert j.process() == 1 and stat(j)["status"] == DECIDED and stat(j)["points"][0]["decisionText"] == "배포는 목요일", "범위를 벗어나도 잠긴 결정은 유지"
+    assert stat(j)["points"][0]["needsCheck"] is False, "판정 없음은 확인 필요를 켜지 않는다"
 
     # 18) 로그에는 전사, 안건 제목, 판정 이유가 남지 않는다
     logging.getLogger("ai-service").removeHandler(h)

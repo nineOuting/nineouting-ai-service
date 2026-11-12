@@ -226,7 +226,7 @@ PRD에 없는 기능이라 제안만 하고 구현하지 않는다.
 | 모든 안건을 각각 요약하고, 현재 안건은 `currentAgendaId`로 강조한다 | AI 제안, 기획·cn 팀 확인 필요 |
 | `summary`를 문자열에서 문장 목록(`id`, `text`, `evidenceSeqs`, `edited`, `needsCheck`)으로 바꾼다 | AI 제안, cn 팀 확인 필요 |
 | 채울 것이 없을 때 `opinions` 빈 배열, `offTopic` `null`로 보낸다 (`status`는 AI-04가 채움) | AI 제안, cn 팀 확인 필요 |
-| 보드 안건마다 `decisionPoints[{decisionPointId, status, decisionText, evidenceSeqs, edited, needsCheck}]`를 담는다 | cn 팀 요청 (확정 모양). 자세한 규칙은 `agenda-status-contract.md` |
+| 보드 안건마다 `decisionPoints[{decisionPointId, status, decisionText, evidenceSeqs, edited, needsCheck, statusEdited}]`를 담는다 | cn 팀 요청 (확정 모양). 자세한 규칙은 `agenda-status-contract.md` |
 | 줄별 분류 결과(`agenda-classification`)는 별도 주소로 두고, `currentAgendaId`는 두 곳에 같은 값이 간다 | AI 제안, cn 팀 확인 필요 |
 | 안건 보드의 `version`을 시각(밀리초) 기준으로 올린다 | AI 제안, cn 팀 확인 필요 (정수 칸의 크기) |
 | 사람이 고친 요약을 `agenda-summary-edits`로 받는다 (`edit`, `confirm`, `rev`) | AI 제안, cn 팀 확인 필요 |

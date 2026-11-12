@@ -259,6 +259,30 @@ def adapt_decision_edits(msg):
     return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "edits": out}
 
 
+STATUS_EDIT_VALUES = ("DECIDED", "UNDECIDED", "AUTO")
+
+
+def adapt_status_edits(msg):
+    """사용자가 정한 결정할 사항의 상태 (agenda-status-contract.md 7.5) -> {"meeting_id", "edits"}.
+    status 는 DECIDED, UNDECIDED, AUTO(사용자 지정을 풀고 AI 판정으로 돌아간다) 중 하나다. 안건 상태는 받지 않는다(사항 상태에서 정한다)."""
+    meeting_id, raw_id = _meeting_id(msg, "status-edits")
+    items = _need(msg, "edits", list, "edits")
+    out = []
+    for e in items:
+        if not isinstance(e, dict):
+            raise AdapterError("edits: 항목이 객체가 아님")
+        where = f"status edit decisionPointId={e.get('decisionPointId', '?')}"
+        aid = _need(e, "agendaId", (str, int), where)
+        pid = _need(e, "decisionPointId", (str, int), where)
+        if isinstance(pid, str) and not pid.strip():
+            raise AdapterError(f"{where}: 'decisionPointId' 가 비어 있음")
+        status = _need(e, "status", str, where)
+        if status not in STATUS_EDIT_VALUES:
+            raise AdapterError(f"{where}: 'status' 는 {', '.join(STATUS_EDIT_VALUES)} 중 하나여야 함")
+        out.append({"agenda_id": aid, "point_id": pid, "status": status, "rev": _need(e, "rev", int, where)})
+    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "edits": out}
+
+
 def _opt_str(d, key, where):
     """선택 문자열 칸. 없거나 null 이거나 공백뿐이면 None."""
     v = d.get(key)
@@ -643,8 +667,27 @@ def selftest():
         raise SystemExit("edits 없음을 못 잡음")
     except AdapterError:
         pass
+    # 사용자가 정한 사항 상태 (agenda-status-contract.md 7.5)
+    se = adapt_status_edits(load("status-edits-post.json"))
+    assert se["meeting_id"] == "m_1234" and se["edits"] == [{"agenda_id": 102, "point_id": 11, "status": "DECIDED", "rev": 1}], se
+    oks = {"agendaId": "a", "decisionPointId": 1, "status": "UNDECIDED", "rev": 1}
+    assert [adapt_status_edits({"meetingId": "m", "edits": [dict(oks, status=v)]})["edits"][0]["status"] for v in ("DECIDED", "UNDECIDED", "AUTO")] == ["DECIDED", "UNDECIDED", "AUTO"]
+    assert adapt_status_edits({"meetingId": "m", "edits": []})["edits"] == []
+    for bad in (dict(oks, status="DISCUSSING"), dict(oks, status="NOT_STARTED"), dict(oks, status="DECISION_CHECK"), dict(oks, status="decided"),
+                dict(oks, status=None), {k: v for k, v in oks.items() if k != "status"}, {k: v for k, v in oks.items() if k != "rev"},
+                {k: v for k, v in oks.items() if k != "agendaId"}, dict(oks, decisionPointId=" "), dict(oks, rev="1"), dict(oks, rev=True), "x"):
+        try:
+            adapt_status_edits({"meetingId": "m", "edits": [bad]})
+            raise SystemExit(f"잘못된 상태 지정을 못 잡음: {bad}")
+        except AdapterError:
+            pass
+    try:
+        adapt_status_edits({"meetingId": "m"})
+        raise SystemExit("edits 없음을 못 잡음")
+    except AdapterError:
+        pass
     print("입력 어댑터 자체 시험 통과 (이벤트 4종, 줄 변환, edits, manual, speakerLabel, 잘못된 입력, 안건 목록, 고친 분류, meetingId 문자열·정수, 고친 요약, "
-          "참석자 명단, 고친 의견·할 일, 주제 변경 무시 요청, 종료 버튼 요청, 결정할 사항, 고친 결정 내용)")
+          "참석자 명단, 고친 의견·할 일, 주제 변경 무시 요청, 종료 버튼 요청, 결정할 사항, 고친 결정 내용, 사용자가 정한 사항 상태)")
 
 
 if __name__ == "__main__":

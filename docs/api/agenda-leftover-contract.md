@@ -41,8 +41,8 @@
       "status": "UNDECIDED",
       "statusReason": { "text": "결정할 사항 2개 중 1개가 결정됐어요 (미결 1개)", "evidenceSeqs": [51] },
       "decisionPoints": [
-        { "decisionPointId": 11, "status": "DECIDED", "decisionText": "...", "evidenceSeqs": [47], "edited": false, "needsCheck": false },
-        { "decisionPointId": 12, "status": "UNDECIDED", "decisionText": "...", "evidenceSeqs": [48, 51], "edited": false, "needsCheck": false }
+        { "decisionPointId": 11, "status": "DECIDED", "decisionText": "...", "evidenceSeqs": [47], "edited": false, "needsCheck": false, "statusEdited": false },
+        { "decisionPointId": 12, "status": "UNDECIDED", "decisionText": "...", "evidenceSeqs": [48, 51], "edited": false, "needsCheck": false, "statusEdited": false }
       ],
       "summary": [
         { "id": "k3f9a1-3", "text": "...", "evidenceSeqs": [47, 48], "edited": false, "needsCheck": false }
@@ -53,7 +53,7 @@
       "status": "NOT_STARTED",
       "statusReason": null,
       "decisionPoints": [
-        { "decisionPointId": 13, "status": "NOT_STARTED", "decisionText": "...", "evidenceSeqs": [], "edited": false, "needsCheck": false }
+        { "decisionPointId": 13, "status": "NOT_STARTED", "decisionText": "...", "evidenceSeqs": [], "edited": false, "needsCheck": false, "statusEdited": false }
       ],
       "summary": []
     }
@@ -92,7 +92,7 @@
 
 - 요청 중에는 보드의 `agendas[].status`와 목록의 `status`가 다를 수 있다. 보드의 `agendas[].status`는 이어서 논의하기로 돌아갈 수 있어서 요청 중에도 확정하지 않는다(예: 보드는 `DISCUSSING`, 목록은 `UNDECIDED`).
 - 회의가 끝나면(`final: true`) 상태가 확정되어 보드의 상태와 목록의 상태가 같다.
-- 사람이 안건 상태를 직접 고치는 기능은 범위 밖이다(`agenda-status-contract.md` 11장).
+- 사용자가 정한 사항 상태(`statusEdited`)도 보드와 같은 값이 그대로 들어간다. 안건 상태는 그 사항 상태에서 정한다(`agenda-status-contract.md` 7.5).
 - 안건 상태는 결정할 사항의 상태에서 정한다(`agenda-status-contract.md` 2.2). 종료를 확정한다고 가정하므로, 사항 중 하나라도 미결이거나 논의 전이면 그 안건은 `UNDECIDED`이고 목록에 들어간다. 모든 사항이 결정이거나 확인 필요이고 확인 필요가 1개 이상이면 `DECISION_CHECK`로 들어간다.
 
 ## 4. 종료 버튼 알림 받기 (백엔드 → ai-service)
@@ -167,7 +167,7 @@ POST /internal/meetings/{meetingId}/end-requests
 | 이월된 안건의 불러오기·"진행 중" 표시(REQ-051·052·068) | 백엔드와 화면 몫이다 |
 | 논의 요약을 새로 쓰기 | AI-03 요약 문장을 그대로 쓴다(요약 위에 요약을 쌓지 않는다) |
 | 목록에 의견·할 일 담기 | 기획 확인 뒤 다시 논의한다 |
-| 사람이 안건 상태를 직접 고치기 | PRD·명세서에 없다(AI-04 결정) |
+| 안건 상태를 직접 고치기 | 받지 않는다. 사용자가 정하는 것은 사항 상태이고 안건 상태는 거기서 정한다(`agenda-status-contract.md` 7.5) |
 | 종료 버튼 요청 없이 `end`만 온 경우의 이어서 논의하기 | `end`는 최종이다 |
 
 한계

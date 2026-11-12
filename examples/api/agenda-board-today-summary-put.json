@@ -23,7 +23,8 @@
             45
           ],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         }
       ],
       "summary": [
@@ -96,7 +97,8 @@
             51
           ],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         },
         {
           "decisionPointId": 11,
@@ -104,7 +106,8 @@
           "decisionText": "아직 논의되지 않았어요",
           "evidenceSeqs": [],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         }
       ],
       "summary": [
@@ -157,7 +160,8 @@
           "decisionText": "아직 논의되지 않았어요",
           "evidenceSeqs": [],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         }
       ],
       "summary": [],
@@ -188,7 +192,8 @@
               51
             ],
             "edited": false,
-            "needsCheck": false
+            "needsCheck": false,
+            "statusEdited": false
           },
           {
             "decisionPointId": 11,
@@ -196,7 +201,8 @@
             "decisionText": "아직 논의되지 않았어요",
             "evidenceSeqs": [],
             "edited": false,
-            "needsCheck": false
+            "needsCheck": false,
+            "statusEdited": false
           }
         ],
         "summary": [
@@ -232,7 +238,8 @@
             "decisionText": "아직 논의되지 않았어요",
             "evidenceSeqs": [],
             "edited": false,
-            "needsCheck": false
+            "needsCheck": false,
+            "statusEdited": false
           }
         ],
         "summary": []
@@ -263,7 +270,8 @@
               45
             ],
             "edited": false,
-            "needsCheck": false
+            "needsCheck": false,
+            "statusEdited": false
           }
         ],
         "summary": [
@@ -336,7 +344,8 @@
               51
             ],
             "edited": false,
-            "needsCheck": false
+            "needsCheck": false,
+            "statusEdited": false
           },
           {
             "decisionPointId": 11,
@@ -344,7 +353,8 @@
             "decisionText": "아직 논의되지 않았어요",
             "evidenceSeqs": [],
             "edited": false,
-            "needsCheck": false
+            "needsCheck": false,
+            "statusEdited": false
           }
         ],
         "summary": [
@@ -397,7 +407,8 @@
             "decisionText": "아직 논의되지 않았어요",
             "evidenceSeqs": [],
             "edited": false,
-            "needsCheck": false
+            "needsCheck": false,
+            "statusEdited": false
           }
         ],
         "summary": [],

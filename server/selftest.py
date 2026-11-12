@@ -1968,6 +1968,85 @@ def test_parallel_runs_concurrently():
     assert kinds.count(("start", "board")) == 1, "보드는 한 번만"
 
 
+def test_coalesce_config():
+    from .service import coalesce_from_env
+    assert coalesce_from_env({}) == 1 and coalesce_from_env({"BATCH_COALESCE_MAX": ""}) == 1
+    assert coalesce_from_env({"BATCH_COALESCE_MAX": " 3 "}) == 3 and coalesce_from_env({"BATCH_COALESCE_MAX": "10"}) == 10
+    for bad in ("0", "11", "-1", "abc", "1.5", "true"):
+        try:
+            coalesce_from_env({"BATCH_COALESCE_MAX": bad})
+            raise SystemExit(f"잘못된 설정을 못 잡음: {bad}")
+        except ConfigError:
+            pass
+    assert Registry(cfg_from_env({}), env={}).coalesce_max == 1
+    assert Registry(cfg_from_env({}), env={"BATCH_COALESCE_MAX": "4"}).coalesce_max == 4
+    assert Registry(cfg_from_env({}), env={"BATCH_COALESCE_MAX": "4"}, coalesce_max=2).coalesce_max == 2
+
+
+def _backlog(coalesce_max, parallel=False, fail_first_live=False):
+    """일꾼이 멈춘 사이 대기열에 묶음 1, 2, (틱), 3 이 쌓인 뒤 일꾼을 시작해 처리 기록을 돌려준다 (모델 호출 없음)"""
+    reg = Registry(cfg_from_env({}), parallel=parallel, coalesce_max=coalesce_max)
+    mid = "m_coal"
+    m = reg._get(mid)
+    log = []
+
+    def live(b):
+        if b["seq"] == 3:
+            time.sleep(0.3)                                            # 마지막 묶음을 늦게 끝낸다. task_done 이 일찍 세어지면 wait_idle 이 먼저 돌아온다
+        log.append(("live", b["seq"]))
+        if fail_first_live and b["seq"] == 1:
+            raise RuntimeError("live down")
+    m.summarizer.receive = live
+    real_in = m.classifier.receive
+    m.classifier.receive = lambda b: (log.append(("cls_in", b["seq"])), real_in(b))[1]
+    m.classifier.process = lambda final=False: log.append(("cls_process",))
+    reg._agenda_steps = lambda mm, final=False, flush=False: log.append(("steps",))
+    gate = threading.Event()
+    m.worker = threading.Thread(target=gate.wait, daemon=True)         # 일꾼이 이미 있는 것처럼 두어 대기열에 쌓이게 한다
+    m.worker.start()
+    for n in (1, 2):
+        assert reg.receive_batch(mid, empty_batch(mid, n))["result"] == "accepted"
+    m.queue.put(("tick", None))
+    assert reg.receive_batch(mid, empty_batch(mid, 3))["result"] == "accepted"
+    gate.set()
+    m.worker.join()
+    m.worker = None
+    reg._ensure_worker(m)
+    assert reg.wait_idle(mid, timeout=20), "대기열이 비지 않음 (task_done 개수가 어긋남)"
+    return reg, mid, log
+
+
+def test_coalesce_backlog():
+    # 하나씩 (기본): 묶음마다 분류와 안건 단계를 한 번씩
+    reg, mid, log = _backlog(1)
+    assert log == [("live", 1), ("cls_in", 1), ("cls_process",), ("steps",), ("live", 2), ("cls_in", 2), ("cls_process",), ("steps",),
+                   ("cls_process",), ("steps",), ("live", 3), ("cls_in", 3), ("cls_process",), ("steps",)], log
+    assert reg.status(mid)["errors"] == 0
+    # 합치기: 묶음 1, 2 는 한 번에, 틱은 그 자리에서(순서 유지), 묶음 3 은 그 뒤에
+    reg, mid, log = _backlog(5)
+    assert log == [("live", 1), ("live", 2), ("cls_in", 1), ("cls_in", 2), ("cls_process",), ("steps",),
+                   ("cls_process",), ("steps",),
+                   ("live", 3), ("cls_in", 3), ("cls_process",), ("steps",)], log
+    assert reg.status(mid)["errors"] == 0
+    # 최대 개수: 2 면 묶음 1, 2 까지만 모은다 (같은 결과), 상한이 1 이면 합치지 않는다
+    reg, mid, log = _backlog(2)
+    assert log.count(("cls_process",)) == 3 and log[:2] == [("live", 1), ("live", 2)], log
+    # 동시 모드에서도 같은 순서와 개수
+    reg, mid, log = _backlog(5, parallel=True)
+    assert sorted(log) == sorted([("live", 1), ("live", 2), ("live", 3), ("cls_in", 1), ("cls_in", 2), ("cls_in", 3)]
+                                 + [("cls_process",)] * 3 + [("steps",)] * 3), log
+    assert [e for e in log if e[0] == "cls_in"] == [("cls_in", 1), ("cls_in", 2), ("cls_in", 3)]
+    assert reg.status(mid)["errors"] == 0
+
+
+def test_coalesce_isolated():
+    """합친 묶음 중 하나의 회의 중 요약이 실패해도 나머지 묶음은 들어가고 분류와 안건 단계는 그대로 간다"""
+    reg, mid, log = _backlog(5, fail_first_live=True)
+    assert ("live", 2) in log and ("cls_in", 1) in log and ("cls_in", 2) in log, log
+    assert log.count(("cls_process",)) == 3 and log.count(("steps",)) == 3, log
+    assert reg.status(mid)["errors"] == 1, reg.status(mid)["errors"]
+
+
 def test_live_runs_with_classify():
     """동시 모드에서는 회의 중 요약과 분류가 같은 시각에 돌고, 둘 다 끝나야 다음으로 간다. 차례 모드에서는 요약이 먼저"""
     for parallel in (True, False):
@@ -2074,6 +2153,9 @@ def main():
     test_live_runs_with_classify()
     test_sequential_order_kept()
     test_parallel_isolated()
+    test_coalesce_config()
+    test_coalesce_backlog()
+    test_coalesce_isolated()
     test_publisher_board()
     test_classify_config()
     test_publisher_classification()

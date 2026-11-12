@@ -214,6 +214,23 @@ def parallel_from_env(env=None):
     return v == "1"
 
 
+COALESCE_MAX_LIMIT = 10
+
+
+def coalesce_from_env(env=None):
+    """환경변수 BATCH_COALESCE_MAX -> 대기열에 밀린 줄 묶음을 한 번에 처리할 최대 개수. 기본 1(하나씩, 지금처럼).
+    처리가 도착 속도를 못 따라가 묶음이 쌓였을 때만 효과가 있다. 쌓인 묶음의 줄을 모두 넣은 뒤 분류와 안건 단계를 한 번만 돈다."""
+    env = os.environ if env is None else env
+    v = (env.get("BATCH_COALESCE_MAX") or "1").strip()
+    try:
+        n = int(v)
+    except ValueError:
+        raise ConfigError(f"BATCH_COALESCE_MAX 는 1~{COALESCE_MAX_LIMIT} 의 정수여야 함: {v}")
+    if not 1 <= n <= COALESCE_MAX_LIMIT:
+        raise ConfigError(f"BATCH_COALESCE_MAX 는 1~{COALESCE_MAX_LIMIT} 의 정수여야 함: {v}")
+    return n
+
+
 class MeetingState:
     def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None, summarize_cfg=None, summarize_llm=None,
                  status_cfg=None, status_llm=None, opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None,
@@ -252,7 +269,7 @@ class Registry:
     def __init__(self, cfg, llm=None, publisher=None, env=None, classify_cfg=None, classify_llm=None,
                  summarize_cfg=None, summarize_llm=None, status_cfg=None, status_llm=None,
                  opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None, offtopic_cfg=None, offtopic_llm=None,
-                 parallel=None):
+                 parallel=None, coalesce_max=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
         self.publisher = publisher
@@ -270,6 +287,7 @@ class Registry:
         self.offtopic_cfg = offtopic_cfg or offtopic_cfg_from_env(self.env, cfg)
         self.offtopic_llm = offtopic_llm    # 시험용: 새 안건 제목 만들기에서 모델 호출 대신 쓸 함수
         self.parallel = parallel_from_env(self.env) if parallel is None else bool(parallel)   # 안건 단계를 동시에 돌릴지
+        self.coalesce_max = coalesce_from_env(self.env) if coalesce_max is None else int(coalesce_max)   # 밀린 묶음을 한 번에 처리할 최대 개수
         self.shutting_down = False
         self.meetings = {}
         self.lock = threading.Lock()
@@ -516,16 +534,38 @@ class Registry:
             m.worker.start()
 
     def _run(self, m):
+        carry = None                                             # 묶음을 모으다 만난 다른 일감(종료, 틱 등). 다음 차례에 먼저 처리한다
         while True:
-            kind, payload = m.queue.get()
+            kind, payload = carry if carry is not None else m.queue.get()
+            carry = None
+            batches = [payload] if kind == "batch" else []
+            # 대기열에 줄 묶음이 밀려 있으면 최대 coalesce_max 개까지 모아 한 번에 처리한다. 순서는 지키므로 다른 일감을 만나면 거기서 멈춘다
+            while kind == "batch" and len(batches) < self.coalesce_max:
+                try:
+                    kind2, payload2 = m.queue.get_nowait()
+                except queue.Empty:
+                    break
+                if kind2 == "batch":
+                    batches.append(payload2)
+                else:
+                    carry = (kind2, payload2)
+                    break
             try:
                 # 요약과 안건 분류는 서로 실패해도 영향을 주지 않는다
                 if kind == "batch":
+                    if len(batches) > 1:
+                        log.info("밀린 묶음을 합쳐서 처리 meeting=%s batches=%s", m.meeting_id, len(batches))
+
+                    def live():
+                        first = self._each(m.summarizer.receive, batches)   # 한 묶음이 실패해도 나머지 묶음은 넣는다
+                        self._maybe_publish(m, final=False)
+                        if first:
+                            raise first
+
                     def classify_and_steps():
-                        self._step(m, "classify", lambda: self._classify(m, batch=payload))
+                        self._step(m, "classify", lambda: self._classify(m, batches=batches))
                         self._agenda_steps(m)
-                    self._with_live(m, "batch", lambda: (m.summarizer.receive(payload), self._maybe_publish(m, final=False)),
-                                    classify_and_steps)
+                    self._with_live(m, "batch", live, classify_and_steps)
                 elif kind == "end":
                     def finish_summary():
                         m.summarizer.now_ms = max(m.summarizer.now_ms, payload["at_ms"])
@@ -541,7 +581,19 @@ class Registry:
                     self._step(m, "classify", lambda: self._classify(m, flush=flush))
                     self._agenda_steps(m, flush=flush)
             finally:
-                m.queue.task_done()
+                for _ in range(len(batches) if kind == "batch" else 1):
+                    m.queue.task_done()                              # 가져온 일감 수만큼 (다음으로 넘긴 carry 는 그때 센다)
+
+    @staticmethod
+    def _each(fn, items):
+        """items 마다 fn 을 부른다. 하나가 실패해도 나머지는 계속 넣고, 처음 난 예외를 돌려준다(없으면 None)."""
+        first = None
+        for item in items:
+            try:
+                fn(item)
+            except Exception as e:  # noqa: BLE001
+                first = first or e
+        return first
 
     def _with_live(self, m, name, live_fn, rest_fn):
         """회의 중 요약(live_fn)과 안건 쪽 처리(rest_fn: 분류 -> 안건 단계 -> 보드)를 하나씩 처리한다.
@@ -567,14 +619,17 @@ class Registry:
                 m.errors += 1
             log.error("처리 실패 meeting=%s kind=%s error=%s", m.meeting_id, name, type(e).__name__)
 
-    def _classify(self, m, batch=None, end_ms=None, final=False, flush=False):
-        """줄 묶음을 분류기에 넘기고, 분류할 때가 되었으면 분류한 뒤 바뀐 것을 백엔드로 보낸다. flush 이면 기다리지 않고 분류한다."""
-        if batch is not None:
-            m.classifier.receive(batch)
+    def _classify(self, m, batch=None, end_ms=None, final=False, flush=False, batches=None):
+        """줄 묶음을 분류기에 넘기고, 분류할 때가 되었으면 분류한 뒤 바뀐 것을 백엔드로 보낸다. flush 이면 기다리지 않고 분류한다.
+        batches: 밀린 묶음 여러 개를 순서대로 넣고 분류는 한 번만 한다."""
+        items = list(batches) if batches is not None else ([batch] if batch is not None else [])
+        first = self._each(m.classifier.receive, items)
         if end_ms is not None:
             m.classifier.advance(end_ms)
         m.classifier.process(final=final or flush)
         self._publish_classification(m, final)
+        if first:
+            raise first
 
     def _publish_classification(self, m, final):
         if self.publisher is None or not self.publisher.enabled:

@@ -555,7 +555,8 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
                     "고쳐 검색하고, 볼 수 있는 문서(docs, {sourceType, docId} 짝)의 조각만 근거로 답한다. 답의 문장마다 근거 번호 [n] 이 붙는다. "
                     "status: answered / no_result(answer 는 \"회의 자료에서 찾을 수 없어요\") / failed(errorCode 참고). "
                     "세 경우 모두 200 이고, 최대 60초 안에 답한다 (넘으면 failed + llm_timeout). 진행 중 회의(liveAgendas, recentLines)도 근거로 쓴다. "
-                    "일반 지식은 아직 쓰지 않는다 (SCRUM-225). 대화 기록은 저장하지 않으므로 요청마다 history 로 보낸다.",
+                    "근거에 없는 개념·용어·방법과 오늘 날짜는 일반 지식으로 답하고 [일반] 을 붙인다 (basis: sources / general / mixed). "
+                    "대화 기록은 저장하지 않으므로 요청마다 history 로 보낸다.",
         openapi_extra={"requestBody": {"required": True, "content": {"application/json": {
             "schema": CHAT_SCHEMA, "example": CHAT_EXAMPLE}}}},
         responses={200: {"description": "챗봇 결과 (status 로 구분)", "content": {"application/json": {

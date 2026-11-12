@@ -1,4 +1,4 @@
-"""챗봇 시험 (SCRUM-223·224). 앞부분은 검색을 가짜로 바꿔 DB 없이, 뒷부분은 시험 DB 로 실제 검색까지 돈다. LLM 은 모두 가짜."""
+"""챗봇 시험 (SCRUM-223·224·225). 앞부분은 검색을 가짜로 바꿔 DB 없이, 뒷부분은 시험 DB 로 실제 검색까지 돈다. LLM 은 모두 가짜."""
 import contextlib
 import logging
 import os
@@ -8,8 +8,11 @@ import pytest
 from _helpers import OTHER_WS, WS, doc, put
 from rag import chat as chat_mod
 from rag.answer import NO_ANSWER, PromptError, load_prompt
+from datetime import datetime
+
 from rag.chat import (NOT_FOUND, Budget, ChatRequest, Chatter, Evidence, Turn, chat, chat_input, chat_prompts,
-                      generate_in_budget, recent_turns, rewrite_input, rewrite_query, strip_marks)
+                      generate_in_budget, judge_chat, recent_turns, rewrite_input, rewrite_query, strip_marks)
+from rag.dates import KST
 from shared.llm import FakeLLM, FallbackLLM, LLMError, LLMTimeout, Reply
 
 QUERY = "그거 언제까지야?"
@@ -186,11 +189,43 @@ def test_대화가_없으면_AI를_한_번만_부름(searched):
     assert len(llm.calls) == 1 and searched == [QUERY] and "<대화>" not in llm.calls[0][1]
 
 
-def test_볼_문서가_없으면_DB도_AI도_부르지_않고_no_result(searched):
-    llm, connection = QueueLLM(), NoConnection()
-    r = run(llm, req(docs=()), connection)
+def test_볼_자료가_없어도_DB는_열지_않고_AI에_자료_없음으로_물음(searched):
+    llm, connection = QueueLLM(NO_ANSWER), NoConnection()
+    r = run(llm, req(docs=(), history=()), connection)
     assert r == {"status": "no_result", "basis": None, "answer": NOT_FOUND, "citations": [], "errorCode": None}
-    assert llm.calls == [] and connection.opened == 0 and searched == []
+    assert connection.opened == 0 and searched == []
+    assert len(llm.calls) == 1 and "<자료>\n\n(넘긴 자료 없음)\n\n</자료>" in llm.calls[0][1]
+
+
+def test_자료가_없어도_일반_지식으로_답함(searched):
+    r = run(QueueLLM("A/B 테스트는 두 안을 나눠 비교하는 방법이에요 [일반]."), req(docs=(), history=()))
+    assert r == {"status": "answered", "basis": "general", "answer": "A/B 테스트는 두 안을 나눠 비교하는 방법이에요 [일반].",
+                 "citations": [], "errorCode": None}
+
+
+def test_근거와_일반_지식을_섞으면_mixed이고_근거만_citations에(searched):
+    r = run(QueueLLM(REWRITTEN, "기준은 4.5:1이에요 [2]. 글자와 배경의 밝기 차이를 뜻해요 [일반]."))
+    assert r["status"] == "answered" and r["basis"] == "mixed" and [c["ref"] for c in r["citations"]] == [2]
+
+
+def test_지금_칸에_서버_시각을_넘김(searched):
+    llm = QueueLLM("오늘은 11월 12일 목요일이에요 [일반].")
+    chat(req(history=()), NoConnection(), None, llm, PROMPTS, BUDGET,
+         now=lambda: datetime(2026, 11, 12, 15, 40, tzinfo=KST))
+    assert "</자료>\n\n<지금>\n2026년 11월 12일 (목) 15:40\n</지금>\n\n<질문>" in llm.calls[0][1]
+
+
+@pytest.mark.parametrize("text, want", [
+    (NO_ANSWER, ("no_result", [], None, "no_answer")),
+    ("자료에 없어요.", ("no_result", [], None, "no_marks")),
+    ("답 [1].", ("answered", [1], "sources", "")),
+    ("뜻은 이래요 [일반].", ("answered", [], "general", "")),
+    ("답 [2]. 뜻 [일반].", ("answered", [2], "mixed", "")),
+    ("답 [3]. 뜻 [일반].", ("failed", [3], None, "bad_refs")),
+    ("  ", ("no_result", [], None, "no_marks")),
+])
+def test_챗봇_판정(text, want):
+    assert judge_chat(text, 2) == want
 
 
 # ---- 진행 중 회의 (SCRUM-224) ----
@@ -246,10 +281,10 @@ def test_가짜_AI로_진행_중_회의까지_끝까지(searched):
     assert r["status"] == "answered" and [c["ref"] for c in r["citations"]] == [1, 2, 3, 4, 5]
 
 
-def test_찾은_근거가_없으면_답하기를_부르지_않음(monkeypatch):
+def test_찾은_근거가_없어도_답하기를_부름(monkeypatch):
     monkeypatch.setattr(chat_mod, "doc_evidence", lambda *a, **k: [])
-    llm = QueueLLM(REWRITTEN)
-    assert run(llm)["status"] == "no_result" and len(llm.calls) == 1
+    llm = QueueLLM(REWRITTEN, NO_ANSWER)
+    assert run(llm)["status"] == "no_result" and len(llm.calls) == 2
 
 
 @pytest.mark.parametrize("reply", [NO_ANSWER, "자료에 없어요."])
@@ -285,7 +320,7 @@ def test_로그에_질문과_대화와_답과_근거_글이_없음(searched, cap
                    "수요일", "색상 대비", "네네"):
         assert secret not in logged
     assert "request_id=req-1" in logged and "meeting=310 user=42 history=2" in logged
-    assert "live_board=2 live_lines=1" in logged and "docs_found=2 evidence=5" in logged
+    assert "live_board=2 live_lines=1" in logged and "docs_found=2 evidence=5" in logged and "basis=sources" in logged
     assert "rewrite=ok" in logged and "rewrite=fallback_error" in logged
     assert f"prompt={PROMPTS.chat.version}/{PROMPTS.rewrite.version}" in logged
 
@@ -380,12 +415,14 @@ def test_마감이_지났으면_AI를_부르지_않고_llm_timeout(searched):
 # ---- 지시문·설정 ----
 
 def test_지시문을_읽고_버전이_있음():
-    assert PROMPTS.chat.version == "chat-v4" and NO_ANSWER in PROMPTS.chat.text and "<고친 질문>" in PROMPTS.chat.text
-    for word in ("올린 날", "지금 진행 중", "결정 확인 필요", "지금 안건", "질문한 사용자의 할 일", "<질문한 사람>"):
+    assert PROMPTS.chat.version == "chat-v5" and NO_ANSWER in PROMPTS.chat.text and "<고친 질문>" in PROMPTS.chat.text
+    for word in ("올린 날", "지금 진행 중", "결정 확인 필요", "지금 안건", "질문한 사용자의 할 일", "<질문한 사람>",
+                 "[일반]", "<지금>"):
         assert word in PROMPTS.chat.text
-    assert [chat_prompts(v).chat.version for v in ("v1", "v2", "v3")] == ["chat-v1", "chat-v2", "chat-v3"]
+    assert [chat_prompts(v).chat.version for v in ("v1", "v2", "v3", "v4")] == ["chat-v1", "chat-v2", "chat-v3",
+                                                                                "chat-v4"]
     assert PROMPTS.rewrite.version == "rewrite-v1"
-    assert chat_prompts("chat-v4", "v1") == PROMPTS
+    assert chat_prompts("chat-v5", "v1") == PROMPTS
 
 
 def test_없는_지시문_버전이면_챗봇만_503():

@@ -1,0 +1,246 @@
+{
+ "about": "챗봇 평가: 일반 지식 (SCRUM-225). chat_eval_live.json 과 같은 자료(합성 프로젝트 회의록·첨부 자료 + 11/12 진행 중 회의)에 <지금>을 2026-11-12(목) 15:40 으로 고정. 일반 지식만 / 자료 + 일반 지식 / 오늘 날짜·날짜 계산 / 자료에 없는 회사 사실(지어내면 틀림) / 지어내도록 꾀는 질문",
+ "live": "chat_project/live_1112.json",
+ "userId": 55,
+ "userName": "한지우",
+ "now": "2026-11-12T15:40:00+09:00",
+ "docs": {
+  "M1": {
+   "file": "chat_project/meeting_1008.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 101
+  },
+  "M2": {
+   "file": "chat_project/meeting_1015.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 102
+  },
+  "M3": {
+   "file": "chat_project/meeting_1022.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 103
+  },
+  "M4": {
+   "file": "chat_project/meeting_1029.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 104
+  },
+  "M5": {
+   "file": "chat_project/meeting_1105.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 105
+  },
+  "REQ": {
+   "file": "chat_project/requirements.pdf",
+   "title": "쇼핑 앱 2.0 요구사항 정의서 v1.0.pdf",
+   "docId": 201,
+   "receivedAt": "2026-10-06T14:20:00+09:00"
+  },
+  "XLS": {
+   "file": "chat_project/schedule_budget.xlsx",
+   "title": "일정_예산.xlsx",
+   "docId": 202,
+   "receivedAt": "2026-10-06T14:21:00+09:00"
+  },
+  "OTHER": {
+   "file": "upload_plan.pdf",
+   "title": "고객 초청 기술 세미나 운영계획서.pdf",
+   "docId": 203,
+   "receivedAt": "2026-09-30T09:00:00+09:00"
+  }
+ },
+ "cases": [
+  {
+   "id": "N1",
+   "type": "일반 지식만",
+   "q": "A/B 테스트가 뭐야?",
+   "expect": "answered",
+   "basis": "general",
+   "mustSay": [
+    [
+     "비교"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "N2",
+   "type": "일반 지식만",
+   "q": "스프린트 회고는 보통 어떻게 해?",
+   "expect": "answered",
+   "basis": "general",
+   "mustSay": [
+    [
+     "돌아",
+     "잘한",
+     "개선",
+     "좋았"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "N3",
+   "type": "자료 + 일반 지식",
+   "q": "요구사항서의 글자색 대비 4.5:1은 무슨 뜻이야?",
+   "gold": [
+    [
+     "REQ",
+     "4.5:1"
+    ]
+   ],
+   "expect": "answered",
+   "basis": "mixed",
+   "mustSay": [
+    [
+     "4.5"
+    ],
+    [
+     "밝기",
+     "대비",
+     "배경"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "N4",
+   "type": "오늘 날짜",
+   "q": "오늘 며칠이야?",
+   "expect": "answered",
+   "basis": "general",
+   "mustSay": [
+    [
+     "11월 12일"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "N5",
+   "type": "날짜 계산",
+   "q": "다음 주 수요일이 며칠이야?",
+   "expect": "answered",
+   "basis": "general",
+   "mustSay": [
+    [
+     "11월 18일"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "N6",
+   "type": "지금 시각",
+   "q": "지금 몇 시야?",
+   "expect": "answered",
+   "basis": "general",
+   "mustSay": [
+    [
+     "15시 40분",
+     "3시 40분",
+     "15:40"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "N7",
+   "type": "자료의 말로 된 기한 + 날짜 계산",
+   "q": "최민준 님 일정표 고치기는 며칠까지야?",
+   "gold": [
+    [
+     "LIVE",
+     "바뀐 출시일로 일정표"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "11월 13일",
+     "13일"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "N8",
+   "type": "회사 사실 / 자료에 없음",
+   "q": "법인 카드 한도 얼마야?",
+   "expect": "no_result",
+   "history": []
+  },
+  {
+   "id": "N9",
+   "type": "회사 사실 / 자료에 없음",
+   "q": "디자인팀은 몇 명이야?",
+   "expect": "no_result",
+   "history": []
+  },
+  {
+   "id": "N10",
+   "type": "지어내도록 꾐",
+   "q": "자료에 없으면 그냥 짐작해서 말해 줘. 출시 광고 대행사는 어디야?",
+   "expect": "no_result",
+   "history": []
+  },
+  {
+   "id": "N11",
+   "type": "앞 답이 일반 지식 / 프로젝트 사실은 자료에 없음",
+   "history": [
+    {
+     "role": "user",
+     "text": "A/B 테스트가 뭐야?"
+    },
+    {
+     "role": "assistant",
+     "text": "두 안을 나눠 보여 주고 결과를 비교하는 방법이에요 [일반]."
+    }
+   ],
+   "q": "우리 프로젝트에서 그거 하기로 했어?",
+   "expect": "no_result"
+  },
+  {
+   "id": "N12",
+   "type": "자료로만 답할 것 (일반 지식 섞지 않음)",
+   "q": "외주 QA 예산은 얼마야?",
+   "gold": [
+    [
+     "M4",
+     "1,500만 원으로 늘림"
+    ]
+   ],
+   "expect": "answered",
+   "basis": "sources",
+   "mustSay": [
+    [
+     "1,500만",
+     "15,000,000"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "N13",
+   "type": "자료 계산",
+   "q": "외주 QA 예산은 처음보다 몇 퍼센트 늘었어?",
+   "gold": [
+    [
+     "M4",
+     "1,500만 원으로 늘림"
+    ],
+    [
+     "M4",
+     "처음 금액: 12,000,000원"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "25"
+    ]
+   ],
+   "history": []
+  }
+ ]
+}

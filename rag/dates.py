@@ -21,3 +21,13 @@ def when_label(source_type: str, meeting_started_at: datetime | None, received_a
         return ""
     t = received_at.astimezone(KST) if received_at.tzinfo else received_at
     return f"올린 날 {t.year}년 {t.month}월 {t.day}일"
+
+
+WEEKDAYS = "월화수목금토일"
+
+
+def now_label(now: datetime) -> str:
+    """챗봇의 <지금> 칸 (SCRUM-225). "2026년 11월 12일 (목) 15:40", 한국 시간. 시간대가 없으면 한국 시간으로 본다.
+    AI 는 오늘 날짜를 스스로 모르므로 서버 시각을 넘겨 "오늘 며칠", "다음 주 수요일이 며칠"에 답하게 한다."""
+    t = now.astimezone(KST) if now.tzinfo else now
+    return f"{t.year}년 {t.month}월 {t.day}일 ({WEEKDAYS[t.weekday()]}) {t:%H:%M}"

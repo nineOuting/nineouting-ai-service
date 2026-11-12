@@ -210,6 +210,9 @@ cd <저장소 루트> && set -a && . ./.env && set +a
 .venv/bin/python -m rag.try_chat --file rag/tests/fixtures/minutes_confirmed_table.json --title "주간 회의 (10/20)" \
     --file rag/tests/fixtures/answer_minutes_followup.json --title "주간 회의 (10/27)"
 .venv/bin/python -m rag.try_chat --show-rewrite                           # 고친 질문도 본다 (AI 를 한 번 더 부름)
+# 진행 중 회의까지 (SCRUM-224): 합성 프로젝트 회의록 5개 + 11/12 진행 중 회의, 질문한 사람 한지우(55). 대화 중 /live 로 끄고 켬
+.venv/bin/python -m rag.try_chat --project --live rag/tests/fixtures/chat_project/live_1112.json --user 55 --user-name 한지우
+.venv/bin/python -m rag.try_chat --project --live rag/tests/fixtures/chat_project/live_1112_long.json --user 55 --user-name 한지우   # 넘치는 회의
 ```
 
 ## 작업자

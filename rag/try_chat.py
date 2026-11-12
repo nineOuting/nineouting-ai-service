@@ -8,7 +8,12 @@
   .venv/bin/python -m rag.try_chat --show-rewrite                    고친 질문도 보여 준다 (아래)
   .venv/bin/python -m rag.try_chat --project --live rag/tests/fixtures/chat_project/live_1112.json --user 55 --user-name 한지우
       합성 프로젝트의 회의록 5개(10/08~11/05)를 넣고, 11/12 진행 중 회의(안건 보드·최근 전사 줄)를 질문마다 같이 보낸다.
-      질문한 사람은 한지우(55). 넘치는 회의는 live_1112_long.json. 첨부 자료(PDF·엑셀)는 S3 주소가 필요해 넣지 않는다
+      질문한 사람은 한지우(55). 넘치는 회의는 live_1112_long.json.
+      --project 는 첨부 자료 3개(요구사항 정의서 PDF, 일정·예산 엑셀, 관계없는 행사 계획서 PDF)도 넣는다. 이 도구가
+      127.0.0.1:8795 에 파일 서버를 띄우고 그 주소를 fileUrl 로 보내므로, 서버를 이렇게 띄워야 한다 (.env 는 고치지 않음):
+        set -a && . ./.env && set +a && RAG_UPLOAD_ALLOWED_HOSTS=127.0.0.1:8795 .venv/bin/uvicorn server.main:app --port 8000
+      서버가 허용하지 않으면 첨부 자료는 건너뛰고 회의록만으로 이어 간다 (--no-uploads 면 처음부터 넣지 않음).
+      첨부 자료의 "올린 날"은 서버가 받은 시각(오늘)이다. 회의록보다 나중 날짜로 보인다
 
 대화 기록은 이 도구가 들고 있다가 질문마다 history 로 보낸다 (실제로는 백엔드가 하는 일, 명세 2장).
 명세대로 answered·no_result 답은 기록에 더하고 failed 는 더하지 않는다. 기록은 최근 20개까지 보낸다.
@@ -23,11 +28,12 @@
 실제 회의 데이터는 레포 밖에 두고 --file 로 경로만 넘긴다.
 """
 import argparse
+import hashlib
 import json
 import sys
 import threading
 import time
-from http.server import HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from .try_answer import DEMO, PREFIX, _Callback, call, ingest
@@ -35,6 +41,49 @@ from .try_answer import DEMO, PREFIX, _Callback, call, ingest
 MAX_HISTORY = 20                    # api.MAX_HISTORY 와 같다
 PROJECT = Path(__file__).parent / "tests" / "fixtures" / "chat_project"
 PROJECT_TITLE = "앱 리뉴얼 주간 회의"   # 평가 사례(chat_eval_project.json)와 같은 제목. 날짜는 회의록의 meetingStartAt 으로 붙는다
+PROJECT_UPLOADS = [                    # (파일, 제목). 평가 사례와 같은 제목
+    (PROJECT / "requirements.pdf", "쇼핑 앱 2.0 요구사항 정의서 v1.0.pdf"),
+    (PROJECT / "schedule_budget.xlsx", "일정_예산.xlsx"),
+    (PROJECT.parent / "upload_plan.pdf", "고객 초청 기술 세미나 운영계획서.pdf"),
+]
+FILE_PORT = 8795
+
+
+class _Files(BaseHTTPRequestHandler):
+    """첨부 자료를 내주는 작은 파일 서버 (S3 대신). 등록한 경로만 내준다."""
+    files: dict[str, bytes] = {}
+
+    def do_GET(self):
+        data = self.files.get(self.path.split("?")[0])
+        if data is None:
+            self.send_response(404)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *args):
+        pass
+
+
+def ingest_upload(server, args, doc_id, title, file_url, version, callback_url):
+    """첨부 자료 넣기. (조각 수, 걸린 초) 또는 (None, 이유). 서버가 거절하면 끝내지 않고 이유를 돌려준다."""
+    t0 = time.monotonic()
+    code, body = call(server, "POST", f"{PREFIX}/documents", {
+        "docId": doc_id, "docVersion": version, "workspaceId": args.workspace, "sourceType": "upload",
+        "title": title, "fileUrl": file_url, "callbackUrl": callback_url})
+    if code != 202:
+        return None, f"거절 {code}: {body.get('detail') if isinstance(body, dict) else body}"
+    while time.monotonic() - t0 < args.wait:
+        code, st = call(server, "GET", f"{PREFIX}/documents/upload/{doc_id}")
+        if code == 200 and st["docVersion"] == version and st["status"] in ("ready", "failed"):
+            if st["status"] == "failed":
+                return None, f"처리 실패 errorCode={st['errorCode']}"
+            return st["chunkCount"], time.monotonic() - t0
+        time.sleep(0.5)
+    return None, f"{args.wait}초 안에 처리가 끝나지 않음 (서버 로그를 확인)"
 
 
 def load_live(path: Path) -> dict:
@@ -92,6 +141,9 @@ def main(argv=None):
                    help="합성 프로젝트의 회의록 5개(chat_project/meeting_*.json)를 넣는다. --file 과 같이 쓰지 않는다")
     p.add_argument("--live", type=Path, help="진행 중 회의 파일 (예: rag/tests/fixtures/chat_project/live_1112.json)")
     p.add_argument("--no-docs", action="store_true", help="회의록을 넣지 않는다 (진행 중 회의만으로 시험)")
+    p.add_argument("--no-uploads", action="store_true", help="--project 에서 첨부 자료를 넣지 않는다")
+    p.add_argument("--file-port", type=int, default=FILE_PORT,
+                   help="첨부 자료 파일 서버 포트. 서버의 RAG_UPLOAD_ALLOWED_HOSTS 에 127.0.0.1:이 포트가 있어야 한다")
     p.add_argument("--server", default="http://127.0.0.1:8000")
     p.add_argument("--workspace", type=int, default=999999, help="시험용 워크스페이스 ID")
     p.add_argument("--doc-id", type=int, default=900001, help="첫 문서 ID. 다음 문서는 1씩 늘린다")
@@ -121,6 +173,9 @@ def main(argv=None):
     docs = [(args.doc_id + i, (titles[i] if i < len(titles) else f.stem), f) for i, f in enumerate(files)]
     doc_ids = [d for d, _, _ in docs]
     doc_refs = [{"sourceType": "minutes", "docId": d} for d in doc_ids]
+    # 첨부 자료는 회의록과 같은 번호를 쓴다 (sourceType 이 달라 다른 문서다, 명세 3.2)
+    uploads = [] if not args.project or args.no_uploads else \
+        [(args.doc_id + i, title, f) for i, (f, title) in enumerate(PROJECT_UPLOADS)]
     server = args.server.rstrip("/")
 
     print("[1/3] 서버 확인 ...", end=" ", flush=True)
@@ -133,6 +188,13 @@ def main(argv=None):
 
     cb = HTTPServer(("127.0.0.1", 0), _Callback)
     threading.Thread(target=cb.serve_forever, daemon=True).start()
+    fs = None
+    if uploads:
+        try:
+            fs = HTTPServer(("127.0.0.1", args.file_port), _Files)
+        except OSError:
+            sys.exit(f"  첨부 자료 파일 서버를 127.0.0.1:{args.file_port} 에 띄우지 못함 (포트를 쓰는 중). --file-port 로 바꾼다")
+        threading.Thread(target=fs.serve_forever, daemon=True).start()
     callback_url = f"http://127.0.0.1:{cb.server_port}/callback"
     history = []
     live_on = live is not None
@@ -144,6 +206,24 @@ def main(argv=None):
             minutes = json.loads(f.read_text(encoding="utf-8"))
             chunks, secs = ingest(server, args, doc_id, title, minutes, callback_url)
             print(f"처리 완료, 조각 {chunks}개 ({secs:.1f}초)")
+        if uploads:
+            print(f"  첨부 자료 (파일 서버 127.0.0.1:{args.file_port})")
+        for doc_id, title, f in uploads:
+            data = f.read_bytes()
+            _Files.files[f"/{f.name}"] = data
+            version = "sha256:" + hashlib.sha256(data).hexdigest()[:16]
+            print(f"  - {f.name} → upload {doc_id} \"{title}\" ...", end=" ", flush=True)
+            chunks, info = ingest_upload(server, args, doc_id, title, f"http://127.0.0.1:{args.file_port}/{f.name}",
+                                         version, callback_url)
+            if chunks is None:
+                print(info)
+                if "허용" in info or "설정" in info:
+                    print(f"    서버에 RAG_UPLOAD_ALLOWED_HOSTS=127.0.0.1:{args.file_port} 를 주고 띄워야 한다 (이 파일 맨 위 설명). "
+                          "첨부 자료 없이 이어 간다")
+                    break
+                continue
+            print(f"처리 완료, 조각 {chunks}개 ({info:.1f}초)")
+            doc_refs.append({"sourceType": "upload", "docId": doc_id})
         if live:
             print(f"  - 진행 중 회의: {args.live.name} (안건 {len(live['liveAgendas'])}개, 전사 줄 {len(live['recentLines'])}줄, "
                   f"지금 안건 {live['currentAgendaId']}). 질문마다 같이 보냄")
@@ -190,6 +270,8 @@ def main(argv=None):
             print()
     finally:
         cb.shutdown()
+        if fs:
+            fs.shutdown()
         if args.keep:
             print(f"남겨 둠: 워크스페이스 {args.workspace}, docId {', '.join(map(str, doc_ids))}")
         else:

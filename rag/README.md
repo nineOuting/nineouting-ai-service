@@ -210,7 +210,10 @@ cd <저장소 루트> && set -a && . ./.env && set +a
 .venv/bin/python -m rag.try_chat --file rag/tests/fixtures/minutes_confirmed_table.json --title "주간 회의 (10/20)" \
     --file rag/tests/fixtures/answer_minutes_followup.json --title "주간 회의 (10/27)"
 .venv/bin/python -m rag.try_chat --show-rewrite                           # 고친 질문도 본다 (AI 를 한 번 더 부름)
-# 진행 중 회의까지 (SCRUM-224): 합성 프로젝트 회의록 5개 + 11/12 진행 중 회의, 질문한 사람 한지우(55). 대화 중 /live 로 끄고 켬
+# 진행 중 회의까지 (SCRUM-224): 합성 프로젝트 회의록 5개 + 첨부 자료 3개 + 11/12 진행 중 회의, 질문한 사람 한지우(55). 대화 중 /live 로 끄고 켬
+# 첨부 자료는 이 도구가 127.0.0.1:8795 에 띄운 파일 서버에서 서버가 받아 간다. 서버는 이렇게 띄운다 (.env 는 고치지 않음):
+#   set -a && . ./.env && set +a && RAG_UPLOAD_ALLOWED_HOSTS=127.0.0.1:8795 .venv/bin/uvicorn server.main:app --port 8000
+# 같은 DB 를 보는 서버를 둘 이상 띄우면 다른 서버의 작업자가 첨부 자료를 가져가 download_failed 가 날 수 있다. 서버는 하나만 띄운다
 .venv/bin/python -m rag.try_chat --project --live rag/tests/fixtures/chat_project/live_1112.json --user 55 --user-name 한지우
 .venv/bin/python -m rag.try_chat --project --live rag/tests/fixtures/chat_project/live_1112_long.json --user 55 --user-name 한지우   # 넘치는 회의
 ```

@@ -22,7 +22,8 @@
             43
           ],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         },
         {
           "decisionPointId": 8,
@@ -32,7 +33,8 @@
             47
           ],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         },
         {
           "decisionPointId": 9,
@@ -43,7 +45,8 @@
             51
           ],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         }
       ],
       "summary": [],
@@ -52,11 +55,12 @@
     },
     {
       "agendaId": 102,
-      "status": "DISCUSSING",
+      "status": "DECIDED",
       "statusReason": {
-        "text": "결정할 사항 2개 중 1개가 결정됐어요 (미결 1개)",
+        "text": "결정할 사항 2개가 모두 결정됐어요",
         "evidenceSeqs": [
-          58
+          55,
+          56
         ]
       },
       "decisionPoints": [
@@ -69,15 +73,17 @@
             56
           ],
           "edited": true,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         },
         {
           "decisionPointId": 11,
-          "status": "UNDECIDED",
-          "decisionText": "비용 초과 시 승인 절차는 아직 결정되지 않았어요",
+          "status": "DECIDED",
+          "decisionText": "직접 결정으로 표시했어요. 결정 내용을 적어 주세요",
           "evidenceSeqs": [],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": true,
+          "statusEdited": true
         }
       ],
       "summary": [],
@@ -95,7 +101,8 @@
           "decisionText": "아직 논의되지 않았어요",
           "evidenceSeqs": [],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         }
       ],
       "summary": [],

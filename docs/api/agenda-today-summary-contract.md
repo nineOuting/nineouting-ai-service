@@ -63,7 +63,8 @@
             45
           ],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         }
       ],
       "summary": [
@@ -141,7 +142,8 @@
           "decisionText": "...",
           "evidenceSeqs": [],
           "edited": false,
-          "needsCheck": false
+          "needsCheck": false,
+          "statusEdited": false
         }
       ],
       "summary": [],
@@ -171,7 +173,7 @@
 | `summary[]` | 배열 | 같은 시점 보드의 요약 문장(AI-03) 사본. `id`, `text`, `evidenceSeqs`, `edited`, `needsCheck` |
 | `opinions[]` | 배열 | 같은 시점 보드의 의견(AI-05) 사본. `id`, `kind`, `text`, `evidenceSeqs`, `edited`, `needsCheck` |
 | `todos[]` | 배열 | 같은 시점 보드의 할 일(AI-05) 사본. `agenda-opinions-contract.md` 4.2의 칸 그대로 |
-| `decisionPoints[]` | 배열 | 같은 시점 보드의 결정할 사항별 결과(AI-04) 사본. `decisionPointId`, `status`, `decisionText`, `evidenceSeqs`, `edited`, `needsCheck` (`agenda-status-contract.md` 3.1). 안건 목록의 모든 사항이 들어 있다 |
+| `decisionPoints[]` | 배열 | 같은 시점 보드의 결정할 사항별 결과(AI-04) 사본. `decisionPointId`, `status`, `decisionText`, `evidenceSeqs`, `edited`, `needsCheck`, `statusEdited` (`agenda-status-contract.md` 3.1). 안건 목록의 모든 사항이 들어 있다 |
 
 - **`DISCUSSING`은 오지 않는다.** 보드에서 논의 중인 안건도 종료를 가정하면 `UNDECIDED`다. 회의가 끝나면(`final: true`) 보드의 상태와 같아진다.
 - 안건 상태는 사항 상태에서 정한다 (`agenda-status-contract.md` 2.2). 결정된 사항과 미결 사항은 `decisionPoints[].status`로 나눈다. 안건이 미결이어도 그 안에 결정된 사항이 있을 수 있다.

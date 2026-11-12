@@ -1688,19 +1688,38 @@ def test_decision_points_flow(cap):
     assert reg.wait_idle(path) and pub.wait_idle()
     pts = by_agenda(boards()[-1], 101)["decisionPoints"]
     assert pts[1] == {"decisionPointId": 8, "status": "DECIDED", "decisionText": "배포 담당은 인프라 팀으로 확정",
-                      "evidenceSeqs": [3], "edited": True, "needsCheck": False}, pts[1]
+                      "evidenceSeqs": [3], "edited": True, "needsCheck": False, "statusEdited": False}, pts[1]
     assert not pts[0]["edited"] and not pts[2]["edited"]
     n0 = len(boards())
     r = reg.receive_decision_edits(path, {"meetingId": mid, "edits": [edit]})
     assert r == {"accepted": True, "result": "stale", "applied": 0, "ignored": [{"decisionPointId": 8, "reason": "stale"}]}, r
     assert reg.wait_idle(path) and pub.wait_idle() and len(boards()) == n0, "같은 고침을 다시 받아도 보드를 다시 보내지 않는다"
 
-    # 새 줄이 와서 다시 판정해도 고친 글과 근거는 그대로, 고치지 않은 사항은 새 판정으로 바뀐다
+    # 새 줄이 와서 다시 판정해도 고친 글과 근거는 그대로이고, AI가 낸 결정도 잠겨 있어 그대로다 (v0.3)
     send([lo_line(4, "배포 일정 이야기 4번"), lo_line(5, "배포 일정은 금요일로 하기로 결정")])
     pts = by_agenda(boards()[-1], 101)["decisionPoints"]
     assert pts[1]["decisionText"] == "배포 담당은 인프라 팀으로 확정" and pts[1]["evidenceSeqs"] == [3] and pts[1]["edited"], pts[1]
-    assert pts[0]["evidenceSeqs"] == [5] and pts[0]["edited"] is False and pts[2]["evidenceSeqs"] == [5], pts
+    assert pts[0]["evidenceSeqs"] == [3] and pts[0]["edited"] is False and pts[2]["evidenceSeqs"] == [3], "AI가 낸 결정은 잠겨 있다"
     assert reg.status(path)["agendaStatus"]["decided"] == 3, "상태 조회는 결정된 사항 수"
+
+    # 사용자가 정한 사항 상태: 결정을 미결로 정하면 보드에 바로 반영되고 안건 상태가 바뀐다. AI가 새 줄로 다시 판정해도 바뀌지 않는다
+    sedit = {"agendaId": 101, "decisionPointId": 9, "status": "UNDECIDED", "rev": 1}
+    assert reg.receive_status_edits(path, {"meetingId": mid, "edits": [sedit]}) == {"accepted": True, "result": "accepted", "applied": 1, "ignored": []}
+    assert reg.wait_idle(path) and pub.wait_idle()
+    a = by_agenda(boards()[-1], 101)
+    assert a["decisionPoints"][2]["status"] == "UNDECIDED" and a["decisionPoints"][2]["statusEdited"] is True, a["decisionPoints"][2]
+    assert [p["statusEdited"] for p in a["decisionPoints"]] == [False, False, True] and a["status"] != "DECIDED", "사항 하나가 미결이면 안건은 결정이 아니다"
+    n0 = len(boards())
+    r = reg.receive_status_edits(path, {"meetingId": mid, "edits": [sedit]})
+    assert r == {"accepted": True, "result": "stale", "applied": 0, "ignored": [{"decisionPointId": 9, "reason": "stale"}]}, r
+    assert reg.wait_idle(path) and pub.wait_idle() and len(boards()) == n0, "같은 지정을 다시 받아도 보드를 다시 보내지 않는다"
+    send([lo_line(6, "배포 일정 이야기 6번"), lo_line(7, "배포 일정은 다음 주로 하기로 결정")])
+    assert by_agenda(boards()[-1], 101)["decisionPoints"][2]["status"] == "UNDECIDED", "사용자가 정한 상태는 AI가 바꾸지 않는다"
+    # AUTO 로 풀면 AI 판정으로 돌아간다 (AI 결정 잠금도 풀려 새 판정이 반영된다)
+    assert reg.receive_status_edits(path, {"meetingId": mid, "edits": [dict(sedit, status="AUTO", rev=2)]})["applied"] == 1
+    assert reg.wait_idle(path) and pub.wait_idle()
+    a = by_agenda(boards()[-1], 101)
+    assert a["decisionPoints"][2]["status"] == "DECIDED" and a["decisionPoints"][2]["statusEdited"] is False and a["status"] == "DECIDED", a["decisionPoints"][2]
 
     # 잘못된 고침은 거절하고, 끝난 회의의 고침은 받지 않는다
     for bad in (dict(edit, decisionText="  ", rev=2), dict(edit, evidenceSeqs=["3"], rev=2), {k: v for k, v in edit.items() if k != "decisionPointId"}):
@@ -1714,9 +1733,21 @@ def test_decision_points_flow(cap):
         raise SystemExit("주소와 본문의 meetingId 불일치를 못 잡음")
     except AdapterError:
         pass
+    for bad in (dict(sedit, status="DISCUSSING", rev=9), dict(sedit, status="NOT_STARTED", rev=9), {k: v for k, v in sedit.items() if k != "status"}):
+        try:
+            reg.receive_status_edits(path, {"meetingId": mid, "edits": [bad]})
+            raise SystemExit("잘못된 상태 지정을 못 잡음")
+        except AdapterError:
+            pass
+    try:
+        reg.receive_status_edits("92", {"meetingId": mid, "edits": [dict(sedit, rev=9)]})
+        raise SystemExit("주소와 본문의 meetingId 불일치를 못 잡음")
+    except AdapterError:
+        pass
     reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": 100000})
     assert reg.wait_idle(path) and pub.wait_idle()
     assert reg.receive_decision_edits(path, {"meetingId": mid, "edits": [dict(edit, rev=3)]}) == {"accepted": False, "result": "ignored", "reason": "ended"}
+    assert reg.receive_status_edits(path, {"meetingId": mid, "edits": [dict(sedit, rev=9)]}) == {"accepted": False, "result": "ignored", "reason": "ended"}
     fin = by_agenda(boards()[-1], 101)
     assert fin["status"] == "DECIDED" and fin["decisionPoints"][1]["edited"] is True
 
@@ -1732,13 +1763,13 @@ def test_decision_points_examples():
     old = adapt_agendas(load("agendas-put.json"))
     assert all("points" not in a for a in old["agendas"]), "옛 모양(decisionPoint 문자열)은 전환 기간에 그대로 받는다"
     ids = {a["id"]: [p["id"] for p in a["points"]] for a in inp["agendas"]}
-    keys = {"decisionPointId", "status", "decisionText", "evidenceSeqs", "edited", "needsCheck"}
+    keys = {"decisionPointId", "status", "decisionText", "evidenceSeqs", "edited", "needsCheck", "statusEdited"}
 
     def check_board(ex, name, same_ids=False):
         for a in ex["agendas"]:
             pts = a["decisionPoints"]
             assert pts and all(set(p) == keys and p["decisionText"] for p in pts), (name, a["agendaId"])
-            assert all(p["evidenceSeqs"] for p in pts if p["status"] in (DECIDED, DECISION_CHECK)), "결정, 결정 확인 필요는 근거가 있다"
+            assert all(p["evidenceSeqs"] for p in pts if p["status"] in (DECIDED, DECISION_CHECK) and not p["statusEdited"]), "AI가 낸 결정, 결정 확인 필요는 근거가 있다 (사용자가 정한 결정은 비어도 된다)"
             sts = [p["status"] for p in pts]
             assert derive_status(sts, a["status"] != NOT_STARTED, a["agendaId"] == ex["currentAgendaId"]) == a["status"], (name, a["agendaId"])
             if a["status"] == NOT_STARTED:
@@ -1756,6 +1787,11 @@ def test_decision_points_examples():
     assert len(e) == 1 and e[0]["agenda_id"] == 102 and e[0]["point_id"] == 10 and e[0]["rev"] == 2
     p10 = next(p for a in ex["agendas"] if a["agendaId"] == 102 for p in a["decisionPoints"] if p["decisionPointId"] == 10)
     assert p10["edited"] is True and p10["decisionText"] == e[0]["text"] and p10["evidenceSeqs"] == e[0]["evidence_seqs"], "고친 결정 내용 예시와 보드 예시가 같다"
+    from input_adapter import adapt_status_edits
+    se = adapt_status_edits(load("status-edits-post.json"))["edits"]
+    assert len(se) == 1 and (se[0]["agenda_id"], se[0]["point_id"], se[0]["status"], se[0]["rev"]) == (102, 11, "DECIDED", 1)
+    p11 = next(p for a in ex["agendas"] if a["agendaId"] == 102 for p in a["decisionPoints"] if p["decisionPointId"] == 11)
+    assert p11["statusEdited"] is True and p11["status"] == se[0]["status"] and p11["needsCheck"] is True and p11["evidenceSeqs"] == [], "상태 지정 예시와 보드 예시가 같다"
 
 
 def test_api_decision_edits():
@@ -1776,6 +1812,32 @@ def test_api_decision_edits():
     r = c.post(url, json={"meetingId": mid, "edits": [{"agendaId": 102, "decisionPointId": 10, "decisionText": " ", "evidenceSeqs": [], "rev": 1}]})
     assert r.status_code == 400 and r.json()["error"] == "INVALID_INPUT" and "decisionText" in r.json()["detail"], r.text
     assert c.post(url.replace(mid, "94"), json=body).status_code == 400                  # 주소와 본문의 meetingId 불일치
+    main.registry.shutting_down = True
+    try:
+        assert c.post(url, json=body).status_code == 503
+        assert c.post(url, json=body).json()["error"] == "NOT_READY"
+    finally:
+        main.registry.shutting_down = False
+
+
+def test_api_status_edits():
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        return
+    from . import main
+    c = TestClient(main.app)
+    mid = "95"
+    url = f"/internal/meetings/{mid}/status-edits"
+    body = dict(load("status-edits-post.json"), meetingId=mid)
+    r = c.post(url, json=body)
+    assert r.status_code == 200 and r.json() == {"accepted": True, "result": "accepted", "applied": 1, "ignored": []}, r.text
+    r = c.post(url, json=body)
+    assert r.json() == {"accepted": True, "result": "stale", "applied": 0, "ignored": [{"decisionPointId": 11, "reason": "stale"}]}, r.text
+    assert c.put(url, json=body).status_code == 405                                      # 사용자가 정한 상태는 POST 만
+    r = c.post(url, json={"meetingId": mid, "edits": [{"agendaId": 102, "decisionPointId": 11, "status": "DISCUSSING", "rev": 5}]})
+    assert r.status_code == 400 and r.json()["error"] == "INVALID_INPUT" and "status" in r.json()["detail"], r.text
+    assert c.post(url.replace(mid, "96"), json=body).status_code == 400                  # 주소와 본문의 meetingId 불일치
     main.registry.shutting_down = True
     try:
         assert c.post(url, json=body).status_code == 503
@@ -2030,6 +2092,7 @@ def main():
     test_agenda_items_isolated()
     test_api_item_edits()
     test_api_decision_edits()
+    test_api_status_edits()
     test_offtopic_cfg()
     test_agenda_offtopic_flow(cap)
     test_agenda_offtopic_isolated()

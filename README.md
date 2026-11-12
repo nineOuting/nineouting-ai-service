@@ -86,6 +86,7 @@ flowchart LR
 | 사람이 고친 요약 | `POST /internal/meetings/{meetingId}/agenda-summary-edits` |
 | 사람이 고친 의견·할 일 | `POST /internal/meetings/{meetingId}/agenda-item-edits` |
 | 사람이 고친 결정 내용 | `POST /internal/meetings/{meetingId}/decision-edits` |
+| 사용자가 정한 결정할 사항 상태 | `POST /internal/meetings/{meetingId}/status-edits` |
 | 새 안건 제안을 무시했다는 알림 | `POST /internal/meetings/{meetingId}/off-topic-actions` |
 | 종료 버튼·이어서 논의하기 알림 | `POST /internal/meetings/{meetingId}/end-requests` |
 | 상태 확인 | `GET /health` |

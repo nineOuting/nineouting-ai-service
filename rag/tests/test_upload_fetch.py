@@ -17,7 +17,7 @@ def code_of(fn, *args):
 
 def test_설정이_없으면_업로드를_받지_않는다():
     s = settings_from_env({})
-    assert not s.enabled and s.max_bytes == 20 * 1024 * 1024 and s.timeout_s == 30.0
+    assert not s.enabled and s.max_bytes == 50 * 1024 * 1024 and s.timeout_s == 30.0
     with pytest.raises(FileUrlNotAllowed, match="설정되지 않음"):
         check_file_url("https://bucket.s3.test/a.pdf", s)
 

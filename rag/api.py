@@ -185,7 +185,7 @@ def not_ready(detail):
 
 
 def verify_internal_request(request: Request):
-    """서버 간 인증. CN팀 방식이 정해지면 여기서 검사한다. 지금은 통과시킨다."""
+    """서버 간 인증. 지금은 내부망으로만 열고 검사하지 않는다 (백엔드와 합의). 서비스 간 토큰이 정해지면 여기서 검사한다."""
     return None
 
 

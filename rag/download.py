@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 from shared.callback import allowed_hosts_from_env
 from .errors import DOWNLOAD_FAILED, TOO_LARGE, URL_EXPIRED, IngestError
 
-DEFAULT_MAX_MB = 20               # 정해 둔 값. SCRUM-110 에서 재서 조정한다
+DEFAULT_MAX_MB = 50               # 백엔드 사전 자료 상한과 같게 (2026-11-12). 처리 시간은 RAG_MAX_DOC_TOKENS 가 막는다
 DEFAULT_TIMEOUT_S = 30.0
 _READ_BLOCK = 64 * 1024
 _EXPIRED_MARK = b"Request has expired"   # 서명 주소가 만료되면 S3 가 403 본문에 담는 글

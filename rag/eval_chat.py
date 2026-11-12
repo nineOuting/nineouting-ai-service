@@ -1,11 +1,11 @@
-"""챗봇 평가 (SCRUM-223·224). 대화가 이어지는 질문에서 ① 질문을 고쳐 쓰기 전·후의 검색 순위와 ② 답이 맞는지를 잰다.
+"""챗봇 평가 (SCRUM-223·224·225). 대화가 이어지는 질문에서 ① 질문을 고쳐 쓰기 전·후의 검색 순위와 ② 답이 맞는지를 잰다.
 
   .venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_two_meetings.json --dry-run     AI 없이 점검·고치기 전 순위
   .venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_two_meetings.json --runs 10     실제 AI. 호출마다 요금
   .venv/bin/python -m rag.eval_chat --summary data/eval/chat/chat_eval_two_meetings-20261112-150000
 
 판마다 사례마다: 서버와 같은 함수로 질문을 고쳐 쓰고(rewrite_query) → 진행 중 회의 근거(live_evidence, 서버와 같음)
-+ 고친 질문으로 검색한 상위 5개를 근거로 → 서버와 같은 글(chat_input)과 판정(judge_reply)으로 답한다. 검색은 eval_search 처럼 실제 임베딩 모델로 메모리에서 한다
++ 고친 질문으로 검색한 상위 5개를 근거로 → 서버와 같은 글(chat_input)과 판정(judge_chat)으로 답한다. 검색은 eval_search 처럼 실제 임베딩 모델로 메모리에서 한다
 (DB 를 쓰지 않음). 고치기 전 순위는 원래 질문으로 한 번만 잰다 (AI 를 쓰지 않아 판마다 같다).
 AI 는 서버와 같은 설정이다 (RAG_LLM_*, 환경변수가 없으면 저장소 루트 .env). 폴백은 쓰지 않는다. 키 값은 출력하지 않는다.
 결과는 data/eval/chat/{사례}-{시각}/ 에 남는다 (git 이 무시함): meta.json, runs.jsonl (판마다 고친 질문·순위·답 글·채점).
@@ -17,6 +17,7 @@ AI 는 서버와 같은 설정이다 (RAG_LLM_*, 환경변수가 없으면 저�
             "R": {"file": "chat_project/requirements.pdf", "title": "요구사항 정의서", "docId": 11}},   json 은 회의록, 그 밖은 첨부 자료
    "live": "chat_project/live_1112.json",       진행 중 회의 (선택). {currentAgendaId, liveAgendas, recentLines}
    "userId": 55, "userName": "한지우",          질문한 사용자 (선택, 사례마다 바꿀 수 있음)
+   "now": "2026-11-12T15:40:00+09:00",          <지금> 칸에 넣을 시각 (선택, 없으면 이 값. 판마다 같게 고정)
    "cases": [{"id": "C1", "type": "앞 답을 가리킴",
               "history": [{"role": "user", "text": "..."}, {"role": "assistant", "text": "... [1]."}],
               "q": "그거 언제까지야?",
@@ -30,10 +31,12 @@ AI 는 서버와 같은 설정이다 (RAG_LLM_*, 환경변수가 없으면 저�
              no_result 사례는 비운다 (검색 지표에서 뺀다)
   expect     answered 또는 no_result. 둘 다 맞으면 ["answered", "no_result"] (gold 는 비워도 된다)
   noLive     true 면 이 사례에는 진행 중 회의를 넘기지 않는다
+  basis      answered 일 때 맞아야 하는 근거 종류 sources / general / mixed (선택). general 이면 gold 를 비운다
+  receivedAt 문서마다 (첨부 자료). 사례 파일 맨 위 "receivedAtAll" 이 있으면 모든 첨부 자료에 그 값을 쓴다
   mustSay    묶음마다 그중 한 말이 답에 있어야 한다 (묶음끼리는 모두)
   mustNotSay 답에 있으면 틀린 말
   맞음       상태가 expect 와 같고(목록이면 그중 하나), answered 이면 gold 가 있을 때 그중 하나 이상을 근거로 쓰고
-             mustSay·mustNotSay 를 지킴
+             basis 가 있으면 같고, mustSay·mustNotSay 를 지킴
 """
 import argparse
 import json
@@ -46,10 +49,9 @@ from pathlib import Path
 
 import numpy as np
 
-from .answer import judge_reply
 from . import live as live_mod
-from .chat import (DOC_TOP_K, Budget, ChatRequest, Evidence, Turn, chat_input, chat_prompts, live_evidence,
-                   recent_turns, rewrite_query)
+from .chat import (DOC_TOP_K, Budget, ChatRequest, Evidence, Turn, chat_input, chat_prompts, judge_chat,
+                   live_evidence, recent_turns, rewrite_query)
 from .eval_answer import Recorder, real_llm
 from .dates import when_label
 from .eval_search import build_index, rank_all
@@ -58,6 +60,8 @@ from .loaders.minutes import meeting_time
 REPO = Path(__file__).resolve().parent.parent
 OUT_ROOT = REPO / "data" / "eval" / "chat"
 EXPECTS = ("answered", "no_result")
+BASES = ("sources", "general", "mixed")
+DEFAULT_NOW = "2026-11-12T15:40:00+09:00"
 LIVE_KEY = "LIVE"
 
 
@@ -71,6 +75,8 @@ def load_case(path: Path) -> dict:
     회의록은 파일의 meetingStartAt, 첨부 자료는 사례 파일의 receivedAt (서버가 그 버전을 받은 시각에 해당)."""
     case = json.loads(path.read_text(encoding="utf-8"))
     for d in case["docs"].values():
+        if case.get("receivedAtAll") and not d["file"].endswith(".json"):
+            d["receivedAt"] = case["receivedAtAll"]
         d["file"] = str(path.parent / d["file"])
         if d["file"].endswith(".json"):
             minutes = json.loads(Path(d["file"]).read_text(encoding="utf-8"))
@@ -138,7 +144,11 @@ def check_case(chunks, c, live_texts=()) -> list[str]:
         problems.append(f"{c['id']}: expect 는 {' 또는 '.join(EXPECTS)} (또는 그 목록)")
     if exp == ("no_result",) and (c.get("gold") or c.get("mustSay")):
         problems.append(f"{c['id']}: no_result 사례에 gold·mustSay 가 있음")
-    if exp == ("answered",) and not c.get("gold"):
+    if c.get("basis") is not None and c["basis"] not in BASES:
+        problems.append(f"{c['id']}: basis 는 {' / '.join(BASES)}")
+    if c.get("basis") == "general" and c.get("gold"):
+        problems.append(f"{c['id']}: basis 가 general 인데 gold 가 있음")
+    if exp == ("answered",) and not c.get("gold") and c.get("basis") != "general":
         problems.append(f"{c['id']}: answered 사례에 gold 가 없음")
     for _, needle in live_gold(c):
         n = sum(needle in t for t in live_texts)
@@ -199,13 +209,14 @@ def says(text, word) -> bool:
     return word in text
 
 
-def score(c, text, status, refs, gold_refs) -> dict:
-    s = {"status": status, "refs": refs, "goldCited": sorted(set(refs) & set(gold_refs)), "missingSay": [],
-         "badSay": [], "needGold": bool(c.get("gold"))}
+def score(c, text, status, refs, gold_refs, basis=None) -> dict:
+    s = {"status": status, "basis": basis, "refs": refs, "goldCited": sorted(set(refs) & set(gold_refs)),
+         "missingSay": [], "badSay": [], "needGold": bool(c.get("gold"))}
     if status == "answered":
         s["missingSay"] = [g for g in c.get("mustSay", []) if not any(says(text, w) for w in g)]
         s["badSay"] = [w for w in c.get("mustNotSay", []) if says(text, w)]
-    s["ok"] = (status in expects(c) and not s["missingSay"] and not s["badSay"]
+    s["badBasis"] = status == "answered" and c.get("basis") is not None and basis != c["basis"]
+    s["ok"] = (status in expects(c) and not s["missingSay"] and not s["badSay"] and not s["badBasis"]
                and (status != "answered" or not c.get("gold") or bool(s["goldCited"])))
     return s
 
@@ -243,12 +254,14 @@ def _one(c, index, rec, prompts, n, timeout_s, rewrite_timeout_s) -> dict:
     wanted = {gold_index(index.chunks, k) for k in doc_gold(c)}
     gold_refs = live_gold_refs(c, live_ev) + [len(live_ev) + i for i, r in enumerate(order[:DOC_TOP_K], 1) if r in wanted]
     _, user_name = user_of(case, c)
+    now = datetime.fromisoformat(c.get("now", case.get("now", DEFAULT_NOW)))
     before = len(rec.calls)
     try:
-        reply = rec.generate(prompts.chat.text, chat_input(c["q"], turns, evidence, rw.query, user_name), timeout_s)
+        reply = rec.generate(prompts.chat.text, chat_input(c["q"], turns, evidence, rw.query, user_name, now),
+                             timeout_s)
         text = (reply.text or "").strip()
-        status, refs, _ = judge_reply(text, len(evidence))
-        s = score(c, text, status, refs, gold_refs)
+        status, refs, basis, _ = judge_chat(text, len(evidence))
+        s = score(c, text, status, refs, gold_refs, basis)
     except Exception as e:
         text, s = None, {"status": "failed", "refs": [], "ok": False, "error": type(e).__name__}
     return {"case": c["id"], "run": n, "rewrite": {"query": rw.query, "state": rw.state, "calls": rw_calls},
@@ -263,8 +276,9 @@ def summarize(out_dir: Path) -> str:
     rows = [json.loads(x) for x in (out_dir / "runs.jsonl").read_text(encoding="utf-8").splitlines() if x]
     base = meta["baseRanks"]
     out = [f"모델 {meta['model']} / 지시문 {' · '.join(meta['prompts'])} / {meta['runs']}판", "",
-           "| 사례 | 고치기 전 순위 | 고친 뒤 상위 5 안 (판) | 고친 질문 (첫 판) | 답 맞음 | answered / no_result / failed |",
-           "|---|---|---|---|---|---|"]
+           "| 사례 | 고치기 전 순위 | 고친 뒤 상위 5 안 (판) | 고친 질문 (첫 판) | 답 맞음 | answered / no_result / failed "
+           "| 근거 종류 (sources / general / mixed) |",
+           "|---|---|---|---|---|---|---|"]
     groups = {}
     for r in rows:
         groups.setdefault(r["case"], []).append(r)
@@ -276,7 +290,8 @@ def summarize(out_dir: Path) -> str:
         shown = first["query"] if first["state"] == "ok" else f"({first['state']})"
         out.append(f"| {cid} | {', '.join(map(str, b)) or '-'} | {'-' if hits is None else f'{hits}/{len(rs)}'} | "
                    f"{shown} | {sum(r['score']['ok'] for r in rs)}/{len(rs)} | "
-                   f"{st.count('answered')} / {st.count('no_result')} / {st.count('failed')} |")
+                   f"{st.count('answered')} / {st.count('no_result')} / {st.count('failed')} | "
+                   f"{' / '.join(str(sum(r['score'].get('basis') == b for r in rs)) for b in BASES)} |")
     graded = [r for r in rows if base.get(r["case"])]
     if graded:
         cases = {r["case"] for r in graded}
@@ -311,6 +326,8 @@ def _why(s) -> str:
         whys.append(f"말 빠짐 {s['missingSay']}")
     if s.get("badSay"):
         whys.append(f"나오면 안 될 말 {s['badSay']}")
+    if s.get("badBasis"):
+        whys.append(f"근거 종류 {s.get('basis')}")
     return ", ".join(whys) or f"상태 {s['status']}"
 
 

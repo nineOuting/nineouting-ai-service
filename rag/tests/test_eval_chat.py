@@ -75,3 +75,14 @@ def test_진행_중_회의_정답이_없거나_둘이면_문제로_잡음():
     for needle in ("없는 말", "다크 모드"):
         c = {"id": "X", "q": "?", "expect": "answered", "gold": [["LIVE", needle]]}
         assert any("진행 중 회의 정답 고르기 실패" in p for p in check_case(chunks, c, live_all_texts(case, c)))
+
+
+
+def test_근거_종류_채점과_general_사례_점검():
+    c = {"id": "X", "q": "?", "expect": "answered", "basis": "general", "mustSay": [["비교"]]}
+    assert score(c, "두 안을 비교해요 [일반].", "answered", [], [], "general")["ok"]
+    bad = score(c, "두 안을 비교해요 [1].", "answered", [1], [], "sources")
+    assert not bad["ok"] and bad["badBasis"]
+    assert check_case([], c) == []
+    assert any("gold 가 있음" in p for p in check_case([], {**c, "gold": [["LIVE", "x"]]}))
+    assert any("basis 는" in p for p in check_case([], {**c, "basis": "other"}))

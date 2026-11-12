@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from rag.dates import when_label
+from rag.dates import now_label, when_label
 from rag.loaders.minutes import meeting_time
 
 
@@ -37,3 +37,11 @@ def test_첨부_자료는_받은_시각을_한국_날짜로():
     kst = datetime(2026, 10, 6, 9, 0, tzinfo=timezone(timedelta(hours=9)))
     assert when_label("upload", None, kst) == "올린 날 2026년 10월 6일"
     assert when_label("upload", None, None) == ""
+
+
+def test_지금_칸_글():
+    from datetime import datetime, timezone
+    from rag.dates import KST
+    assert now_label(datetime(2026, 11, 12, 15, 40, tzinfo=KST)) == "2026년 11월 12일 (목) 15:40"
+    assert now_label(datetime(2026, 11, 12, 6, 5, tzinfo=timezone.utc)) == "2026년 11월 12일 (목) 15:05"    # 한국 시간으로
+    assert now_label(datetime(2026, 11, 15, 9, 0)) == "2026년 11월 15일 (일) 09:00"                          # 시간대 없으면 그대로

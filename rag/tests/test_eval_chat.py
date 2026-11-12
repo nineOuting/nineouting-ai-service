@@ -1,7 +1,7 @@
 """챗봇 평가 도구 시험. 임베딩 모델과 AI 없이 사례 파일 점검과 채점만 본다."""
 from pathlib import Path
 
-from rag.eval_chat import check_case, hit, load_case, rr, score
+from rag.eval_chat import check_case, hit, load_case, rr, says, score
 from rag.eval_search import load_chunks
 
 CASE = Path(__file__).parent / "fixtures" / "chat_eval_two_meetings.json"
@@ -34,3 +34,12 @@ def test_채점():
 def test_검색_지표():
     assert hit([7, 3]) and not hit([6, 9])
     assert rr([4, 2]) == 0.5 and rr([]) == 0.0
+
+
+def test_숫자로_시작하는_말은_앞에_숫자가_붙으면_다른_말():
+    assert not says("11월 5일 회의에서 그대로 두기로 했어요", "1월 5일")
+    assert says("출시일은 1월 5일이에요", "1월 5일") and says("(1월 5일)", "1월 5일")
+    assert says("2,000,000원", "2,000,000") and not says("12,000,000원", "2,000,000")
+    assert says("B사 연동", "B사")
+    c = {"expect": "answered", "mustSay": [["12월 8일"]], "mustNotSay": ["1월 5일"]}
+    assert score(c, "12월 8일로 정했고 11월 5일 회의에서도 그대로예요 [1].", "answered", [1], [1])["ok"]

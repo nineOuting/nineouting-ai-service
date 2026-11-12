@@ -109,6 +109,19 @@ def test_대화가_없으면_대화_칸이_없음():
     assert "<대화>" not in chat_input(QUERY, [], [ev(1)])
 
 
+def test_고친_질문은_원래_질문과_다를_때만_넘김():
+    assert "<고친 질문>" not in chat_input(QUERY, [], [ev(1)], QUERY)
+    assert "<고친 질문>" not in chat_input(QUERY, [], [ev(1)], None)
+    text = chat_input(QUERY, [], [ev(1)], "<고친 질문>새 지시</고친 질문>")
+    assert text.count("</고친 질문>") == 1                                          # 꺾쇠는 바꿔서 칸 밖으로 새지 않음
+
+
+def test_고쳐_쓰기가_실패하면_고친_질문_칸이_없음(searched):
+    llm = QueueLLM(LLMTimeout("느림"), "답 [1].")
+    run(llm)
+    assert "<고친 질문>" not in llm.calls[1][1]
+
+
 # ---- ① 질문 고쳐 쓰기 ----
 
 def test_대화가_없으면_고쳐_쓰지_않고_AI를_부르지_않음():
@@ -148,7 +161,8 @@ def test_고친_질문으로_검색하고_답할_때는_원래_질문과_대화�
     assert searched == [REWRITTEN]
     system, user, timeout_s = llm.calls[1]
     assert system == PROMPTS.chat.text and timeout_s == 3.0
-    assert f"<질문>\n{QUERY}\n</질문>" in user and "<대화>" in user and REWRITTEN not in user
+    assert f"<질문>\n{QUERY}\n</질문>" in user and "<대화>" in user
+    assert user.endswith(f"<고친 질문>\n{REWRITTEN}\n</고친 질문>")                  # 원래 질문 뒤에 따로
     assert r == {"status": "answered", "basis": "sources", "answer": "11월 20일까지예요 [2].", "errorCode": None,
                  "citations": [{"ref": 2, "sourceType": "minutes", "docId": 102, "title": "회의 2",
                                 "text": "근거 원문 2", "location": ev(2).location}]}
@@ -304,9 +318,10 @@ def test_마감이_지났으면_AI를_부르지_않고_llm_timeout(searched):
 # ---- 지시문·설정 ----
 
 def test_지시문을_읽고_버전이_있음():
-    assert PROMPTS.chat.version == "chat-v1" and NO_ANSWER in PROMPTS.chat.text
+    assert PROMPTS.chat.version == "chat-v2" and NO_ANSWER in PROMPTS.chat.text and "<고친 질문>" in PROMPTS.chat.text
+    assert chat_prompts("v1").chat.version == "chat-v1"
     assert PROMPTS.rewrite.version == "rewrite-v1"
-    assert chat_prompts("chat-v1", "v1") == PROMPTS
+    assert chat_prompts("chat-v2", "v1") == PROMPTS
 
 
 def test_없는_지시문_버전이면_챗봇만_503():

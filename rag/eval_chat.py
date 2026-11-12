@@ -32,6 +32,7 @@ AI 는 서버와 같은 설정이다 (RAG_LLM_*, 환경변수가 없으면 저�
 """
 import argparse
 import json
+import re
 import statistics
 import sys
 import time
@@ -127,12 +128,19 @@ def rr(ranks) -> float:
 
 
 # ---------- 채점 ----------
+def says(text, word) -> bool:
+    """답에 그 말이 있나. 숫자로 시작하는 말은 앞에 숫자가 붙으면 다른 말로 본다 ("1월 5일" 은 "11월 5일" 에 없다)."""
+    if word[:1].isdigit():
+        return re.search(r"(?<!\d)" + re.escape(word), text) is not None
+    return word in text
+
+
 def score(c, text, status, refs, gold_refs) -> dict:
     s = {"status": status, "refs": refs, "goldCited": sorted(set(refs) & set(gold_refs)), "missingSay": [],
          "badSay": []}
     if status == "answered":
-        s["missingSay"] = [g for g in c.get("mustSay", []) if not any(w in text for w in g)]
-        s["badSay"] = [w for w in c.get("mustNotSay", []) if w in text]
+        s["missingSay"] = [g for g in c.get("mustSay", []) if not any(says(text, w) for w in g)]
+        s["badSay"] = [w for w in c.get("mustNotSay", []) if says(text, w)]
     s["ok"] = (status == c["expect"] and not s["missingSay"] and not s["badSay"]
                and (status != "answered" or bool(s["goldCited"])))
     return s
@@ -168,7 +176,7 @@ def _one(c, index, rec, prompts, n, timeout_s, rewrite_timeout_s) -> dict:
     gold_refs = [i for i, r in enumerate(order[:DOC_TOP_K], 1) if r in {gold_index(index.chunks, k) for k in c.get("gold", [])}]
     before = len(rec.calls)
     try:
-        reply = rec.generate(prompts.chat.text, chat_input(c["q"], turns, evidence), timeout_s)
+        reply = rec.generate(prompts.chat.text, chat_input(c["q"], turns, evidence, rw.query), timeout_s)
         text = (reply.text or "").strip()
         status, refs, _ = judge_reply(text, len(evidence))
         s = score(c, text, status, refs, gold_refs)

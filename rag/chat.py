@@ -115,13 +115,17 @@ def rewrite_input(turns, query) -> str:
     return f"{conversation_block(turns)}\n\n<질문>\n{_quote(query)}\n</질문>"
 
 
-def chat_input(query, turns, evidence) -> str:
-    """조각 머리는 답변 API 와 같은 "[n] (제목, 위치)" 다 (가짜 AI 가 이 모양으로 번호를 읽는다)."""
+def chat_input(query, turns, evidence, rewritten=None) -> str:
+    """조각 머리는 답변 API 와 같은 "[n] (제목, 위치)" 다 (가짜 AI 가 이 모양으로 번호를 읽는다).
+    rewritten: 고쳐 쓴 질문. 원래 질문과 다를 때만 <고친 질문> 칸으로 넘긴다 ("세 번째 거" 같은 말을 대화에서 다시
+    풀다가 다른 항목을 고르지 않게. 평가 P14). 답은 원래 질문에 한다."""
     parts = [conversation_block(turns)] if turns else []
     parts.append("<자료>")
     for i, e in enumerate(evidence, 1):
         parts.append(f"[{i}] ({_quote(e.title)}, {_quote((e.location or {}).get('label', ''))})\n{_quote(e.text)}")
     parts += ["</자료>", f"<질문>\n{_quote(query)}\n</질문>"]
+    if rewritten and rewritten.strip() != query.strip():
+        parts.append(f"<고친 질문>\n{_quote(rewritten)}\n</고친 질문>")
     return "\n\n".join(parts)
 
 
@@ -240,7 +244,8 @@ def chat(req: ChatRequest, connection, embedder, llm, prompts: ChatPrompts, budg
     t2 = time.monotonic()
     tag += f" llm={llm.name}/{getattr(llm, 'model', '-')} prompt={prompts.chat.version}/{prompts.rewrite.version}"
     try:
-        reply = generate_in_budget(llm, prompts.chat.text, chat_input(req.query, turns, evidence), budget, left)
+        reply = generate_in_budget(llm, prompts.chat.text, chat_input(req.query, turns, evidence, rw.query),
+                                   budget, left)
     except LLMTimeout as e:
         log.warning("챗봇 failed %s llm_ms=%d code=%s error=%s left_ms=%d", tag, _ms(t2), LLM_TIMEOUT, e,
                     left() * 1000)

@@ -13,7 +13,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 | 배포 이미지 (`ghcr.io/nineouting/nineouting-ai-service`) | 구현. 아래 "이미지·배포" |
 | 답변 API (검색 → LLM → 근거 번호 검사) | 구현. LLM 은 설정으로 고름: 가짜(기본, 답 앞에 `[시험용 답변]`) / Gemini(시험) / OpenAI(운영, SDK 는 모델을 정할 때 추가) |
 | 업로드 문서(PDF·워드·엑셀) | 받기·형식 확인(SCRUM-106), PDF 읽기(SCRUM-107, PDFium), 워드 읽기(SCRUM-108), 엑셀 읽기(SCRUM-109) 구현. 정제·크기 상한은 SCRUM-110 |
-| 회의 중 챗봇 (`POST /internal/rag/chat`) | 이어지는 질문 + 회의록·첨부 자료로 답하기 구현 (SCRUM-223). 진행 중 회의(SCRUM-224), 일반 지식(SCRUM-225)은 아직. 명세 `docs/api/rag-chat-contract.md` |
+| 회의 중 챗봇 (`POST /internal/rag/chat`) | 이어지는 질문 + 회의록·첨부 자료로 답하기 (SCRUM-223), 진행 중 회의(안건 보드·최근 전사 줄, SCRUM-224) 구현. 일반 지식(SCRUM-225)은 아직. 명세 `docs/api/rag-chat-contract.md` |
 
 원본 명세는 노션 "RAG 인터페이스 명세".
 
@@ -183,7 +183,7 @@ cd <저장소 루트> && set -a && . ./.env && set +a
 
 | 단계 | 결과 |
 |---|---|
-| `docs` 가 비었음 | `no_result` (DB·AI 를 부르지 않음. 일반 지식이 생기면(SCRUM-225) 바뀐다) |
+| `docs` 가 비었고 진행 중 회의 근거도 없음 | `no_result` (DB·AI 를 부르지 않음. 일반 지식이 생기면(SCRUM-225) 바뀐다). `docs` 만 비면 검색을 건너뛰고 진행 중 회의로 답한다 |
 | 고쳐 쓰기 실패 (오류, 시간 초과, 빈 답, `NO_ANSWER`, 여러 줄, 300자 넘음) | 원래 질문으로 이어 간다. 답은 실패시키지 않는다 |
 | 60초 마감을 넘김 | `failed` + `llm_timeout` (그래도 200) |
 | 찾은 근거 0개 / AI 가 `NO_ANSWER` / 답에 `[n]` 없음 | `no_result`, `answer` 는 "회의 자료에서 찾을 수 없어요" (답변 API 는 `null`) |
@@ -192,12 +192,15 @@ cd <저장소 루트> && set -a && . ./.env && set +a
 
 - 대화 기록은 저장하지 않는다. 백엔드가 요청마다 `history`(최대 20개)로 보내고, 고쳐 쓰기·답하기에는 최근 6개만 쓴다. 앞선 챗봇 답의 `[n]`·`[일반]` 표시는 지우고 넘긴다 (그때의 근거 번호라 이번 번호와 헷갈린다)
 - `<대화>`는 질문이 가리키는 것을 알아내는 데만 쓰고 근거로 쓰지 않는다. 앞선 챗봇 답에만 있고 자료에 없는 사실은 답하지 않는다
-- `userName`, `currentAgendaId`, `liveAgendas`, `recentLines` 는 형식과 상한만 검사하고 아직 쓰지 않는다 (SCRUM-224·225)
+- 진행 중 회의 (`rag/live.py`, 명세 4.2): 안건 보드의 결정할 사항·요약·의견·할 일 하나가 근거 하나 (논의 전 사항은 뺌). 전사 줄은 맞장구·간투사·확신도 낮은 줄을 빼고 5줄 또는 400자씩 묶는다. 상한(보드 6,000자, 전사 줄 4,000자) 안이면 모두 넘기고, 넘으면 임베딩 없이 정해 둔 순서(지금 안건 → 결정 → 할 일 → 요약 → 의견, 전사 줄은 최근 것부터)로 고른다
+- 근거 머리: 진행 중 회의는 `[n] (진행 중 회의 · 지금 진행 중 · 지금 안건 · 질문한 사용자의 할 일, 디자인 시안 수정 안건의 할 일)` 처럼 표시를 붙인다. 표시는 AI 에만 넘기고 `citations[].text` 에는 넣지 않는다. 담당자가 `userId` 와 같으면 "질문한 사용자의 할 일", `unclear` 이면 "할 일인지 확인 필요"
+- `userName` 이 있으면 `<질문한 사람>` 칸으로 넘긴다 (지난 회의록의 담당자 이름과 맞추는 데). 로그에는 남기지 않는다
+- `liveAgendas`·`recentLines` 는 쓰는 칸의 타입을 검사한다 (명세 3.4·3.5). 상태·종류 값은 검사하지 않고, 모르는 결정할 사항 상태는 넘기지 않는다
 - 시간 (명세 v0.2 4.4): 요청 하나는 최대 60초. 고쳐 쓰기는 기본 모델만 최대 5초(폴백 없음), 답하기는 기본 모델 최대 25초(남은 시간보다 길면 남은 시간까지), 실패하면 남은 시간이 10초 이상일 때만 폴백 모델을 남은 시간 안에서 부른다. 백엔드는 이 주소만 타임아웃 65초 (권장)
 - 고쳐 쓰기와 답하기는 답변 API 와 같은 AI 설정(`RAG_LLM_*`)을 쓰되 연결은 따로 만든다. 위 시간 규칙 때문에 공용 폴백 묶음을 그대로 부르지 않고 기본·폴백 모델을 꺼내 직접 부른다. 그래서 "실패한 기본 모델을 60초 동안 건너뛰기"(`RAG_LLM_FALLBACK_COOLDOWN_S`)는 챗봇에 없다. 장애 중에는 질문마다 기본 모델을 25초까지 기다린 뒤 폴백으로 간다 (측정 뒤 넣을지 정함). `RAG_LLM_TIMEOUT_S` 도 챗봇에 쓰지 않는다
 - 문서는 `docs: [{sourceType, docId}]` 짝으로 받는다 (최대 1,000개, 답변 API 와 같음). 옛 `docIds` 는 400
-- 상한 중 대화 한 개의 글 4,000자, `userName` 100자는 명세에 없어 AI 쪽이 정했다
-- 로그: `챗봇 answered request_id=… workspace=… meeting=… user=… history=… docs=… rewrite=ok rewrite_ms=… evidence=… llm_ms=… tokens_in=…`. `rewrite` 는 `ok` / `skip`(대화 없음) / `fallback_timeout` / `fallback_error` / `fallback_invalid`. 질문·대화·답·근거 글과 `userName` 은 남기지 않는다
+- 상한: 대화 한 개의 글 4,000자, `userName` 100자 (명세 v0.3 3.1)
+- 로그: `챗봇 answered request_id=… workspace=… meeting=… user=… history=… docs=… live_agendas=… recent_lines=… live_board=… live_lines=… rewrite=ok rewrite_ms=… docs_found=… evidence=… llm_ms=… tokens_in=…`. `rewrite` 는 `ok` / `skip`(대화 없음) / `fallback_timeout` / `fallback_error` / `fallback_invalid`. 질문·대화·답·근거 글과 `userName` 은 남기지 않는다
 - 가짜 AI 는 고쳐 쓰기에서 `NO_ANSWER` 를 내므로 늘 `rewrite=fallback_invalid` 로 원래 질문을 쓴다
 
 손으로 시험하기: 서버를 띄운 뒤 다른 터미널에서. 대화 기록은 도구가 들고 있다가 질문마다 보낸다 (`/new` 새 대화, `/history` 기록 보기).
@@ -275,6 +278,8 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 .venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_two_meetings.json --dry-run     # AI 없이 점검, 고치기 전 순위
 .venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_two_meetings.json --runs 10     # 실제 AI. 호출마다 요금이 나간다
 .venv/bin/python -m rag.eval_chat --summary data/eval/chat/{결과폴더}
+.venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_live.json --dry-run          # 진행 중 회의 (SCRUM-224)
+.venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_live_long.json --dry-run     # 넘치는 진행 중 회의
 ```
 
 - `chat_eval_two_meetings.json`: 답변 평가와 같은 합성 회의 둘(10/20, 10/27), 12사례. 앞 답·사람·장소·목록 속 항목을 가리키는 질문, 생략된 주제, 주제가 바뀐 질문, 대화 없는 질문, 앞선 챗봇 답에만 있는 사실(→ `no_result`), 대화에 섞인 지시

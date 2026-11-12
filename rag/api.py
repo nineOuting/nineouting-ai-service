@@ -48,14 +48,14 @@ MAX_DOCS = 1000                      # 답변·챗봇 요청의 docs (명세 v0.
 DEFAULT_TOP_K = 5
 MAX_TOP_K = 20                       # search.MAX_TOP_K 와 같다
 SOURCE_TYPES = ("minutes", "upload")  # upload 는 허용 저장소(RAG_UPLOAD_ALLOWED_HOSTS)가 있을 때만 받는다
-# 챗봇 상한 (명세 3.1. 정해 둔 값이며 SCRUM-224 에서 측정해 고친다). 아래 셋은 명세에 없어 AI 쪽이 정한 값이다
+# 챗봇 상한 (명세 3.1. 정해 둔 값이며 측정해 고친다)
 MAX_CHAT_QUERY = 1000
 MAX_HISTORY = 20
 MAX_LIVE_AGENDAS = 50
 MAX_RECENT_LINES = 500
 MAX_RECENT_CHARS = 30000
-MAX_HISTORY_TEXT = 4000               # 대화 한 개의 글 (명세에 없음)
-MAX_USER_NAME = 100                   # 명세에 없음
+MAX_HISTORY_TEXT = 4000               # 대화 한 개의 글
+MAX_USER_NAME = 100
 API_STATUS = {"queued": "accepted"}  # DB 상태 → 명세의 상태 값
 
 
@@ -135,7 +135,7 @@ CHAT_SCHEMA = {
         "meetingId": {"type": "integer", "minimum": 1, "description": "진행 중인 회의 (로그 추적용)"},
         "userId": {"type": "integer", "minimum": 1, "description": "질문한 사용자 (로그에는 이 ID만)"},
         "userName": {"type": ["string", "null"], "maxLength": MAX_USER_NAME,
-                     "description": "질문한 사용자의 표시 이름 (선택). 지금은 쓰지 않는다 (SCRUM-224·225)"},
+                     "description": "질문한 사용자의 표시 이름 (선택). 지난 회의록에서 \"내 할 일\"을 찾는 데 쓴다. 로그에 남기지 않는다"},
         "query": {"type": "string", "maxLength": MAX_CHAT_QUERY, "description": "질문"},
         "docs": {**DOCS_SCHEMA, "description": "찾을 문서: 볼 수 있는 지난 회의록 전부와 이 회의의 사전 첨부 자료. "
                                                 "(sourceType, docId) 짝, 최대 1,000개. 비면 문서 검색을 하지 않는다"},
@@ -143,11 +143,11 @@ CHAT_SCHEMA = {
                     "items": {"type": "object", "required": ["role", "text"], "properties": {
                         "role": {"type": "string", "enum": list(ROLES)},
                         "text": {"type": "string", "maxLength": MAX_HISTORY_TEXT}}}},
-        "currentAgendaId": {"type": ["integer", "string", "null"], "description": "지금 논의 중인 안건 (SCRUM-224)"},
+        "currentAgendaId": {"type": ["integer", "string", "null"], "description": "지금 논의 중인 안건"},
         "liveAgendas": {"type": "array", "maxItems": MAX_LIVE_AGENDAS,
-                        "description": "안건 보드의 모든 안건 + 제목. 지금은 형식만 보고 쓰지 않는다 (SCRUM-224)"},
+                        "description": "안건 보드의 모든 안건 + 제목 (명세 3.4). 표에 없는 칸은 무시한다"},
         "recentLines": {"type": "array", "maxItems": MAX_RECENT_LINES,
-                        "description": f"최근 전사 줄 (글 합계 {MAX_RECENT_CHARS}자 이하). 지금은 형식만 보고 쓰지 않는다 (SCRUM-224)"},
+                        "description": f"최근 전사 줄 (명세 3.5, 글 합계 {MAX_RECENT_CHARS}자 이하). 표에 없는 칸은 무시한다"},
     },
 }
 CHAT_RESULT_EXAMPLE = {
@@ -255,7 +255,8 @@ def parse_docs(body) -> list[tuple[str, int]]:
 
 def parse_chat(body) -> ChatRequest:
     """챗봇 요청 (명세 3장). 표에 없는 필드와 칸은 무시한다.
-    liveAgendas·recentLines 는 지금(SCRUM-223) 모양과 상한만 보고 쓰지 않는다. 칸 검사는 쓰기 시작할 때(SCRUM-224) 더한다."""
+    liveAgendas·recentLines 는 챗봇이 쓰는 칸(명세 3.4·3.5)의 타입만 본다. 상태 값은 검사하지 않는다
+    (모르는 결정할 사항 상태는 넘기지 않고, 모르는 의견 종류는 "의견"으로 넘긴다. live.py)."""
     if not isinstance(body, dict):
         raise InvalidInput("본문이 JSON 객체가 아님")
     workspace_id = _positive_int(body, "workspaceId")
@@ -281,18 +282,91 @@ def parse_chat(body) -> ChatRequest:
         turns.append(Turn(t["role"], t["text"]))
 
     agendas = _array(body, "liveAgendas", MAX_LIVE_AGENDAS)
-    if any(not isinstance(a, dict) for a in agendas):
-        raise InvalidInput("liveAgendas 의 항목은 객체여야 함")
+    for i, a in enumerate(agendas):
+        _check_agenda(a, f"liveAgendas[{i}]")
     lines = _array(body, "recentLines", MAX_RECENT_LINES)
     for i, ln in enumerate(lines):
-        if not isinstance(ln, dict) or not isinstance(ln.get("seq"), int) or isinstance(ln.get("seq"), bool) \
-                or not isinstance(ln.get("text"), str):
-            raise InvalidInput(f"recentLines[{i}] 는 seq(정수)와 text(문자열)가 있는 객체여야 함")
+        _check_line(ln, f"recentLines[{i}]")
     if sum(len(ln["text"]) for ln in lines) > MAX_RECENT_CHARS:
         raise InvalidInput(f"recentLines 의 글 합계는 {MAX_RECENT_CHARS}자 이하여야 함")
 
     return ChatRequest(workspace_id, meeting_id, user_id, query, tuple(docs), tuple(turns), user_name, current,
                        tuple(agendas), tuple(lines))
+
+
+def _is_int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _is_id(v) -> bool:
+    return _is_int(v) or isinstance(v, str)
+
+
+def _opt(v, ok) -> bool:
+    return v is None or ok(v)
+
+
+def _check_seqs(v, where):
+    if v is not None and (not isinstance(v, list) or not all(_is_int(n) for n in v)):
+        raise InvalidInput(f"{where}.evidenceSeqs 는 정수 배열이어야 함")
+
+
+# 안건 보드 항목 배열마다 (이름, 번호 칸, 글 칸, 문자열이거나 null 인 칸)
+_AGENDA_ITEMS = (
+    ("decisionPoints", "decisionPointId", "decisionText", ("status",)),
+    ("summary", "id", "text", ()),
+    ("opinions", "id", "text", ("kind",)),
+    ("todos", "id", "task", ("assigneeName", "assigneeStatus", "dueText")),
+)
+
+
+def _check_agenda(a, where):
+    """안건 보드의 안건 하나 (명세 3.4). 챗봇이 쓰는 칸의 타입만 본다. agendaId·title 은 꼭 있어야 한다."""
+    if not isinstance(a, dict):
+        raise InvalidInput(f"{where} 는 객체여야 함")
+    if not _is_id(a.get("agendaId")):
+        raise InvalidInput(f"{where}.agendaId 는 정수 또는 문자열이어야 함")
+    if not isinstance(a.get("title"), str):
+        raise InvalidInput(f"{where}.title 은 문자열이어야 함")
+    if not _opt(a.get("status"), lambda v: isinstance(v, str)):
+        raise InvalidInput(f"{where}.status 는 문자열이어야 함")
+    for key, id_key, text_key, opt_texts in _AGENDA_ITEMS:
+        items = a.get(key)
+        if items is None:
+            continue
+        if not isinstance(items, list):
+            raise InvalidInput(f"{where}.{key} 는 배열이어야 함")
+        for j, it in enumerate(items):
+            w = f"{where}.{key}[{j}]"
+            if not isinstance(it, dict):
+                raise InvalidInput(f"{w} 는 객체여야 함")
+            if not _is_id(it.get(id_key)):
+                raise InvalidInput(f"{w}.{id_key} 는 정수 또는 문자열이어야 함")
+            if not isinstance(it.get(text_key), str):
+                raise InvalidInput(f"{w}.{text_key} 는 문자열이어야 함")
+            for k in opt_texts:
+                if not _opt(it.get(k), lambda v: isinstance(v, str)):
+                    raise InvalidInput(f"{w}.{k} 는 문자열 또는 null 이어야 함")
+            _check_seqs(it.get("evidenceSeqs"), w)
+            if key == "todos":
+                if not _opt(it.get("assigneeUserId"), _is_id):
+                    raise InvalidInput(f"{w}.assigneeUserId 는 정수·문자열 또는 null 이어야 함")
+                if not _opt(it.get("unclear"), lambda v: isinstance(v, bool)):
+                    raise InvalidInput(f"{w}.unclear 는 불리언이어야 함")
+
+
+def _check_line(ln, where):
+    """전사 줄 하나 (명세 3.5)."""
+    if not isinstance(ln, dict) or not _is_int(ln.get("seq")) or not isinstance(ln.get("text"), str):
+        raise InvalidInput(f"{where} 는 seq(정수)와 text(문자열)가 있는 객체여야 함")
+    if not _is_int(ln.get("startMs")):
+        raise InvalidInput(f"{where}.startMs 는 정수여야 함")
+    if not _opt(ln.get("endMs"), _is_int):
+        raise InvalidInput(f"{where}.endMs 는 정수 또는 null 이어야 함")
+    if not _opt(ln.get("kind"), lambda v: isinstance(v, str)):
+        raise InvalidInput(f"{where}.kind 는 문자열 또는 null 이어야 함")
+    if not _opt(ln.get("lowConfidence"), lambda v: isinstance(v, bool)):
+        raise InvalidInput(f"{where}.lowConfidence 는 불리언이어야 함")
 
 
 def _array(body, key, max_len):
@@ -480,8 +554,8 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
         description="회의 중 질문에 답한다 (명세 docs/api/rag-chat-contract.md). history 가 있으면 앞 대화를 보고 질문을 "
                     "고쳐 검색하고, 볼 수 있는 문서(docs, {sourceType, docId} 짝)의 조각만 근거로 답한다. 답의 문장마다 근거 번호 [n] 이 붙는다. "
                     "status: answered / no_result(answer 는 \"회의 자료에서 찾을 수 없어요\") / failed(errorCode 참고). "
-                    "세 경우 모두 200 이고, 최대 60초 안에 답한다 (넘으면 failed + llm_timeout). 진행 중 회의(liveAgendas, recentLines)와 일반 지식은 아직 쓰지 않는다 "
-                    "(SCRUM-224·225). 대화 기록은 저장하지 않으므로 요청마다 history 로 보낸다.",
+                    "세 경우 모두 200 이고, 최대 60초 안에 답한다 (넘으면 failed + llm_timeout). 진행 중 회의(liveAgendas, recentLines)도 근거로 쓴다. "
+                    "일반 지식은 아직 쓰지 않는다 (SCRUM-225). 대화 기록은 저장하지 않으므로 요청마다 history 로 보낸다.",
         openapi_extra={"requestBody": {"required": True, "content": {"application/json": {
             "schema": CHAT_SCHEMA, "example": CHAT_EXAMPLE}}}},
         responses={200: {"description": "챗봇 결과 (status 로 구분)", "content": {"application/json": {

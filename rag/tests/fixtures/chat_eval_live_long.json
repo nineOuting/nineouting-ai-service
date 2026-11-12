@@ -1,0 +1,154 @@
+{
+ "about": "챗봇 평가: 넘치는 진행 중 회의 (SCRUM-224). chat_eval_live.json 과 같은 자료에 안건 14개·전사 줄 약 1시간(chat_project/live_1112_long.json)을 넘김. 안건 보드와 전사 줄이 넘기는 상한(6,000자, 4,000자)을 넘어 정해 둔 순서로 고른다. G2·G3 은 빠질 것으로 보는 항목 (빠졌을 때 답을 보려고)",
+ "live": "chat_project/live_1112_long.json",
+ "userId": 55,
+ "userName": "한지우",
+ "docs": {
+  "M1": {
+   "file": "chat_project/meeting_1008.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 101
+  },
+  "M2": {
+   "file": "chat_project/meeting_1015.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 102
+  },
+  "M3": {
+   "file": "chat_project/meeting_1022.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 103
+  },
+  "M4": {
+   "file": "chat_project/meeting_1029.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 104
+  },
+  "M5": {
+   "file": "chat_project/meeting_1105.json",
+   "title": "앱 리뉴얼 주간 회의",
+   "docId": 105
+  },
+  "REQ": {
+   "file": "chat_project/requirements.pdf",
+   "title": "쇼핑 앱 2.0 요구사항 정의서 v1.0.pdf",
+   "docId": 201,
+   "receivedAt": "2026-10-06T14:20:00+09:00"
+  },
+  "XLS": {
+   "file": "chat_project/schedule_budget.xlsx",
+   "title": "일정_예산.xlsx",
+   "docId": 202,
+   "receivedAt": "2026-10-06T14:21:00+09:00"
+  },
+  "OTHER": {
+   "file": "upload_plan.pdf",
+   "title": "고객 초청 기술 세미나 운영계획서.pdf",
+   "docId": 203,
+   "receivedAt": "2026-09-30T09:00:00+09:00"
+  }
+ },
+ "cases": [
+  {
+   "id": "G1",
+   "type": "넘침 / 다른 안건의 결정 (남음)",
+   "q": "정식 출시일 언제야?",
+   "gold": [
+    [
+     "LIVE",
+     "12월 15일(월)로"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "12월 15일"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "G2",
+   "type": "넘침 / 뒤쪽 안건의 의견 (빠질 것으로 봄)",
+   "q": "주문 내역 화면에서 나온 의견 있어?",
+   "gold": [
+    [
+     "LIVE",
+     "재주문 버튼"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "재주문"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "G3",
+   "type": "넘침 / 오래된 전사 줄 (빠질 것으로 봄)",
+   "q": "쿠폰 적용 순서는 어떻게 하기로 했지?",
+   "gold": [
+    [
+     "LIVE",
+     "쿠폰 적용 순서"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "큰 쿠폰",
+     "할인 금액"
+    ]
+   ],
+   "history": []
+  },
+  {
+   "id": "G4",
+   "type": "넘침 / 방금 한 말 (남음) (보드 요약도 정답)",
+   "q": "방금 광고 예산 얼마로 늘리자고 했지?",
+   "gold": [
+    [
+     "LIVE",
+     "천만 원으로 늘리면"
+    ],
+    [
+     "LIVE",
+     "1,000만 원으로 늘리자는 제안"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "천만",
+     "1,000만"
+    ]
+   ],
+   "mustNotSay": [
+    "오천만",
+    "5,000만",
+    "3,000만"
+   ],
+   "history": []
+  },
+  {
+   "id": "G5",
+   "type": "넘침 / 내 할 일 (남음)",
+   "q": "내 할 일 뭐야?",
+   "gold": [
+    [
+     "LIVE",
+     "스토어 출시 일정"
+    ]
+   ],
+   "expect": "answered",
+   "mustSay": [
+    [
+     "스토어"
+    ]
+   ],
+   "history": []
+  }
+ ]
+}

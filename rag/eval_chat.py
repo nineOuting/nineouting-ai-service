@@ -1,11 +1,11 @@
-"""챗봇 평가 (SCRUM-223). 대화가 이어지는 질문에서 ① 질문을 고쳐 쓰기 전·후의 검색 순위와 ② 답이 맞는지를 잰다.
+"""챗봇 평가 (SCRUM-223·224). 대화가 이어지는 질문에서 ① 질문을 고쳐 쓰기 전·후의 검색 순위와 ② 답이 맞는지를 잰다.
 
   .venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_two_meetings.json --dry-run     AI 없이 점검·고치기 전 순위
   .venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_two_meetings.json --runs 10     실제 AI. 호출마다 요금
   .venv/bin/python -m rag.eval_chat --summary data/eval/chat/chat_eval_two_meetings-20261112-150000
 
-판마다 사례마다: 서버와 같은 함수로 질문을 고쳐 쓰고(rewrite_query) → 고친 질문으로 검색해 상위 5개를 근거로
-→ 서버와 같은 글(chat_input)과 판정(judge_reply)으로 답한다. 검색은 eval_search 처럼 실제 임베딩 모델로 메모리에서 한다
+판마다 사례마다: 서버와 같은 함수로 질문을 고쳐 쓰고(rewrite_query) → 진행 중 회의 근거(live_evidence, 서버와 같음)
++ 고친 질문으로 검색한 상위 5개를 근거로 → 서버와 같은 글(chat_input)과 판정(judge_reply)으로 답한다. 검색은 eval_search 처럼 실제 임베딩 모델로 메모리에서 한다
 (DB 를 쓰지 않음). 고치기 전 순위는 원래 질문으로 한 번만 잰다 (AI 를 쓰지 않아 판마다 같다).
 AI 는 서버와 같은 설정이다 (RAG_LLM_*, 환경변수가 없으면 저장소 루트 .env). 폴백은 쓰지 않는다. 키 값은 출력하지 않는다.
 결과는 data/eval/chat/{사례}-{시각}/ 에 남는다 (git 이 무시함): meta.json, runs.jsonl (판마다 고친 질문·순위·답 글·채점).
@@ -15,6 +15,8 @@ AI 는 서버와 같은 설정이다 (RAG_LLM_*, 환경변수가 없으면 저�
   {"about": "설명",
    "docs": {"A": {"file": "minutes_confirmed_table.json", "title": "주간 회의 (10/20)", "docId": 1},   file 은 사례 파일 기준
             "R": {"file": "chat_project/requirements.pdf", "title": "요구사항 정의서", "docId": 11}},   json 은 회의록, 그 밖은 첨부 자료
+   "live": "chat_project/live_1112.json",       진행 중 회의 (선택). {currentAgendaId, liveAgendas, recentLines}
+   "userId": 55, "userName": "한지우",          질문한 사용자 (선택, 사례마다 바꿀 수 있음)
    "cases": [{"id": "C1", "type": "앞 답을 가리킴",
               "history": [{"role": "user", "text": "..."}, {"role": "assistant", "text": "... [1]."}],
               "q": "그거 언제까지야?",
@@ -24,11 +26,14 @@ AI 는 서버와 같은 설정이다 (RAG_LLM_*, 환경변수가 없으면 저�
 
   history    백엔드가 보내는 대화 (오래된 것부터). 비우면 고쳐 쓰지 않는다
   gold       찾아와야 할 조각 [문서, 글 일부]. 그 문서의 조각 중 글에 이 말이 든 것이 꼭 하나여야 한다
+             진행 중 회의는 ["LIVE", 글 일부] (보드 항목·전사 줄 묶음 중 꼭 하나. 검색 지표에는 넣지 않는다)
              no_result 사례는 비운다 (검색 지표에서 뺀다)
-  expect     answered 또는 no_result
+  expect     answered 또는 no_result. 둘 다 맞으면 ["answered", "no_result"] (gold 는 비워도 된다)
+  noLive     true 면 이 사례에는 진행 중 회의를 넘기지 않는다
   mustSay    묶음마다 그중 한 말이 답에 있어야 한다 (묶음끼리는 모두)
   mustNotSay 답에 있으면 틀린 말
-  맞음       상태가 expect 와 같고, answered 이면 gold 중 하나 이상을 근거로 쓰고 mustSay·mustNotSay 를 지킴
+  맞음       상태가 expect 와 같고(목록이면 그중 하나), answered 이면 gold 가 있을 때 그중 하나 이상을 근거로 쓰고
+             mustSay·mustNotSay 를 지킴
 """
 import argparse
 import json
@@ -42,8 +47,9 @@ from pathlib import Path
 import numpy as np
 
 from .answer import judge_reply
-from .chat import (DOC_TOP_K, Budget, Evidence, Turn, chat_input, chat_prompts, recent_turns,
-                   rewrite_query)
+from . import live as live_mod
+from .chat import (DOC_TOP_K, Budget, ChatRequest, Evidence, Turn, chat_input, chat_prompts, live_evidence,
+                   recent_turns, rewrite_query)
 from .eval_answer import Recorder, real_llm
 from .dates import when_label
 from .eval_search import build_index, rank_all
@@ -52,6 +58,7 @@ from .loaders.minutes import meeting_time
 REPO = Path(__file__).resolve().parent.parent
 OUT_ROOT = REPO / "data" / "eval" / "chat"
 EXPECTS = ("answered", "no_result")
+LIVE_KEY = "LIVE"
 
 
 class CaseError(ValueError):
@@ -71,7 +78,49 @@ def load_case(path: Path) -> dict:
         else:
             received = datetime.fromisoformat(d["receivedAt"]) if d.get("receivedAt") else None
             d["when"] = when_label("upload", None, received)
+    if case.get("live"):
+        case["liveData"] = json.loads((path.parent / case["live"]).read_text(encoding="utf-8"))
     return case
+
+
+def expects(c) -> tuple[str, ...]:
+    e = c.get("expect")
+    return tuple(e) if isinstance(e, list) else (e,)
+
+
+def doc_gold(c) -> list:
+    return [k for k in c.get("gold", []) if k[0] != LIVE_KEY]
+
+
+def live_gold(c) -> list:
+    return [k for k in c.get("gold", []) if k[0] == LIVE_KEY]
+
+
+def user_of(case, c):
+    return c.get("userId", case.get("userId", 1)), c.get("userName", case.get("userName"))
+
+
+def live_request(case, c, query) -> ChatRequest:
+    data = {} if c.get("noLive") else case.get("liveData") or {}
+    uid, name = user_of(case, c)
+    return ChatRequest(workspace_id=1, meeting_id=data.get("meetingId", 1), user_id=uid, query=query, docs=(),
+                       user_name=name, current_agenda_id=data.get("currentAgendaId"),
+                       live_agendas=tuple(data.get("liveAgendas") or ()), recent_lines=tuple(data.get("recentLines") or ()))
+
+
+def live_all_texts(case, c) -> list[str]:
+    """고르기 전 진행 중 회의 근거 글 전부 (사례 점검용. 넘쳐서 빠진 항목도 들어 있다)."""
+    r = live_request(case, c, "")
+    items = live_mod.board_items(r.live_agendas, r.current_agenda_id, r.user_id) + live_mod.line_bundles(r.recent_lines)
+    return [i.text for i in items]
+
+
+def live_gold_refs(c, live_ev) -> list[int]:
+    """넘긴 진행 중 회의 근거 중 gold 에 맞는 번호 (1부터). 넘쳐서 빠졌으면 없다."""
+    out = []
+    for _, needle in live_gold(c):
+        out += [i for i, e in enumerate(live_ev, 1) if needle in e.text]
+    return out
 
 
 def gold_index(chunks, key) -> int:
@@ -82,15 +131,20 @@ def gold_index(chunks, key) -> int:
     return found[0]
 
 
-def check_case(chunks, c) -> list[str]:
+def check_case(chunks, c, live_texts=()) -> list[str]:
     problems = []
-    if c.get("expect") not in EXPECTS:
-        problems.append(f"{c['id']}: expect 는 {' 또는 '.join(EXPECTS)}")
-    if c.get("expect") == "no_result" and (c.get("gold") or c.get("mustSay")):
+    exp = expects(c)
+    if not exp or any(e not in EXPECTS for e in exp):
+        problems.append(f"{c['id']}: expect 는 {' 또는 '.join(EXPECTS)} (또는 그 목록)")
+    if exp == ("no_result",) and (c.get("gold") or c.get("mustSay")):
         problems.append(f"{c['id']}: no_result 사례에 gold·mustSay 가 있음")
-    if c.get("expect") == "answered" and not c.get("gold"):
+    if exp == ("answered",) and not c.get("gold"):
         problems.append(f"{c['id']}: answered 사례에 gold 가 없음")
-    for key in c.get("gold", []):
+    for _, needle in live_gold(c):
+        n = sum(needle in t for t in live_texts)
+        if n != 1:
+            problems.append(f"{c['id']}: 진행 중 회의 정답 고르기 실패: {needle!r} → {n}개")
+    for key in doc_gold(c):
         try:
             gold_index(chunks, key)
         except CaseError as e:
@@ -117,7 +171,7 @@ class Index:
     def ranks(self, c, order) -> list[int]:
         """gold 마다 순위 (1부터)."""
         pos = {i: r for r, i in enumerate(order, 1)}
-        return [pos[gold_index(self.chunks, k)] for k in c.get("gold", [])]
+        return [pos[gold_index(self.chunks, k)] for k in doc_gold(c)]
 
     def evidence(self, order) -> list[Evidence]:
         out = []
@@ -147,12 +201,12 @@ def says(text, word) -> bool:
 
 def score(c, text, status, refs, gold_refs) -> dict:
     s = {"status": status, "refs": refs, "goldCited": sorted(set(refs) & set(gold_refs)), "missingSay": [],
-         "badSay": []}
+         "badSay": [], "needGold": bool(c.get("gold"))}
     if status == "answered":
         s["missingSay"] = [g for g in c.get("mustSay", []) if not any(says(text, w) for w in g)]
         s["badSay"] = [w for w in c.get("mustNotSay", []) if says(text, w)]
-    s["ok"] = (status == c["expect"] and not s["missingSay"] and not s["badSay"]
-               and (status != "answered" or bool(s["goldCited"])))
+    s["ok"] = (status in expects(c) and not s["missingSay"] and not s["badSay"]
+               and (status != "answered" or not c.get("gold") or bool(s["goldCited"])))
     return s
 
 
@@ -161,7 +215,7 @@ def run_case(case, index, llm, runs, prompts, out_dir, timeout_s, rewrite_timeou
     out_dir.mkdir(parents=True, exist_ok=True)
     rec = Recorder(llm)
     base = {c["id"]: index.ranks(c, index.order(c["q"])) for c in case["cases"]}
-    meta = {"about": case.get("about"), "model": f"{rec.name}/{rec.model}", "runs": runs,
+    meta = {"about": case.get("about"), "live": case.get("live"), "model": f"{rec.name}/{rec.model}", "runs": runs,
             "prompts": [prompts.chat.version, prompts.rewrite.version], "embedModel": index.embedder.model_id,
             "baseRanks": base, "startedAt": datetime.now().isoformat(timespec="seconds")}
     (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -176,24 +230,31 @@ def run_case(case, index, llm, runs, prompts, out_dir, timeout_s, rewrite_timeou
 
 
 def _one(c, index, rec, prompts, n, timeout_s, rewrite_timeout_s) -> dict:
+    case = index.case
     turns = turns_of(c)
     before = len(rec.calls)
     rw = rewrite_query(rec, prompts.rewrite, turns, c["q"], rewrite_timeout_s)
     rw_calls = rec.calls[before:]
+    board, lines = live_evidence(live_request(case, c, rw.query))
+    live_ev = board + lines
     order = index.order(rw.query)
     ranks = index.ranks(c, order)
-    evidence = index.evidence(order)
-    gold_refs = [i for i, r in enumerate(order[:DOC_TOP_K], 1) if r in {gold_index(index.chunks, k) for k in c.get("gold", [])}]
+    evidence = live_ev + index.evidence(order)
+    wanted = {gold_index(index.chunks, k) for k in doc_gold(c)}
+    gold_refs = live_gold_refs(c, live_ev) + [len(live_ev) + i for i, r in enumerate(order[:DOC_TOP_K], 1) if r in wanted]
+    _, user_name = user_of(case, c)
     before = len(rec.calls)
     try:
-        reply = rec.generate(prompts.chat.text, chat_input(c["q"], turns, evidence, rw.query), timeout_s)
+        reply = rec.generate(prompts.chat.text, chat_input(c["q"], turns, evidence, rw.query, user_name), timeout_s)
         text = (reply.text or "").strip()
         status, refs, _ = judge_reply(text, len(evidence))
         s = score(c, text, status, refs, gold_refs)
     except Exception as e:
         text, s = None, {"status": "failed", "refs": [], "ok": False, "error": type(e).__name__}
     return {"case": c["id"], "run": n, "rewrite": {"query": rw.query, "state": rw.state, "calls": rw_calls},
-            "ranks": ranks, "text": text, "score": s, "calls": rec.calls[before:]}
+            "ranks": ranks, "live": {"board": len(board), "lines": len(lines), "goldPassed": bool(live_gold_refs(c, live_ev))
+                                     if live_gold(c) else None},
+            "text": text, "score": s, "calls": rec.calls[before:]}
 
 
 # ---------- 요약 ----------
@@ -244,7 +305,7 @@ def _why(s) -> str:
     if s["status"] == "failed":
         return f"failed {s.get('error') or '(범위 밖 번호)'}"
     whys = []
-    if s["status"] == "answered" and not s.get("goldCited"):
+    if s["status"] == "answered" and not s.get("goldCited") and s.get("needGold", True):
         whys.append("정답 조각을 근거로 쓰지 않음")
     if s.get("missingSay"):
         whys.append(f"말 빠짐 {s['missingSay']}")
@@ -257,14 +318,18 @@ def _why(s) -> str:
 def dry_run(case, index, out=print) -> bool:
     ok = True
     for c in case["cases"]:
-        problems = check_case(index.chunks, c)
+        problems = check_case(index.chunks, c, live_all_texts(case, c))
         out(f"\n{c['id']} ({c.get('type', '')}) 대화 {len(c.get('history', []))}개 / {c['q']}  → 정답 {c.get('expect')}")
         if problems:
             ok = False
             out("".join(f"  ✘ {p}\n" for p in problems).rstrip())
             continue
-        if c.get("gold"):
+        if doc_gold(c):
             out(f"  고치기 전 정답 조각 순위: {', '.join(map(str, index.ranks(c, index.order(c['q']))))}")
+        if live_gold(c):
+            board, lines = live_evidence(live_request(case, c, c["q"]))
+            passed = bool(live_gold_refs(c, board + lines))
+            out(f"  진행 중 회의 근거 {len(board)}+{len(lines)}개, 정답 {'넘김' if passed else '넘치어 빠짐'}")
     out("\n점검 " + ("통과" if ok else "실패"))
     return ok
 
@@ -292,7 +357,7 @@ def main(argv=None):
     print(f"조각 {len(index.chunks)}개")
     if args.dry_run:
         sys.exit(0 if dry_run(case, index) else 1)
-    problems = [x for c in case["cases"] for x in check_case(index.chunks, c)]
+    problems = [x for c in case["cases"] for x in check_case(index.chunks, c, live_all_texts(case, c))]
     if problems:
         sys.exit("사례 파일 문제:\n" + "\n".join(problems))
     llm = real_llm()

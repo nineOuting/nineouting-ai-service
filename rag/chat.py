@@ -2,8 +2,8 @@
 
   ① 질문 고쳐 쓰기   history 가 있을 때만 AI 를 한 번 부른다. 실패하거나 답이 이상하면 원래 질문을 쓴다
   ② 근거 모으기      출처마다 따로, AI 없이. 출처마다 Evidence 로 바꾼다
-                     지금은 회의록·첨부 자료 검색 하나 (SCRUM-223). 진행 중 회의(안건 보드, 최근 전사 줄)는 SCRUM-224
-  ③ 합치기           모은 근거에 [1]..[n] 번호를 붙인다
+                     진행 중 회의(안건 보드, 최근 전사 줄, live.py)와 지난 회의록·첨부 자료 검색
+  ③ 합치기           진행 중 회의 먼저, 지난 자료 뒤로 [1]..[n] 번호를 붙인다
   ④ 답하기           AI 를 한 번 부른다. <대화>는 질문의 뜻을 알아내는 데만 쓰고, 근거는 <자료>만 쓴다
   ⑤ 판정             답변 API 와 같은 judge_reply. basis 는 지금 늘 sources (일반 지식 [일반] 은 SCRUM-225)
 
@@ -18,7 +18,8 @@
 문서는 (sourceType, docId) 짝으로 구분한다 (명세 v0.2 9장).
 
 앞선 챗봇 답의 [n]·[일반] 표시는 지우고 넘긴다. 그때의 근거 번호라 이번 번호와 헷갈린다.
-지금(SCRUM-223)은 docs 가 비었거나 찾은 근거가 없으면 AI 를 부르지 않고 no_result 다 (일반 지식이 생기면 바뀐다).
+지금은 모은 근거가 하나도 없으면(docs 가 비고 진행 중 회의도 비었거나, 찾은 것이 없으면) AI 를 부르지 않고 no_result 다
+(일반 지식이 생기면 바뀐다, SCRUM-225).
 로그에는 질문·대화·답·근거 글을 남기지 않는다 (ID, 개수, 상태, 오류 코드, 걸린 시간, 토큰 수만).
 """
 import logging
@@ -29,6 +30,7 @@ from typing import Callable, ContextManager
 
 from shared.llm import FallbackLLM, LLMError, LLMTimeout, label
 from .answer import LLM_FAILED, LLM_TIMEOUT, NO_ANSWER, Prompt, PromptError, judge_reply, load_prompt
+from . import live
 from .dates import when_label
 from .search import search
 
@@ -63,8 +65,8 @@ class ChatRequest:
     history: tuple[Turn, ...] = ()
     user_name: str | None = None
     current_agenda_id: int | str | None = None
-    live_agendas: tuple = ()     # 형식 검사만 한다. 쓰는 것은 SCRUM-224
-    recent_lines: tuple = ()     # 위와 같음
+    live_agendas: tuple = ()     # 안건 보드의 안건 (dict, API 가 칸을 검사함)
+    recent_lines: tuple = ()     # 최근 전사 줄 (dict)
 
 
 @dataclass(frozen=True)
@@ -75,7 +77,8 @@ class Evidence:
     title: str                   # 문서 제목 / "진행 중 회의"
     text: str                    # AI 에 넘기고 citations[].text 로 나가는 글
     location: dict = field(default_factory=dict)
-    when: str = ""               # 조각 머리에 붙이는 날짜 글 ("회의 2026년 10월 29일 10:00", "올린 날 …"). AI 에만 넘긴다
+    when: str = ""               # 조각 머리에 붙이는 날짜 글 ("회의 2026년 10월 29일 10:00", "올린 날 …", "지금 진행 중"). AI 에만 넘긴다
+    tags: tuple[str, ...] = ()   # 조각 머리에 붙이는 표시 ("지금 안건", "질문한 사용자의 할 일"). AI 에만 넘긴다
 
     def citation(self, ref: int) -> dict:
         return {"ref": ref, "sourceType": self.source_type, "docId": self.doc_id, "title": self.title,
@@ -91,6 +94,15 @@ def doc_evidence(connection: Callable[[], ContextManager], embedder, workspace_i
         hits = search(conn, embedder, workspace_id, docs, query, top_k)
     return [Evidence(h.source_type, h.doc_id, h.title, h.content, h.location,
                      when_label(h.source_type, h.meeting_started_at, h.received_at)) for h in hits]
+
+
+def live_evidence(req: ChatRequest) -> tuple[list[Evidence], list[Evidence]]:
+    """출처: 진행 중 회의. (안건 보드 근거, 전사 줄 근거). 상한을 넘으면 정해 둔 순서로 고른다 (live.py)."""
+    def to_ev(item):
+        return Evidence(live.LIVE, None, live.TITLE, item.text, item.location, live.WHEN, item.tags)
+    board = live.pick_board(live.board_items(req.live_agendas, req.current_agenda_id, req.user_id))
+    lines = live.pick_lines(live.line_bundles(req.recent_lines))
+    return [to_ev(i) for i in board], [to_ev(i) for i in lines]
 
 
 # ---------- AI 에 넘기는 글 ----------
@@ -118,16 +130,20 @@ def rewrite_input(turns, query) -> str:
     return f"{conversation_block(turns)}\n\n<질문>\n{_quote(query)}\n</질문>"
 
 
-def chat_input(query, turns, evidence, rewritten=None) -> str:
+def chat_input(query, turns, evidence, rewritten=None, user_name=None) -> str:
     """조각 머리는 답변 API 와 같은 "[n] (제목, 위치)" 다 (가짜 AI 가 이 모양으로 번호를 읽는다).
     rewritten: 고쳐 쓴 질문. 원래 질문과 다를 때만 <고친 질문> 칸으로 넘긴다 ("세 번째 거" 같은 말을 대화에서 다시
-    풀다가 다른 항목을 고르지 않게. 평가 P14). 답은 원래 질문에 한다."""
+    풀다가 다른 항목을 고르지 않게. 평가 P14). 답은 원래 질문에 한다.
+    user_name: 있으면 <질문한 사람> 칸으로 넘긴다. "내 할 일" 질문에서 지난 회의록의 담당자 이름과 맞추는 데 쓴다."""
     parts = [conversation_block(turns)] if turns else []
     parts.append("<자료>")
     for i, e in enumerate(evidence, 1):
-        when = f" · {e.when}" if e.when else ""
-        parts.append(f"[{i}] ({_quote(e.title)}{when}, {_quote((e.location or {}).get('label', ''))})\n{_quote(e.text)}")
-    parts += ["</자료>", f"<질문>\n{_quote(query)}\n</질문>"]
+        marks = "".join(f" · {_quote(m)}" for m in (e.when, *e.tags) if m)
+        parts.append(f"[{i}] ({_quote(e.title)}{marks}, {_quote((e.location or {}).get('label', ''))})\n{_quote(e.text)}")
+    parts.append("</자료>")
+    if user_name and user_name.strip():
+        parts.append(f"<질문한 사람>\n{_quote(user_name.strip())}\n</질문한 사람>")
+    parts.append(f"<질문>\n{_quote(query)}\n</질문>")
     if rewritten and rewritten.strip() != query.strip():
         parts.append(f"<고친 질문>\n{_quote(rewritten)}\n</고친 질문>")
     return "\n\n".join(parts)
@@ -227,8 +243,10 @@ def chat(req: ChatRequest, connection, embedder, llm, prompts: ChatPrompts, budg
     tag = (f"request_id={request_id} workspace={req.workspace_id} meeting={req.meeting_id} user={req.user_id} "
            f"history={len(req.history)} docs={len(req.docs)} live_agendas={len(req.live_agendas)} "
            f"recent_lines={len(req.recent_lines)}")
-    if not req.docs:                                     # 지금 출처는 문서뿐이라 AI 를 부를 일이 없다
-        log.info("챗봇 no_result(볼 문서 없음) %s", tag)
+    board, lines = live_evidence(req)
+    tag += f" live_board={len(board)} live_lines={len(lines)}"
+    if not req.docs and not board and not lines:          # 볼 것이 없으면 AI 를 부를 일이 없다
+        log.info("챗봇 no_result(볼 자료 없음) %s", tag)
         return _result("no_result")
 
     turns = recent_turns(req.history)
@@ -239,8 +257,9 @@ def chat(req: ChatRequest, connection, embedder, llm, prompts: ChatPrompts, budg
         tag += f" rewrite_ms={rw.ms} rewrite_tokens_in={rw.input_tokens} rewrite_tokens_out={rw.output_tokens}"
 
     t1 = time.monotonic()
-    evidence = doc_evidence(connection, embedder, req.workspace_id, req.docs, rw.query)
-    tag += f" evidence={len(evidence)} search_ms={_ms(t1)}"
+    found = doc_evidence(connection, embedder, req.workspace_id, req.docs, rw.query) if req.docs else []
+    evidence = board + lines + found
+    tag += f" docs_found={len(found)} evidence={len(evidence)} search_ms={_ms(t1)}"
     if not evidence:
         log.info("챗봇 no_result(근거 없음) %s", tag)
         return _result("no_result")
@@ -248,8 +267,8 @@ def chat(req: ChatRequest, connection, embedder, llm, prompts: ChatPrompts, budg
     t2 = time.monotonic()
     tag += f" llm={llm.name}/{getattr(llm, 'model', '-')} prompt={prompts.chat.version}/{prompts.rewrite.version}"
     try:
-        reply = generate_in_budget(llm, prompts.chat.text, chat_input(req.query, turns, evidence, rw.query),
-                                   budget, left)
+        user = chat_input(req.query, turns, evidence, rw.query, req.user_name)
+        reply = generate_in_budget(llm, prompts.chat.text, user, budget, left)
     except LLMTimeout as e:
         log.warning("챗봇 failed %s llm_ms=%d code=%s error=%s left_ms=%d", tag, _ms(t2), LLM_TIMEOUT, e,
                     left() * 1000)

@@ -22,6 +22,7 @@ DB 를 쓸 수 없음 503 NOT_READY. 오류 형식은 server/main.py 와 같다.
 로그에는 docId, 버전, 결과, 요청 추적 ID 만 남긴다. 회의록 내용은 남기지 않는다.
 """
 import logging
+from dataclasses import replace
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Path, Request
@@ -32,7 +33,7 @@ from .chat import ROLES, ChatRequest, Turn
 from .download import UPLOAD_OFF, FileUrlNotAllowed, UploadSettings, check_file_url
 from .errors import IngestError
 from .jobs import IngestRequest, submit
-from .loaders.minutes import check_format
+from .loaders.minutes import check_format, meeting_time
 from .store import DocumentMeta, WorkspaceMismatch, delete_document, delete_workspace, get_status
 
 log = logging.getLogger("rag.api")
@@ -216,6 +217,7 @@ def parse_ingest(body, request_id=None, upload: UploadSettings | None = None) ->
         check_format(minutes)
     except IngestError as e:
         raise InvalidInput(f"minutes 의 {e.detail}") from None
+    doc = replace(doc, meeting_started_at=meeting_time(minutes))      # 읽을 수 없으면 None (날짜만 비움, SCRUM-234)
     return IngestRequest(doc, callback_url, minutes=minutes, request_id=request_id)
 
 

@@ -12,6 +12,7 @@
   - 새 버전이 실패하면 옛 버전 조각은 남는다 (마지막으로 성공한 버전이 계속 검색된다)
 """
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Sequence
 
 import numpy as np
@@ -34,6 +35,7 @@ class DocumentMeta:
     workspace_id: int
     source_type: str             # upload / minutes
     title: str
+    meeting_started_at: datetime | None = None   # 회의록의 회의 시작 시각 (받은 그대로, 시간대 없음). 첨부 자료는 None
 
 
 @dataclass(frozen=True)
@@ -54,9 +56,11 @@ def register(conn, doc: DocumentMeta) -> RegisterResult:
         # INSERT 와 SELECT 사이에 다른 쪽이 그 문서를 지우면 행이 없을 수 있다. 그때는 다시 넣어 본다
         for _ in range(3):
             inserted = conn.execute(
-                "INSERT INTO rag_documents (doc_id, doc_version, workspace_id, source_type, title, status) "
-                "VALUES (%s, %s, %s, %s, %s, 'queued') ON CONFLICT (source_type, doc_id) DO NOTHING",
-                (doc.doc_id, doc.doc_version, doc.workspace_id, doc.source_type, doc.title)).rowcount
+                "INSERT INTO rag_documents (doc_id, doc_version, workspace_id, source_type, title, status, "
+                "meeting_started_at, received_at) VALUES (%s, %s, %s, %s, %s, 'queued', %s, now()) "
+                "ON CONFLICT (source_type, doc_id) DO NOTHING",
+                (doc.doc_id, doc.doc_version, doc.workspace_id, doc.source_type, doc.title,
+                 doc.meeting_started_at)).rowcount
             if inserted:
                 return RegisterResult("queued", True)
             row = conn.execute("SELECT doc_version, status, workspace_id FROM rag_documents "
@@ -74,9 +78,10 @@ def register(conn, doc: DocumentMeta) -> RegisterResult:
             return RegisterResult(status, False)
         if doc.source_type == "minutes" and older_version(doc.doc_version, version):
             return RegisterResult(status, False, ignored=True)
-        conn.execute("UPDATE rag_documents SET doc_version = %s, title = %s, "
-                     "status = 'queued', error_code = NULL, updated_at = now() WHERE source_type = %s AND doc_id = %s",
-                     (doc.doc_version, doc.title, doc.source_type, doc.doc_id))
+        conn.execute("UPDATE rag_documents SET doc_version = %s, title = %s, meeting_started_at = %s, "
+                     "received_at = now(), status = 'queued', error_code = NULL, updated_at = now() "
+                     "WHERE source_type = %s AND doc_id = %s",
+                     (doc.doc_version, doc.title, doc.meeting_started_at, doc.source_type, doc.doc_id))
         return RegisterResult("queued", True)
 
 

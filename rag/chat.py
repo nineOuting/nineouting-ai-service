@@ -29,6 +29,7 @@ from typing import Callable, ContextManager
 
 from shared.llm import FallbackLLM, LLMError, LLMTimeout, label
 from .answer import LLM_FAILED, LLM_TIMEOUT, NO_ANSWER, Prompt, PromptError, judge_reply, load_prompt
+from .dates import when_label
 from .search import search
 
 log = logging.getLogger("rag.chat")
@@ -74,6 +75,7 @@ class Evidence:
     title: str                   # 문서 제목 / "진행 중 회의"
     text: str                    # AI 에 넘기고 citations[].text 로 나가는 글
     location: dict = field(default_factory=dict)
+    when: str = ""               # 조각 머리에 붙이는 날짜 글 ("회의 2026년 10월 29일 10:00", "올린 날 …"). AI 에만 넘긴다
 
     def citation(self, ref: int) -> dict:
         return {"ref": ref, "sourceType": self.source_type, "docId": self.doc_id, "title": self.title,
@@ -87,7 +89,8 @@ def doc_evidence(connection: Callable[[], ContextManager], embedder, workspace_i
         return []
     with connection() as conn:
         hits = search(conn, embedder, workspace_id, docs, query, top_k)
-    return [Evidence(h.source_type, h.doc_id, h.title, h.content, h.location) for h in hits]
+    return [Evidence(h.source_type, h.doc_id, h.title, h.content, h.location,
+                     when_label(h.source_type, h.meeting_started_at, h.received_at)) for h in hits]
 
 
 # ---------- AI 에 넘기는 글 ----------
@@ -122,7 +125,8 @@ def chat_input(query, turns, evidence, rewritten=None) -> str:
     parts = [conversation_block(turns)] if turns else []
     parts.append("<자료>")
     for i, e in enumerate(evidence, 1):
-        parts.append(f"[{i}] ({_quote(e.title)}, {_quote((e.location or {}).get('label', ''))})\n{_quote(e.text)}")
+        when = f" · {e.when}" if e.when else ""
+        parts.append(f"[{i}] ({_quote(e.title)}{when}, {_quote((e.location or {}).get('label', ''))})\n{_quote(e.text)}")
     parts += ["</자료>", f"<질문>\n{_quote(query)}\n</질문>"]
     if rewritten and rewritten.strip() != query.strip():
         parts.append(f"<고친 질문>\n{_quote(rewritten)}\n</고친 질문>")

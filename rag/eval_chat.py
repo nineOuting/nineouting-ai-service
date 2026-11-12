@@ -45,7 +45,9 @@ from .answer import judge_reply
 from .chat import (DOC_TOP_K, Budget, Evidence, Turn, chat_input, chat_prompts, recent_turns,
                    rewrite_query)
 from .eval_answer import Recorder, real_llm
+from .dates import when_label
 from .eval_search import build_index, rank_all
+from .loaders.minutes import meeting_time
 
 REPO = Path(__file__).resolve().parent.parent
 OUT_ROOT = REPO / "data" / "eval" / "chat"
@@ -58,9 +60,17 @@ class CaseError(ValueError):
 
 # ---------- 사례 ----------
 def load_case(path: Path) -> dict:
+    """문서마다 근거 머리에 붙일 날짜 글(when)을 서버와 같은 함수로 만든다 (SCRUM-234).
+    회의록은 파일의 meetingStartAt, 첨부 자료는 사례 파일의 receivedAt (서버가 그 버전을 받은 시각에 해당)."""
     case = json.loads(path.read_text(encoding="utf-8"))
     for d in case["docs"].values():
         d["file"] = str(path.parent / d["file"])
+        if d["file"].endswith(".json"):
+            minutes = json.loads(Path(d["file"]).read_text(encoding="utf-8"))
+            d["when"] = when_label("minutes", meeting_time(minutes), None)
+        else:
+            received = datetime.fromisoformat(d["receivedAt"]) if d.get("receivedAt") else None
+            d["when"] = when_label("upload", None, received)
     return case
 
 
@@ -115,7 +125,7 @@ class Index:
             key, chunk = self.chunks[i]
             d = self.case["docs"][key]
             source = "minutes" if d["file"].endswith(".json") else "upload"        # 회의록은 json, 첨부 자료는 pdf·docx·xlsx
-            out.append(Evidence(source, d["docId"], d["title"], chunk.content, chunk.location))
+            out.append(Evidence(source, d["docId"], d["title"], chunk.content, chunk.location, d.get("when", "")))
         return out
 
 

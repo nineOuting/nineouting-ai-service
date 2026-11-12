@@ -47,7 +47,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .answer import ANSWER_KIND, answer_prompt, build_prompt, judge_reply, prompt_versions
-from .loaders.minutes import load_minutes
+from .loaders.minutes import load_minutes, meeting_time
 from .search import Hit
 
 REPO = Path(__file__).resolve().parent.parent
@@ -66,7 +66,9 @@ class CaseError(ValueError):
 def load_case(path: Path) -> dict:
     case = json.loads(path.read_text(encoding="utf-8"))
     for doc in case["docs"].values():
-        doc["pieces"] = load_minutes(json.loads((path.parent / doc["file"]).read_text(encoding="utf-8"))).pieces
+        minutes = json.loads((path.parent / doc["file"]).read_text(encoding="utf-8"))
+        doc["pieces"] = load_minutes(minutes).pieces
+        doc["meetingStartedAt"] = meeting_time(minutes)          # 서버처럼 근거 머리에 회의 날짜를 붙인다 (SCRUM-234)
     return case
 
 
@@ -85,7 +87,7 @@ def hits_for(case: dict, question: dict) -> list[Hit]:
     for doc, needle in question["pieces"]:
         p, d = pick(case, (doc, needle)), case["docs"][doc]
         hits.append(Hit(doc_id=d["docId"], source_type="minutes", title=d["title"], content=p.content,
-                        location=p.location, score=0.0))
+                        location=p.location, score=0.0, meeting_started_at=d.get("meetingStartedAt")))
     return hits
 
 

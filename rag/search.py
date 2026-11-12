@@ -7,6 +7,7 @@
   - 유사도 하한은 아직 없다 (측정 전). 필터 후 조각이 없을 때만 빈 목록이다
 """
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Iterable
 
 import numpy as np
@@ -15,7 +16,7 @@ MAX_TOP_K = 20
 
 _SQL = """
 SELECT c.doc_id, d.source_type, d.title, c.content, c.location,
-       1 - (c.embedding <=> %(q)s) AS score
+       1 - (c.embedding <=> %(q)s) AS score, d.meeting_started_at, d.received_at
 FROM rag_chunks c
 JOIN rag_documents d ON d.source_type = c.source_type AND d.doc_id = c.doc_id
 WHERE c.workspace_id = %(ws)s AND d.workspace_id = %(ws)s
@@ -34,6 +35,8 @@ class Hit:
     content: str
     location: dict
     score: float                 # 코사인 유사도 (1 에 가까울수록 가까움)
+    meeting_started_at: datetime | None = None   # 회의록의 회의 시작 시각 (SCRUM-234)
+    received_at: datetime | None = None          # 그 버전을 받은 시각. 첨부 자료는 "올린 날"
 
 
 def search(conn, embedder, workspace_id: int, docs: Iterable[tuple[str, int]], query: str,
@@ -47,4 +50,4 @@ def search(conn, embedder, workspace_id: int, docs: Iterable[tuple[str, int]], q
     q = np.asarray(embedder.embed_query(query), dtype=np.float32)
     rows = conn.execute(_SQL, {"q": q, "ws": workspace_id, "types": [s for s, _ in pairs],
                                "ids": [d for _, d in pairs], "model": embedder.model_id, "k": top_k}).fetchall()
-    return [Hit(*r[:5], score=float(r[5])) for r in rows]
+    return [Hit(*r[:5], score=float(r[5]), meeting_started_at=r[6], received_at=r[7]) for r in rows]

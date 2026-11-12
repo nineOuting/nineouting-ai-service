@@ -5,6 +5,8 @@
   DELETE {prefix}/documents/{sourceType}/{docId}     문서 지우기 → 204 (없어도)
   DELETE {prefix}/workspaces/{workspaceId}  워크스페이스 지우기 → 204
   POST   {prefix}/answer                    답변 → 200 {status, answer, citations, errorCode}
+  POST   {prefix}/chat                      회의 중 챗봇 → 200 {status, basis, answer, citations, errorCode}
+                                            (명세 docs/api/rag-chat-contract.md)
 
 업로드 문서(sourceType=upload)는 허용 저장소(RAG_UPLOAD_ALLOWED_HOSTS)가 설정됐을 때만 받는다. 없으면 400.
 파일 받기·형식 확인까지 하고, 형식별 읽기(SCRUM-107~109)가 생기기 전까지는 unsupported_format 으로 끝난다.
@@ -26,6 +28,7 @@ from fastapi import APIRouter, Body, Depends, Path, Request
 from fastapi.responses import JSONResponse, Response
 
 from shared.callback import CallbackNotAllowed
+from .chat import ROLES, ChatRequest, Turn
 from .download import UPLOAD_OFF, FileUrlNotAllowed, UploadSettings, check_file_url
 from .errors import IngestError
 from .jobs import IngestRequest, submit
@@ -44,6 +47,14 @@ MAX_DOCS = 1000                      # 답변·챗봇 요청의 docs (명세 v0.
 DEFAULT_TOP_K = 5
 MAX_TOP_K = 20                       # search.MAX_TOP_K 와 같다
 SOURCE_TYPES = ("minutes", "upload")  # upload 는 허용 저장소(RAG_UPLOAD_ALLOWED_HOSTS)가 있을 때만 받는다
+# 챗봇 상한 (명세 3.1. 정해 둔 값이며 SCRUM-224 에서 측정해 고친다). 아래 셋은 명세에 없어 AI 쪽이 정한 값이다
+MAX_CHAT_QUERY = 1000
+MAX_HISTORY = 20
+MAX_LIVE_AGENDAS = 50
+MAX_RECENT_LINES = 500
+MAX_RECENT_CHARS = 30000
+MAX_HISTORY_TEXT = 4000               # 대화 한 개의 글 (명세에 없음)
+MAX_USER_NAME = 100                   # 명세에 없음
 API_STATUS = {"queued": "accepted"}  # DB 상태 → 명세의 상태 값
 
 
@@ -105,6 +116,45 @@ ANSWER_RESULT_EXAMPLE = {
     "citations": [{"ref": 1, "docId": 200, "sourceType": "minutes", "title": "10월 예산 회의",
                    "text": "1분기 예산은 3천만 원으로 하자는 제안이 나옴",
                    "location": {"type": "time", "startMs": 754000, "endMs": 791000, "label": "12:34~13:11"}}],
+    "errorCode": None,
+}
+CHAT_EXAMPLE = {
+    "workspaceId": 1, "meetingId": 310, "userId": 42, "userName": "김하늘",
+    "query": "그거 언제까지 하기로 했지?",
+    "docs": [{"sourceType": "minutes", "docId": 200}, {"sourceType": "upload", "docId": 200}],
+    "history": [{"role": "user", "text": "지난 회의에서 디자인 시안 수정은 누가 맡았어?"},
+                {"role": "assistant", "text": "박서준 님이 맡았어요 [1]."}],
+    "currentAgendaId": 102, "liveAgendas": [], "recentLines": [],
+}
+CHAT_SCHEMA = {
+    "type": "object",
+    "required": ["workspaceId", "meetingId", "userId", "query", "docs"],
+    "properties": {
+        "workspaceId": {"type": "integer", "minimum": 1, "description": "검색을 이 워크스페이스로 거른다"},
+        "meetingId": {"type": "integer", "minimum": 1, "description": "진행 중인 회의 (로그 추적용)"},
+        "userId": {"type": "integer", "minimum": 1, "description": "질문한 사용자 (로그에는 이 ID만)"},
+        "userName": {"type": ["string", "null"], "maxLength": MAX_USER_NAME,
+                     "description": "질문한 사용자의 표시 이름 (선택). 지금은 쓰지 않는다 (SCRUM-224·225)"},
+        "query": {"type": "string", "maxLength": MAX_CHAT_QUERY, "description": "질문"},
+        "docs": {**DOCS_SCHEMA, "description": "찾을 문서: 볼 수 있는 지난 회의록 전부와 이 회의의 사전 첨부 자료. "
+                                                "(sourceType, docId) 짝, 최대 1,000개. 비면 문서 검색을 하지 않는다"},
+        "history": {"type": "array", "maxItems": MAX_HISTORY, "description": "이 사용자의 이 회의 대화, 오래된 것부터",
+                    "items": {"type": "object", "required": ["role", "text"], "properties": {
+                        "role": {"type": "string", "enum": list(ROLES)},
+                        "text": {"type": "string", "maxLength": MAX_HISTORY_TEXT}}}},
+        "currentAgendaId": {"type": ["integer", "string", "null"], "description": "지금 논의 중인 안건 (SCRUM-224)"},
+        "liveAgendas": {"type": "array", "maxItems": MAX_LIVE_AGENDAS,
+                        "description": "안건 보드의 모든 안건 + 제목. 지금은 형식만 보고 쓰지 않는다 (SCRUM-224)"},
+        "recentLines": {"type": "array", "maxItems": MAX_RECENT_LINES,
+                        "description": f"최근 전사 줄 (글 합계 {MAX_RECENT_CHARS}자 이하). 지금은 형식만 보고 쓰지 않는다 (SCRUM-224)"},
+    },
+}
+CHAT_RESULT_EXAMPLE = {
+    "status": "answered", "basis": "sources",
+    "answer": "디자인 시안 수정은 11월 20일까지 하기로 했어요 [1].",
+    "citations": [{"ref": 1, "sourceType": "minutes", "docId": 200, "title": "10월 디자인 회의",
+                   "text": "디자인 시안: 수정본은 11월 20일까지 공유",
+                   "location": {"type": "section", "heading": "결정 사항", "label": "결정 사항"}}],
     "errorCode": None,
 }
 
@@ -201,6 +251,60 @@ def parse_docs(body) -> list[tuple[str, int]]:
     return list(dict.fromkeys(pairs))
 
 
+def parse_chat(body) -> ChatRequest:
+    """챗봇 요청 (명세 3장). 표에 없는 필드와 칸은 무시한다.
+    liveAgendas·recentLines 는 지금(SCRUM-223) 모양과 상한만 보고 쓰지 않는다. 칸 검사는 쓰기 시작할 때(SCRUM-224) 더한다."""
+    if not isinstance(body, dict):
+        raise InvalidInput("본문이 JSON 객체가 아님")
+    workspace_id = _positive_int(body, "workspaceId")
+    meeting_id = _positive_int(body, "meetingId")
+    user_id = _positive_int(body, "userId")
+    query = _text(body, "query", MAX_CHAT_QUERY)
+    docs = parse_docs(body)
+
+    user_name = body.get("userName")
+    if user_name is not None and (not isinstance(user_name, str) or len(user_name) > MAX_USER_NAME):
+        raise InvalidInput(f"userName 은 {MAX_USER_NAME}자 이하 문자열이어야 함")
+    current = body.get("currentAgendaId")
+    if current is not None and (isinstance(current, bool) or not isinstance(current, (int, str))):
+        raise InvalidInput("currentAgendaId 는 정수·문자열 또는 null 이어야 함")
+
+    history = _array(body, "history", MAX_HISTORY)
+    turns = []
+    for i, t in enumerate(history):
+        if not isinstance(t, dict) or t.get("role") not in ROLES:
+            raise InvalidInput(f"history[{i}].role 은 {' 또는 '.join(ROLES)} 이어야 함")
+        if not isinstance(t.get("text"), str) or len(t["text"]) > MAX_HISTORY_TEXT:
+            raise InvalidInput(f"history[{i}].text 는 {MAX_HISTORY_TEXT}자 이하 문자열이어야 함")
+        turns.append(Turn(t["role"], t["text"]))
+
+    agendas = _array(body, "liveAgendas", MAX_LIVE_AGENDAS)
+    if any(not isinstance(a, dict) for a in agendas):
+        raise InvalidInput("liveAgendas 의 항목은 객체여야 함")
+    lines = _array(body, "recentLines", MAX_RECENT_LINES)
+    for i, ln in enumerate(lines):
+        if not isinstance(ln, dict) or not isinstance(ln.get("seq"), int) or isinstance(ln.get("seq"), bool) \
+                or not isinstance(ln.get("text"), str):
+            raise InvalidInput(f"recentLines[{i}] 는 seq(정수)와 text(문자열)가 있는 객체여야 함")
+    if sum(len(ln["text"]) for ln in lines) > MAX_RECENT_CHARS:
+        raise InvalidInput(f"recentLines 의 글 합계는 {MAX_RECENT_CHARS}자 이하여야 함")
+
+    return ChatRequest(workspace_id, meeting_id, user_id, query, tuple(docs), tuple(turns), user_name, current,
+                       tuple(agendas), tuple(lines))
+
+
+def _array(body, key, max_len):
+    """없거나 null 이면 빈 목록."""
+    v = body.get(key)
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise InvalidInput(f"{key} 는 배열이어야 함")
+    if len(v) > max_len:
+        raise InvalidInput(f"{key} 는 {max_len}개 이하여야 함")
+    return v
+
+
 def _is_positive_int(v):
     return not isinstance(v, bool) and isinstance(v, int) and v > 0     # bool 은 int 의 하위 형이라 따로 막는다
 
@@ -234,9 +338,10 @@ def _path_id(raw, name):
 
 
 def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_HEADER, prefix=PREFIX, answerer=None,
-                upload: UploadSettings | None = None):
+                upload: UploadSettings | None = None, chatter=None):
     """pool: psycopg_pool.ConnectionPool (autocommit 연결, vector 형 등록).
     answerer: answer.Answerer. 없으면 답변 주소는 503 으로 답한다.
+    chatter: chat.Chatter. 없으면 챗봇 주소는 503 으로 답한다.
     upload: 업로드 문서 설정. 없거나 허용 저장소가 없으면 sourceType=upload 는 400."""
     from psycopg import OperationalError
     from psycopg_pool import PoolTimeout
@@ -366,6 +471,37 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
             return answerer.run(pool.connection, workspace_id, docs, query, top_k, request_id=rid)
         except db_down as e:
             log.error("답변 DB 오류 request_id=%s error=%s", rid, type(e).__name__)
+            return not_ready("DB 를 쓸 수 없음")
+
+    @router.post(
+        "/chat", summary="회의 중 챗봇",
+        description="회의 중 질문에 답한다 (명세 docs/api/rag-chat-contract.md). history 가 있으면 앞 대화를 보고 질문을 "
+                    "고쳐 검색하고, 볼 수 있는 문서(docs, {sourceType, docId} 짝)의 조각만 근거로 답한다. 답의 문장마다 근거 번호 [n] 이 붙는다. "
+                    "status: answered / no_result(answer 는 \"회의 자료에서 찾을 수 없어요\") / failed(errorCode 참고). "
+                    "세 경우 모두 200 이고, 최대 60초 안에 답한다 (넘으면 failed + llm_timeout). 진행 중 회의(liveAgendas, recentLines)와 일반 지식은 아직 쓰지 않는다 "
+                    "(SCRUM-224·225). 대화 기록은 저장하지 않으므로 요청마다 history 로 보낸다.",
+        openapi_extra={"requestBody": {"required": True, "content": {"application/json": {
+            "schema": CHAT_SCHEMA, "example": CHAT_EXAMPLE}}}},
+        responses={200: {"description": "챗봇 결과 (status 로 구분)", "content": {"application/json": {
+                       "example": CHAT_RESULT_EXAMPLE}}},
+                   400: _error_doc("입력 오류", "INVALID_INPUT", "history[0].role 은 user 또는 assistant 이어야 함"),
+                   503: _error_doc("DB·임베딩 모델·LLM 설정이 준비되지 않음", "NOT_READY", "DB 를 쓸 수 없음")},
+    )
+    def post_chat(request: Request, body: Any = Body(...)):
+        rid = request_id_of(request)
+        try:
+            req = parse_chat(body)
+        except InvalidInput as e:
+            log.info("챗봇 거부 request_id=%s reason=%s", rid, e)
+            return invalid(str(e))
+        reason = "챗봇 기능이 켜지지 않음" if chatter is None else chatter.not_ready_reason()
+        if reason:
+            log.error("챗봇 준비 안 됨 request_id=%s reason=%s", rid, reason)
+            return not_ready(reason)
+        try:
+            return chatter.run(pool.connection, req, request_id=rid)
+        except db_down as e:
+            log.error("챗봇 DB 오류 request_id=%s error=%s", rid, type(e).__name__)
             return not_ready("DB 를 쓸 수 없음")
 
     return router

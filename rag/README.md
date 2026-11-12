@@ -13,6 +13,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 | 배포 이미지 (`ghcr.io/nineouting/nineouting-ai-service`) | 구현. 아래 "이미지·배포" |
 | 답변 API (검색 → LLM → 근거 번호 검사) | 구현. LLM 은 설정으로 고름: 가짜(기본, 답 앞에 `[시험용 답변]`) / Gemini(시험) / OpenAI(운영, SDK 는 모델을 정할 때 추가) |
 | 업로드 문서(PDF·워드·엑셀) | 받기·형식 확인(SCRUM-106), PDF 읽기(SCRUM-107, PDFium), 워드 읽기(SCRUM-108), 엑셀 읽기(SCRUM-109) 구현. 정제·크기 상한은 SCRUM-110 |
+| 회의 중 챗봇 (`POST /internal/rag/chat`) | 이어지는 질문 + 회의록·첨부 자료로 답하기 구현 (SCRUM-223). 진행 중 회의(SCRUM-224), 일반 지식(SCRUM-225)은 아직. 명세 `docs/api/rag-chat-contract.md` |
 
 원본 명세는 노션 "RAG 인터페이스 명세".
 
@@ -167,6 +168,46 @@ cd <저장소 루트> && set -a && . ./.env && set +a
 - 실제 LLM 으로 보려면 서버를 띄울 때 `RAG_LLM_PROVIDER=openai`, `RAG_LLM_MODEL=gpt-5.6-luna`, `OPENAI_API_KEY` 를 넣는다 (`.env` 에 적어 두면 된다). 질문마다 요금이 나간다
 - 실제 회의 데이터는 레포 밖(또는 git 이 무시하는 `data/`)에 두고 `--file` 로 경로만 넘긴다
 
+### 회의 중 챗봇 `POST /internal/rag/chat`
+
+명세는 `docs/api/rag-chat-contract.md`. 지금(SCRUM-223)은 대화를 이어받아 회의록·첨부 자료로만 답한다.
+
+```
+① history 가 있으면 질문 고쳐 쓰기 (AI 1번)   "그거 언제까지야?" → "디자인 시안 수정은 언제까지야?"
+② 근거 모으기 (AI 없음)                       고친 질문으로 workspaceId + docs 짝 검색, 상위 5개
+③ [1]..[n] 번호 붙이기
+④ 답하기 (AI 1번)                             <대화> + <자료> + <질문(원래 질문)> + <고친 질문(다를 때만)>
+⑤ 판정                                        답변 API 와 같은 judge_reply
+```
+
+| 단계 | 결과 |
+|---|---|
+| `docs` 가 비었음 | `no_result` (DB·AI 를 부르지 않음. 일반 지식이 생기면(SCRUM-225) 바뀐다) |
+| 고쳐 쓰기 실패 (오류, 시간 초과, 빈 답, `NO_ANSWER`, 여러 줄, 300자 넘음) | 원래 질문으로 이어 간다. 답은 실패시키지 않는다 |
+| 60초 마감을 넘김 | `failed` + `llm_timeout` (그래도 200) |
+| 찾은 근거 0개 / AI 가 `NO_ANSWER` / 답에 `[n]` 없음 | `no_result`, `answer` 는 "회의 자료에서 찾을 수 없어요" (답변 API 는 `null`) |
+| 넘긴 번호 밖의 `[n]` / AI 오류·시간 초과 | `failed` + `llm_failed` / `llm_timeout` |
+| 통과 | `answered`, `basis` 는 지금 늘 `sources` |
+
+- 대화 기록은 저장하지 않는다. 백엔드가 요청마다 `history`(최대 20개)로 보내고, 고쳐 쓰기·답하기에는 최근 6개만 쓴다. 앞선 챗봇 답의 `[n]`·`[일반]` 표시는 지우고 넘긴다 (그때의 근거 번호라 이번 번호와 헷갈린다)
+- `<대화>`는 질문이 가리키는 것을 알아내는 데만 쓰고 근거로 쓰지 않는다. 앞선 챗봇 답에만 있고 자료에 없는 사실은 답하지 않는다
+- `userName`, `currentAgendaId`, `liveAgendas`, `recentLines` 는 형식과 상한만 검사하고 아직 쓰지 않는다 (SCRUM-224·225)
+- 시간 (명세 v0.2 4.4): 요청 하나는 최대 60초. 고쳐 쓰기는 기본 모델만 최대 5초(폴백 없음), 답하기는 기본 모델 최대 25초(남은 시간보다 길면 남은 시간까지), 실패하면 남은 시간이 10초 이상일 때만 폴백 모델을 남은 시간 안에서 부른다. 백엔드는 이 주소만 타임아웃 65초 (권장)
+- 고쳐 쓰기와 답하기는 답변 API 와 같은 AI 설정(`RAG_LLM_*`)을 쓰되 연결은 따로 만든다. 위 시간 규칙 때문에 공용 폴백 묶음을 그대로 부르지 않고 기본·폴백 모델을 꺼내 직접 부른다. 그래서 "실패한 기본 모델을 60초 동안 건너뛰기"(`RAG_LLM_FALLBACK_COOLDOWN_S`)는 챗봇에 없다. 장애 중에는 질문마다 기본 모델을 25초까지 기다린 뒤 폴백으로 간다 (측정 뒤 넣을지 정함). `RAG_LLM_TIMEOUT_S` 도 챗봇에 쓰지 않는다
+- 문서는 `docs: [{sourceType, docId}]` 짝으로 받는다 (최대 1,000개, 답변 API 와 같음). 옛 `docIds` 는 400
+- 상한 중 대화 한 개의 글 4,000자, `userName` 100자는 명세에 없어 AI 쪽이 정했다
+- 로그: `챗봇 answered request_id=… workspace=… meeting=… user=… history=… docs=… rewrite=ok rewrite_ms=… evidence=… llm_ms=… tokens_in=…`. `rewrite` 는 `ok` / `skip`(대화 없음) / `fallback_timeout` / `fallback_error` / `fallback_invalid`. 질문·대화·답·근거 글과 `userName` 은 남기지 않는다
+- 가짜 AI 는 고쳐 쓰기에서 `NO_ANSWER` 를 내므로 늘 `rewrite=fallback_invalid` 로 원래 질문을 쓴다
+
+손으로 시험하기: 서버를 띄운 뒤 다른 터미널에서. 대화 기록은 도구가 들고 있다가 질문마다 보낸다 (`/new` 새 대화, `/history` 기록 보기).
+
+```bash
+.venv/bin/python -m rag.try_chat                                          # 합성 예시 회의록으로
+.venv/bin/python -m rag.try_chat --file rag/tests/fixtures/minutes_confirmed_table.json --title "주간 회의 (10/20)" \
+    --file rag/tests/fixtures/answer_minutes_followup.json --title "주간 회의 (10/27)"
+.venv/bin/python -m rag.try_chat --show-rewrite                           # 고친 질문도 본다 (AI 를 한 번 더 부름)
+```
+
 ## 작업자
 
 접수(`jobs.submit()`)는 문서를 `queued` 로 두고 작업 표(`rag_jobs`)에 적기만 한다. 작업자가 꺼내서 로더 → 나누기 → 임베딩 → 저장을 하고 완료 콜백을 보낸다.
@@ -225,6 +266,20 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 - 결과는 `data/eval/answer/{사례}-{시각}/` 에 남는다 (git 이 무시함). 답 글이 들어가므로 합성 회의록만 쓴다
 - 꼭 들어갈 말은 낱말로 본다. 틀림으로 나온 답은 `runs.jsonl` 의 글을 직접 보고 판단한다 (같은 뜻을 다르게 쓴 경우가 있다)
 
+## 챗봇 평가
+
+대화가 이어지는 질문에서 질문을 고쳐 쓰기 전·후의 검색 순위(Hit@5, MRR)와 답이 맞는지를 잰다 (`eval_chat.py`). 검색은 `eval_search` 처럼 실제 임베딩 모델로 메모리에서 하고, 고쳐 쓰기·답하기는 서버와 같은 함수(`rewrite_query`, `chat_input`, `judge_reply`)를 쓴다. 사례 형식은 `eval_chat.py` 맨 위 설명.
+
+```bash
+.venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_two_meetings.json --dry-run     # AI 없이 점검, 고치기 전 순위
+.venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_two_meetings.json --runs 10     # 실제 AI. 호출마다 요금이 나간다
+.venv/bin/python -m rag.eval_chat --summary data/eval/chat/{결과폴더}
+```
+
+- `chat_eval_two_meetings.json`: 답변 평가와 같은 합성 회의 둘(10/20, 10/27), 12사례. 앞 답·사람·장소·목록 속 항목을 가리키는 질문, 생략된 주제, 주제가 바뀐 질문, 대화 없는 질문, 앞선 챗봇 답에만 있는 사실(→ `no_result`), 대화에 섞인 지시
+- 조각이 19개뿐이라 고쳐 쓰지 않아도 정답이 상위에 오는 사례가 많다. 고치기 전·후 차이는 조각이 많은 자료에서 더 크게 날 수 있다
+- 결과는 `data/eval/chat/{사례}-{시각}/` 에 남는다 (git 이 무시함). 고친 질문과 답 글이 들어가므로 합성 회의록만 쓴다. 폴백은 쓰지 않는다
+
 ## 이미지·배포
 
 공용 `Dockerfile` 이미지에 RAG 가 함께 들어간다. GitHub Actions(`.github/workflows/image.yml`)가 PR 에서는 빌드·크기 측정·모델 확인만 하고, `develop` 에 합쳐지면 `ghcr.io/nineouting/nineouting-ai-service:develop` 과 `:<커밋 SHA>` 로 올린다.
@@ -267,6 +322,9 @@ set -a; . ./.env; set +a                 # DB 시험을 돌리려면 (없으면 
 | `RAG_ANSWER_PROMPT_VERSION` | 답변 지시문 버전 (`v1`, `v2` …). 없으면 `rag/prompts/answer/` 에서 번호가 가장 큰 파일. 없는 버전이면 답변만 503 |
 | `RAG_LLM_TIMEOUT_S` | 답변 LLM 을 기다리는 상한 (기본 30초). 넘으면 `llm_timeout`. 재시도는 하지 않는다 |
 | `RAG_LLM_FALLBACK_PROVIDER`, `RAG_LLM_FALLBACK_MODEL` | 폴백 모델. 기본 모델 호출이 실패하면(호출 오류 전부: 연결 실패, 시간 초과, 빈 응답, 429·5xx, 404·401 같은 설정 오류도. 실패마다 경고 로그가 남는다) 같은 입력으로 한 번 더 부른다. **공급자와 모델은 함께 넣는다** (요약 쪽 `LLM_FALLBACK_*` 와 달리 공급자를 생략할 수 없다). 둘 다 비면 폴백 없음. 한쪽만 있거나 틀리면 답변만 503. 서버에서만 쓰고 평가·손 시험 도구는 폴백하지 않는다. 답을 받은 뒤의 판정(`no_result`, 범위 밖 번호)에는 폴백하지 않는다. 폴백이 답하면 로그에 `answered_by=… fallback=1` |
+| `RAG_CHAT_PROMPT_VERSION`, `RAG_REWRITE_PROMPT_VERSION` | 챗봇의 답하기·고쳐 쓰기 지시문 버전. 없으면 `rag/prompts/chat/`, `rag/prompts/rewrite/` 에서 번호가 가장 큰 파일. 없는 버전이면 챗봇만 503 |
+| `RAG_REWRITE_TIMEOUT_S` | 챗봇 질문 고쳐 쓰기를 기다리는 상한 (기본 5초, 기본 모델만). 넘으면 원래 질문으로 이어 간다 |
+| `RAG_CHAT_DEADLINE_S`, `RAG_CHAT_PRIMARY_TIMEOUT_S`, `RAG_CHAT_FALLBACK_MIN_S` | 챗봇 요청 하나의 마감 (기본 60초), 답하기의 기본 모델 상한 (기본 25초), 폴백을 부를 최소 남은 시간 (기본 10초). 명세 v0.2 4.4. 줄이는 쪽으로만 고친다 (백엔드 타임아웃 65초). 기본 모델 상한이 마감보다 크면 챗봇만 503 |
 | `RAG_LLM_FALLBACK_COOLDOWN_S` | 기본 모델이 실패한 뒤 기본 모델을 건너뛰고 폴백만 부르는 시간 (기본 60초). 지나면 기본 모델을 다시 부른다. 폴백까지 가면 한 번의 답변이 시간 제한의 두 배(기본 약 60초)까지 걸릴 수 있다 |
 | `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`), `OPENAI_API_KEY` | 공급자 API 키. 요약 서버와 같은 이름이라 하나로 같이 쓴다. 이미지에 넣지 않고 실행할 때 비밀값으로 |
 | `RAG_DB_CONNECT_TIMEOUT_S` | 작업자가 DB 에 접속할 때 기다리는 상한 (기본 10초). 닿지 않는 주소에서 서버 종료가 늦어지지 않게 |

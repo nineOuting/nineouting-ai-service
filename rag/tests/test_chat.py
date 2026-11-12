@@ -105,6 +105,13 @@ def test_답하기_글은_대화_자료_질문_순서이고_조각_머리가_답
     assert "챗봇: 박서준 님이 맡았어요." in text and "[1]." not in text.split("<자료>")[0]
 
 
+def test_근거_머리에_날짜를_붙이고_없으면_뺌():
+    dated = Evidence("minutes", 1, "주간 회의", "글", {"label": "결정 사항"}, "회의 2026년 10월 29일 10:00")
+    text = chat_input(QUERY, [], [dated, ev(1)])
+    assert "[1] (주간 회의 · 회의 2026년 10월 29일 10:00, 결정 사항)" in text
+    assert "[2] (회의 1, 결정 사항)" in text
+
+
 def test_대화가_없으면_대화_칸이_없음():
     assert "<대화>" not in chat_input(QUERY, [], [ev(1)])
 
@@ -318,10 +325,11 @@ def test_마감이_지났으면_AI를_부르지_않고_llm_timeout(searched):
 # ---- 지시문·설정 ----
 
 def test_지시문을_읽고_버전이_있음():
-    assert PROMPTS.chat.version == "chat-v2" and NO_ANSWER in PROMPTS.chat.text and "<고친 질문>" in PROMPTS.chat.text
-    assert chat_prompts("v1").chat.version == "chat-v1"
+    assert PROMPTS.chat.version == "chat-v3" and NO_ANSWER in PROMPTS.chat.text and "<고친 질문>" in PROMPTS.chat.text
+    assert "올린 날" in PROMPTS.chat.text
+    assert chat_prompts("v1").chat.version == "chat-v1" and chat_prompts("v2").chat.version == "chat-v2"
     assert PROMPTS.rewrite.version == "rewrite-v1"
-    assert chat_prompts("chat-v2", "v1") == PROMPTS
+    assert chat_prompts("chat-v3", "v1") == PROMPTS
 
 
 def test_없는_지시문_버전이면_챗봇만_503():

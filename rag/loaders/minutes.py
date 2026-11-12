@@ -34,6 +34,7 @@ decisions·action_items 항목은 아직 형식이 정해지지 않아 summary �
 import math
 import re
 from dataclasses import dataclass
+from datetime import date, datetime
 
 from ..errors import INTERNAL_ERROR, NO_TEXT, IngestError
 from ..models import Piece
@@ -59,6 +60,25 @@ def load_minutes(minutes) -> LoadResult:
     if check_format(minutes) == FORMAT_VERSION:
         return _load_confirmed(minutes)
     return _load_temporary(minutes)
+
+
+def meeting_time(minutes) -> datetime | None:
+    """회의 시작 시각 (SCRUM-234). 확정 회의록은 meetingStartAt, 임시 형식은 date.
+    받은 시각 그대로 둔다: 시간대가 붙어 와도 벽시계 시각만 남긴다 (바꾸지 않는다). 날짜만 오면 그날 0시.
+    읽을 수 없는 값이면 None (회의록은 그대로 받고 날짜만 비운다)."""
+    raw = minutes.get("meetingStartAt") if minutes.get("formatVersion") == FORMAT_VERSION else minutes.get("date")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip()
+    try:
+        return datetime.fromisoformat(raw).replace(tzinfo=None)
+    except ValueError:
+        pass
+    try:
+        d = date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+    return datetime(d.year, d.month, d.day)
 
 
 def check_format(minutes) -> str:

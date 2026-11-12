@@ -52,6 +52,13 @@ def jobs(conn):
 
 # ---- 문서 넣기 ----
 
+def test_넣을_때_회의_시작_시각을_저장(client, conn):
+    from datetime import datetime
+    client.post(f"{BASE}/documents", json=body(docVersion="5", minutes=copy.deepcopy(CONFIRMED)))
+    started = conn.execute("SELECT meeting_started_at FROM rag_documents").fetchone()[0]
+    assert started == datetime.fromisoformat(CONFIRMED["meetingStartAt"]).replace(tzinfo=None)
+
+
 def test_넣기는_202_accepted_이고_작업이_생김(client, conn):
     r = client.post(f"{BASE}/documents", json=body(), headers={"X-Request-Id": "req-1"})
     assert r.status_code == 202

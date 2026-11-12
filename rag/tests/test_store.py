@@ -61,6 +61,49 @@ def test_같은_짝이_다른_워크스페이스로_오면_거부하지만_종�
     assert register(conn, doc(1, ws=OTHER_WS, source="upload")) == QUEUED_NEW
 
 
+def test_회의록의_회의_시각과_받은_시각을_저장하고_새_버전이면_바꿈(conn, fake_embedder):
+    from datetime import datetime
+    register(conn, replace(doc(1, "5"), meeting_started_at=datetime(2026, 10, 29, 10, 0)))
+    first = conn.execute("SELECT meeting_started_at, received_at FROM rag_documents").fetchone()
+    assert first[0] == datetime(2026, 10, 29, 10, 0) and first[1] is not None
+    register(conn, replace(doc(1, "5"), meeting_started_at=datetime(2026, 1, 1)))      # 같은 버전: 그대로
+    assert conn.execute("SELECT meeting_started_at, received_at FROM rag_documents").fetchone() == first
+    conn.execute("UPDATE rag_documents SET received_at = received_at - interval '1 day'")    # 하루 전에 받은 것처럼
+    register(conn, replace(doc(1, "6"), meeting_started_at=datetime(2026, 11, 5, 10, 0)))  # 새 버전: 둘 다 바뀜
+    second = conn.execute("SELECT meeting_started_at, received_at >= %s FROM rag_documents", (first[1],)).fetchone()
+    assert second == (datetime(2026, 11, 5, 10, 0), True)
+
+
+def test_첨부_자료는_회의_시각이_없고_검색_결과에_날짜가_나옴(conn, fake_embedder):
+    from datetime import datetime
+    put(conn, fake_embedder, replace(doc(1), meeting_started_at=datetime(2026, 10, 29, 10, 0)), "회의록 글")
+    put(conn, fake_embedder, doc(2, source="upload"), "첨부 글")
+    hits = {h.source_type: h for h in search(conn, fake_embedder, WS, [("minutes", 1), ("upload", 2)], "글")}
+    assert hits["minutes"].meeting_started_at == datetime(2026, 10, 29, 10, 0)
+    assert hits["upload"].meeting_started_at is None and hits["upload"].received_at is not None
+
+
+def test_0004_마이그레이션은_받은_시각을_바뀐_시각으로_채움(conn):
+    from rag.migrate import MIGRATIONS
+    conn.execute("DROP SCHEMA IF EXISTS rag_mig_test CASCADE")
+    conn.execute("CREATE SCHEMA rag_mig_test")
+    try:
+        conn.execute("SET search_path TO rag_mig_test, public")
+        for name in ("0001_init", "0002_jobs", "0003_source_key"):
+            conn.execute((MIGRATIONS / f"{name}.sql").read_text(encoding="utf-8"))
+        conn.execute("INSERT INTO rag_documents (doc_id, doc_version, workspace_id, source_type, title, status, updated_at) "
+                     "VALUES (1, 'v1', 10, 'minutes', '회의', 'ready', '2026-10-20 05:00+00')")
+        conn.execute((MIGRATIONS / "0004_doc_dates.sql").read_text(encoding="utf-8"))
+        row = conn.execute("SELECT meeting_started_at, received_at = updated_at FROM rag_documents").fetchone()
+        assert row == (None, True)
+        conn.execute("INSERT INTO rag_documents (doc_id, doc_version, workspace_id, source_type, title, status) "
+                     "VALUES (2, 'v1', 10, 'upload', '자료', 'queued')")
+        assert conn.execute("SELECT received_at IS NOT NULL FROM rag_documents WHERE doc_id = 2").fetchone()[0]
+    finally:
+        conn.execute("RESET search_path")
+        conn.execute("DROP SCHEMA rag_mig_test CASCADE")
+
+
 def test_0003_마이그레이션은_들어_있는_데이터를_옮김(conn):
     """옛 표(0001·0002)에 데이터를 넣고 0003 을 돌린다. 시험 DB 안의 따로 만든 스키마에서 한다."""
     from rag.migrate import MIGRATIONS

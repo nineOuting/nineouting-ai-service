@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable, ContextManager
 
 from shared.llm import LLMError, LLMTimeout
+from .dates import when_label
 from .search import search
 
 log = logging.getLogger("rag.answer")
@@ -91,11 +92,13 @@ _REF = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")       # [1], [1, 2]. [1][2] 는 �
 
 
 def build_prompt(query, hits) -> str:
-    """조각에 1번부터 번호를 붙인다. 자료·질문 칸을 닫는 꺾쇠를 글 안에서 바꿔, 칸 밖으로 새지 않게 한다."""
+    """조각에 1번부터 번호를 붙인다. 자료·질문 칸을 닫는 꺾쇠를 글 안에서 바꿔, 칸 밖으로 새지 않게 한다.
+    조각 머리는 "[n] (제목 · 날짜, 위치)". 날짜는 회의록이면 회의한 날, 첨부 자료면 올린 날이고 없으면 뺀다 (SCRUM-234)."""
     parts = ["<자료>"]
     for i, h in enumerate(hits, 1):
         label = (h.location or {}).get("label", "")
-        parts.append(f"[{i}] ({_quote(h.title)}, {_quote(label)})\n{_quote(h.content)}")
+        when = when_label(h.source_type, getattr(h, "meeting_started_at", None), getattr(h, "received_at", None))
+        parts.append(f"[{i}] ({_quote(h.title)}{' · ' + when if when else ''}, {_quote(label)})\n{_quote(h.content)}")
     parts += ["</자료>", f"<질문>\n{_quote(query)}\n</질문>"]
     return "\n\n".join(parts)
 

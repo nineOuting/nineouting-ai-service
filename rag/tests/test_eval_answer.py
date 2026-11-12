@@ -58,7 +58,7 @@ def test_사례_조각은_AI에_가는_글에_번호대로_들어감(path):
         hits = ev.hits_for(case, q)
         user = ev.build_prompt(q["q"], hits)
         for i, (doc, needle) in enumerate(q["pieces"], 1):
-            assert f"[{i}] ({case['docs'][doc]['title']}," in user
+            assert f"[{i}] ({case['docs'][doc]['title']} · 회의 " in user           # 회의 날짜가 붙는다 (SCRUM-234)
             assert needle in hits[i - 1].content
 
 

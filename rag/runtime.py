@@ -11,6 +11,7 @@ import logging
 
 from .answer import Answerer
 from .api import PREFIX, REQUEST_ID_HEADER, make_router
+from .chat import Budget, Chatter
 from shared.callback import allowed_hosts_from_env
 from .db import timeout_options
 from .download import settings_from_env as upload_settings_from_env
@@ -66,6 +67,47 @@ def make_answerer(runtime, env) -> Answerer:
     return answerer
 
 
+def make_chatter(runtime, env) -> Chatter:
+    """챗봇. AI 는 답변과 같은 설정(RAG_LLM_*, 폴백 포함)을 쓰되 따로 만든다.
+    시간(명세 v0.2 4.4)은 RAG_CHAT_DEADLINE_S·RAG_REWRITE_TIMEOUT_S·RAG_CHAT_PRIMARY_TIMEOUT_S·RAG_CHAT_FALLBACK_MIN_S 이고,
+    답변 API 의 RAG_LLM_TIMEOUT_S 는 챗봇에 쓰지 않는다. 지시문은 RAG_CHAT_PROMPT_VERSION·RAG_REWRITE_PROMPT_VERSION.
+    설정이 틀리면 서버는 뜨고 챗봇만 503 이다."""
+    try:
+        llm, _ = make_llm(env, "RAG_LLM")
+        llm = add_fallback(llm, env, "RAG_LLM")
+        d = Budget()
+        budget = Budget(_positive_float(env, "RAG_CHAT_DEADLINE_S", d.deadline_s),
+                        _positive_float(env, "RAG_REWRITE_TIMEOUT_S", d.rewrite_s),
+                        _positive_float(env, "RAG_CHAT_PRIMARY_TIMEOUT_S", d.primary_s),
+                        _positive_float(env, "RAG_CHAT_FALLBACK_MIN_S", d.fallback_min_s))
+        if budget.primary_s > budget.deadline_s:
+            raise LLMConfigError("RAG_CHAT_PRIMARY_TIMEOUT_S 는 RAG_CHAT_DEADLINE_S 보다 클 수 없음")
+    except LLMConfigError as e:
+        log.error("챗봇 LLM 설정 오류: %s", e)
+        return Chatter(lambda: runtime.embedder, config_error=str(e))
+    chatter = Chatter(lambda: runtime.embedder, llm, budget,
+                      chat_version=env.get("RAG_CHAT_PROMPT_VERSION"),
+                      rewrite_version=env.get("RAG_REWRITE_PROMPT_VERSION"))
+    if chatter.config_error:
+        log.error("챗봇 설정 오류: %s", chatter.config_error)
+    else:
+        log.info("챗봇 LLM %s, 지시문 %s·%s, 마감 %.0f초 (고쳐 쓰기 %.0f초, 기본 모델 %.0f초, 폴백은 남은 시간 %.0f초 이상)",
+                 describe(llm), chatter.prompts.chat.version, chatter.prompts.rewrite.version, budget.deadline_s,
+                 budget.rewrite_s, budget.primary_s, budget.fallback_min_s)
+    return chatter
+
+
+def _positive_float(env, key, default):
+    raw = env.get(key, default)
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        raise LLMConfigError(f"{key} 는 숫자여야 함") from None
+    if v <= 0:
+        raise LLMConfigError(f"{key} 는 0보다 커야 함")
+    return v
+
+
 def setup(app, env) -> RagRuntime:
     from pgvector.psycopg import register_vector
     from psycopg_pool import ConnectionPool
@@ -84,5 +126,5 @@ def setup(app, env) -> RagRuntime:
     runtime = RagRuntime(pool, env)
     app.include_router(make_router(pool, allowed, env.get("RAG_REQUEST_ID_HEADER", REQUEST_ID_HEADER),
                                    env.get("RAG_API_PREFIX", PREFIX), answerer=make_answerer(runtime, env),
-                                   upload=upload))
+                                   upload=upload, chatter=make_chatter(runtime, env)))
     return runtime

@@ -38,8 +38,10 @@
     * 사용자가 정한 상태(apply_status_edits): 사항 단위로 DECIDED 또는 UNDECIDED 를 정한다. 그 사항의 상태는 AI가 바꾸지 않는다.
       AUTO 로 보내면 사용자 지정을 풀고 AI 판정으로 돌아간다(AI의 결정 잠금도 함께 푼다). 안건 상태는 이 상태들에서 그대로 규칙으로 정한다.
       결정으로 정했는데 결정 내용이 없으면 고정 문구를 쓰고 needsCheck 를 켠다 (결정 내용은 decision-edits 로 적는다).
-    * AI가 낸 결정(DECIDED)은 잠근다: 다시 판정해도 상태·결정 내용·근거를 바꾸지 않는다. 그 뒤 판정이 미결(undecided)로 뒤집으면
-      바꾸지는 않고 needsCheck 만 켠다. 결정(decided)으로 다시 나오면 꺼진다. 확인 필요(check)와 미결은 잠그지 않는다.
+    * AI가 낸 결정(DECIDED)은 잠근다: 다시 판정해도 상태·결정 내용·근거를 바꾸지 않는다. 그 뒤 판정이 미결(undecided)이나
+      확인 필요(check)로 나오면 바꾸지는 않고 needsCheck(contested)만 켠다. 한 번 켜진 표시는 결정(decided)으로 다시 나와도 끄지 않는다.
+      끄는 것은 사용자 조치뿐이다: AUTO, 결정으로 정하기(status-edits), 결정 내용 고치기(decision-edits). 문구가 바뀌면 잠금째 풀린다.
+      확인 필요(check)와 미결 사항은 잠그지 않는다.
       결정할 사항의 문구가 바뀌면 그 사항의 잠금은 풀린다 (이전 결정은 새 문구의 결정이 아니다).
     * 모든 사항을 사용자가 정한 안건은 모델을 부르지 않는다.
 
@@ -256,6 +258,7 @@ class AgendaStatusJudge:
         self.errors = 0
         self.err_streak = 0
         self.rejected = 0             # 문장 검증을 통과하지 못해 결정으로 내지 않고 고정 문구로 대신한 사항 수
+        self.contested_raised = {"undecided": 0, "check": 0}   # 잠긴 결정에 확인 필요가 새로 켜진 횟수 (켠 판정별). 이미 켜진 표시는 다시 세지 않는다
         self.halted = None            # 멈춘 이유 (None이면 정상)
         self.final = False            # 회의가 끝났다 (결정이 아닌 안건은 미결로 확정)
 
@@ -327,7 +330,11 @@ class AgendaStatusJudge:
                 ent["ack"] = self._ack(ent, ek[0], view)
                 self.edits[ek] = ent
                 self.edit_rev[ek] = e["rev"]
-                self.ag.setdefault(ek[0], _new_state())["dirty"] = True    # 다음 주기에 기다리지 않고 다시 판정
+                st = self.ag.setdefault(ek[0], _new_state())
+                st["dirty"] = True                                         # 다음 주기에 기다리지 않고 다시 판정
+                r = st["pts"].get(ek[1])
+                if r is not None:
+                    r["contested"] = False                                 # 사용자가 결정 내용을 직접 고쳤다: 확인했으므로 번복 신호 표시를 끈다 (잠금은 그대로)
                 applied += 1
         log.info("고친 결정 내용 반영 meeting=%s edits=%s applied=%s", self.c.meeting_id, len(edits), applied)
         return {"applied": applied, "ignored": ignored}
@@ -550,11 +557,12 @@ class AgendaStatusJudge:
             counts[verdict] = counts.get(verdict, 0) + 1
             old = st["pts"].get(p["key"])
             if old is not None and old.get("locked"):        # AI가 낸 결정은 잠겨 있다: 상태·내용·근거를 바꾸지 않는다
-                if verdict == "undecided":
-                    old["contested"] = True                  # 뒤집는 말이 나왔다: 바꾸지는 않고 확인 필요만 켠다
-                elif verdict == "decided":
-                    old["contested"] = False
-                continue                                     # 판정 없음, 확인 필요, 검증 탈락은 잡음일 수 있어 건드리지 않는다
+                if verdict in ("undecided", "check"):        # 결정을 뒤집거나 약하게 만드는 말이 나왔다: 바꾸지는 않고 확인 필요만 켠다
+                    if not old["contested"]:
+                        self.contested_raised[verdict] += 1  # 얼마나 자주 켜지는지 보려고 센다 (내용은 남기지 않는다)
+                        log.info("결정 번복 신호 meeting=%s verdict=%s", self.c.meeting_id, verdict)
+                    old["contested"] = True
+                continue                                     # 켜진 표시는 결정으로 다시 나와도 끄지 않는다(끄는 것은 사용자 조치뿐). 판정 없음, 검증 탈락은 잡음일 수 있어 건드리지 않는다
             if verdict == "rejected":                        # 근거 없는 결정은 내지 않는다: 미결 고정 문구로 대신한다
                 self.rejected += 1
                 st["pts"][p["key"]] = {"status": UNDECIDED, "text": "", "evidence": [], "fixed": True, "locked": False, "contested": False}
@@ -651,12 +659,15 @@ class AgendaStatusJudge:
 
     def info(self):
         """상태 조회용. 전사 내용, 안건 제목, 결정할 사항 문구, 판정 문장은 넣지 않는다.
-        decided, decisionCheck 는 판정된 결정할 사항의 수다 (안건 수가 아니다)."""
+        decided, decisionCheck 는 판정된 결정할 사항의 수다 (안건 수가 아니다).
+        contested 는 지금 번복 신호(확인 필요)가 켜져 있는 사항 수, contestedRaised 는 새로 켜진 누적 횟수(켠 판정별)다."""
         with self.lock:
             pts = [r for st in self.ag.values() for r in st["pts"].values()]
             return {"agendas": len(self.ag),
                     "decided": sum(1 for r in pts if r["status"] == DECIDED),
                     "decisionCheck": sum(1 for r in pts if r["status"] == DECISION_CHECK),
+                    "contested": sum(1 for r in pts if r.get("contested")),
+                    "contestedRaised": dict(self.contested_raised),
                     "calls": self.calls, "errors": self.errors, "rejected": self.rejected, "halted": self.halted}
 
 
@@ -777,7 +788,7 @@ def selftest():
     assert "[맞장구] 네 좋아요" in u and "음" not in u.split("[전사]")[1].replace("좋아요", "") and "흐릿한" not in u, u
     assert "네네" not in u, "간격이 길면 붙이지 않음"
     # 10) 결정이 난 안건도 새 줄이 오면 다시 판정하지만, AI가 낸 결정은 잠겨 있다 (v0.3).
-    #     뒤집는 말(미결)이 나오면 바꾸지 않고 확인 필요만 켠다. 판정 없음은 잡음일 수 있어 그대로 두고, 다시 결정으로 나오면 끈다
+    #     뒤집는 말(미결)이 나오면 바꾸지 않고 확인 필요만 켠다. 판정 없음은 잡음일 수 있어 그대로 두고, 다시 결정으로 나와도 표시는 유지한다
     answers = [answer("decided", "배포는 목요일", [(1, 2)]), answer("undecided", "배포를 다시 생각해 보자는 말이 나왔어요", [(3, 4)]),
                answer("none"), answer("decided", "배포는 목요일", [(1, 2)])]
     c, j = fresh(llm=lambda u: answers.pop(0))
@@ -793,7 +804,7 @@ def selftest():
     feed(c, [ln(5, 12000, "배포 얘기 계속"), ln(6, 13000, "배포 일정 더 얘기")], 14000)
     assert j.process() == 1 and stat(j)["points"][0]["needsCheck"] is True and stat(j)["status"] == DECIDED, "판정 없음은 그대로 둔다"
     feed(c, [ln(7, 16000, "배포는 목요일로 가요"), ln(8, 17000, "배포 목요일 좋아요")], 18000)
-    assert j.process() == 1 and stat(j)["points"][0]["needsCheck"] is False and stat(j)["status"] == DECIDED, "다시 결정으로 나오면 꺼진다"
+    assert j.process() == 1 and stat(j)["points"][0]["needsCheck"] is True and stat(j)["status"] == DECIDED, "다시 결정으로 나와도 켜진 표시는 유지된다 (사용자 조치로만 꺼진다)"
 
     # 11) 현재 안건이 바뀌면 이전 안건의 논의 중이 미결로 바뀐다 (모델 없이)
     c, j = fresh(llm=lambda u: answer("none"))
@@ -944,7 +955,7 @@ def selftest():
     assert json.loads(echo_llm("[전사]\n[1] 00:00 안녕"))["points"][0]["verdict"] == "none"
     # 17) info 에는 내용이 없다
     info = j.info()
-    assert set(info) == {"agendas", "decided", "decisionCheck", "calls", "errors", "rejected", "halted"} and info["decided"] == 1
+    assert set(info) == {"agendas", "decided", "decisionCheck", "contested", "contestedRaised", "calls", "errors", "rejected", "halted"} and info["decided"] == 1
     try:
         StatusCfg(nope=1)
         assert False
@@ -1244,12 +1255,100 @@ def selftest():
     assert j.process() == 1 and stat(j)["status"] == DECIDED and stat(j)["points"][0]["decisionText"] == "배포는 목요일", "범위를 벗어나도 잠긴 결정은 유지"
     assert stat(j)["points"][0]["needsCheck"] is False, "판정 없음은 확인 필요를 켜지 않는다"
 
+    # 21-9) 뒤집는 신호 정책: 확인 필요(check)도 뒤집는 신호이고, 한 번 켜진 표시는 결정이 다시 나와도 꺼지지 않는다.
+    #       끄는 것은 사용자 조치뿐이다: 결정 내용 고치기, AUTO, 결정으로 정하기. 켜진 횟수는 info 로 센다
+    def SAME():
+        return answer_pts([("decided", "1차 배포는 다음 주 목요일로 정함", [(1, 2)]), ("none", "", []), ("none", "", [])])
+
+    def flip(verdict):
+        return answer_pts([(verdict, "다시 정하자는 말이 나왔어요", [(5, 6)]), ("none", "", []), ("none", "", [])])
+
+    def more(c, j, a, b):
+        feed(c, [ln(a, 9000 + 2000 * a, "배포 얘기 더 해요"), ln(b, 10000 + 2000 * a, "배포 일정 또 얘기해요")], 11000 + 2000 * a)
+        assert j.process() == 1
+
+    for verdict in ("check", "undecided"):
+        plan = [ANS3(), flip(verdict), SAME(), flip(verdict)]
+        c, j = fresh(agendas=(P1, A2), llm=lambda u: plan.pop(0))
+        feed(c, L4, 7000)
+        j.process()
+        assert pts_of(j)[0]["status"] == DECIDED and pts_of(j)[0]["needsCheck"] is False
+        assert j.info()["contested"] == 0 and j.info()["contestedRaised"] == {"undecided": 0, "check": 0}
+        more(c, j, 5, 6)
+        p0 = pts_of(j)[0]
+        assert p0["status"] == DECIDED and p0["decisionText"] == "1차 배포는 다음 주 목요일로 정함" and p0["evidenceSeqs"] == [1, 2], (verdict, p0)
+        assert p0["needsCheck"] is True and p0["statusEdited"] is False, (verdict, "상태는 두고 확인 필요만 켠다", p0)
+        raised = {"undecided": int(verdict == "undecided"), "check": int(verdict == "check")}
+        assert j.info()["contested"] == 1 and j.info()["contestedRaised"] == raised, j.info()
+        more(c, j, 7, 8)
+        assert pts_of(j)[0]["needsCheck"] is True and pts_of(j)[0]["status"] == DECIDED, (verdict, "결정으로 다시 나와도 표시는 유지")
+        assert j.info()["contested"] == 1 and j.info()["contestedRaised"] == raised, "이미 켜진 표시는 다시 세지 않는다"
+        n_log = sum("결정 번복 신호" in r for r in records)
+        more(c, j, 9, 10)                                    # 이미 켜진 상태에서 같은 뒤집기가 또 온다
+        assert pts_of(j)[0]["needsCheck"] is True and pts_of(j)[0]["status"] == DECIDED
+        assert j.info()["contested"] == 1 and j.info()["contestedRaised"] == raised, "켜진 표시에 뒤집기가 또 와도 세지 않는다"
+        assert sum("결정 번복 신호" in r for r in records) == n_log, "로그도 새로 켜질 때만 남긴다"
+
+    def flagged():
+        plan = [ANS3(), flip("undecided"), SAME(), SAME()]
+        c, j = fresh(agendas=(P1, A2), llm=lambda u: plan.pop(0))
+        feed(c, L4, 7000)
+        j.process()
+        more(c, j, 5, 6)
+        assert pts_of(j)[0]["needsCheck"] is True and j.info()["contested"] == 1
+        return c, j, plan
+
+    # 결정 내용을 고치면 표시가 꺼진다 (잠금은 그대로라서 다시 뒤집으면 또 켜진다)
+    c, j, plan = flagged()
+    j.apply_edits([edit(1, text="1차 배포는 목요일로 확정", ev=(1, 2), pid=7)])
+    p0 = pts_of(j)[0]
+    assert p0["edited"] is True and p0["status"] == DECIDED and p0["needsCheck"] is False and j.info()["contested"] == 0, p0
+    plan[:] = [flip("undecided")]
+    more(c, j, 7, 8)
+    assert pts_of(j)[0]["needsCheck"] is True and pts_of(j)[0]["status"] == DECIDED and j.info()["contestedRaised"]["undecided"] == 2, "다시 뒤집으면 또 켜진다"
+    # 결정할 사항의 문구가 바뀌면 잠금과 표시가 함께 풀린다 (판정이 없음으로 와도 표시가 남지 않는다)
+    c, j, plan = flagged()
+    P1t = agp("p1", "배포 일정", [(7, "2차 배포 날짜 확정"), (8, "배포 담당 지정"), (9, "사항기밀 점검 항목 확정")], 1)
+    c.set_agendas(2, [P1t, A2])
+    j.llm = lambda u: answer_pts([("none", "", []), ("none", "", []), ("none", "", [])])
+    j.process()
+    assert pts_of(j)[0]["needsCheck"] is False and j.info()["contested"] == 0, pts_of(j)[0]
+    # AUTO 는 잠금과 표시를 함께 푼다
+    c, j, plan = flagged()
+    j.apply_status_edits([sedit(1, AUTO)])
+    assert j.info()["contested"] == 0
+    plan[:] = [flip("undecided")]
+    assert j.process() == 1
+    p0 = pts_of(j)[0]
+    assert p0["status"] == UNDECIDED and p0["needsCheck"] is False and j.info()["contested"] == 0, p0
+    # 사용자가 결정으로 정하면 사용자 지정이 우선이라 번복 표시를 내지 않는다
+    c, j, plan = flagged()
+    j.apply_status_edits([sedit(1, DECIDED)])
+    p0 = pts_of(j)[0]
+    assert p0["statusEdited"] is True and p0["status"] == DECIDED and p0["needsCheck"] is False and p0["decisionText"] == "1차 배포는 다음 주 목요일로 정함", p0
+    # 판정 없음은 표시를 켜지 않는다 (줄 범위 밖으로 밀린 경우일 수 있다)
+    plan = [ANS3(), answer_pts([("none", "", []), ("none", "", []), ("none", "", [])])]
+    c, j = fresh(agendas=(P1, A2), llm=lambda u: plan.pop(0))
+    feed(c, L4, 7000)
+    j.process()
+    more(c, j, 5, 6)
+    assert pts_of(j)[0]["needsCheck"] is False and j.info()["contested"] == 0 and j.info()["contestedRaised"] == {"undecided": 0, "check": 0}
+    # 검증 탈락(근거가 틀려 두 번 다 버려짐)도 표시를 켜지 않는다. 잠긴 결정은 그대로다
+    plan = [answer("decided", "배포는 목요일", [(1, 2)]), answer("undecided", "다시 정하자", [(99, 99)]), answer("undecided", "다시 정하자", [(99, 99)])]
+    c, j = fresh(llm=lambda u: plan.pop(0))
+    feed(c, [ln(1, 0, "배포는 목요일로"), ln(2, 4000, "배포 동의해요")], 5000)
+    j.process()
+    feed(c, [ln(3, 8000, "배포 다시 생각해봐요"), ln(4, 9000, "배포 이전 결정은 보류해요")], 10000)
+    assert j.process() == 2 and j.rejected == 0, "잠긴 결정은 탈락으로 세지 않는다"
+    assert stat(j)["status"] == DECIDED and stat(j)["points"][0]["needsCheck"] is False and j.info()["contested"] == 0, "검증 탈락은 신호가 아니다"
+
     # 18) 로그에는 전사, 안건 제목, 판정 이유가 남지 않는다
     logging.getLogger("ai-service").removeHandler(h)
     text = "\n".join(records)
     for secret in ("기밀단어", "배포 일정", "배포는 다음 주 목요일로 정함", "목요일", "사항기밀", "인프라 팀", "정해지지 않음"):
         assert secret not in text, f"로그에 내용이 남음: {secret}"
     assert records
+    assert "결정 번복 신호" in text, "번복 신호가 켜질 때 로그가 남는다 (판정 종류만, 내용 없음)"
     # 어미: 결정 문장은 해요체, 코드가 만드는 문구도 해요체
     assert all(x in SYSTEM_PROMPT for x in ("로 정했어요", "정해진 것 같아요", "아직 정해지지 않았어요", "해요체")), "상태 판정 프롬프트는 해요체 규칙이다"
     assert _reason_text([DECIDED, DECIDED]) == "결정할 사항 2개가 모두 결정됐어요"

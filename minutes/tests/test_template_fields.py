@@ -117,7 +117,7 @@ def test_AI가_사용자_필드_번호를_고르면_검사에_걸려_다시_시�
     (["결정 사항"], "template.fields[0]가 객체가 아님"),
     ([ai("할 일"), ai("할 일 ")], "template.fields[1].title이 앞의 필드와 겹침"),
     ([{"title": "가" * 101, "type": "text", "aiFill": True}], "template.fields[0].title는 100자"),
-    ([{"title": "할 일", "type": "list", "aiFill": True}], "template.fields[0].type은 text, table"),
+    ([{"title": "할 일", "type": "memo", "aiFill": True}], "template.fields[0].type은 free, list, checklist, table, text"),
     ([{"title": "할 일", "type": "text", "aiFill": "yes"}], "template.fields[0].aiFill이 true/false"),
     ([{"title": "할 일", "type": "text"}], "template.fields[0].aiFill이 true/false"),
     ([{**ai("할 일"), "description": 3}], "template.fields[0].description는 문자열이나 null"),
@@ -129,6 +129,11 @@ def test_필드_검사(fields, message):
     body = v07(load_request(), fields)
     with pytest.raises(InvalidInput, match=re.escape(message)):
         validate_request(body)
+
+
+@pytest.mark.parametrize("kind", ["free", "list", "checklist", "table", "text"])
+def test_기록_방식_다섯_값을_받는다(kind):
+    validate_request(v07(load_request(), [{"title": "할 일", "type": kind, "aiFill": True}]))
 
 
 @pytest.mark.parametrize("key, value, message", [
@@ -163,10 +168,10 @@ def test_fields가_있으면_items는_보지_않는다():
 def test_묶는_기준은_AI_칸_번호에서_양식_필드_위치로_옮긴다():
     """사용자 필드가 앞에 있으면 AI 의 칸 번호와 양식 필드 위치가 다르다."""
     body = v07(load_request(), [user("참석자 메모"), *(ai(t) for t in ITEMS[:3]),
-                                {"title": "할 일", "type": "text", "aiFill": True}])
+                                {"title": "할 일", "type": "checklist", "aiFill": True}])
     result = make_draft(body, ScriptLLM({**GOOD, "grouping": {"1": "안건", "4": "담당자"}}))
     sections = {s["title"]: s["content"] for s in result["sections"]}
     assert sections["참석자 메모"] == MEMO
-    assert sections["안건별 논의"].startswith("- 배포 일정\n  - ")
-    assert sections["할 일"].split("\n")[:2] == ["- 김철수", "  - 배포 일정: QA 일정표 공유 (김철수, 수요일까지)"]
+    assert sections["안건별 논의"].startswith("1. 배포 일정\n   - ")
+    assert sections["할 일"].split("\n")[:2] == ["1. 김철수", "   - [ ] 배포 일정: QA 일정표 공유 (김철수, 수요일까지)"]
     assert sections["결정 사항"] == "- 배포 일정: 1차 배포를 10월 30일(목)로 정함"

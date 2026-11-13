@@ -3,8 +3,8 @@
   줄의 글     코드가 정한 재료의 글. 앞에 "{안건 제목}: " 를 붙인다
   줄의 순서   AI 가 돌려준 순서가 아니라 재료 순서 (안건 → 결정·상태 → 요약 → 의견 → 할 일)
   근거·표시   재료의 값을 그대로 옮긴다. AI 는 쓰지 않는다
-  content     마크다운 목록 (명세 5.4). 줄이 없으면 "해당 내용 없음". 기계가 읽을 값은 evidence 다
-              묶는 기준(AI 가 칸마다 고름, 명세 7.2)이 있으면 기준 값을 제목 줄로 쓰고 그 아래에 줄을 한 단계 들여 쓴다
+  content     마크다운 (명세 5.4). 줄이 없으면 "해당 내용 없음". 기계가 읽을 값은 evidence 다
+              묶는 기준(AI 가 칸마다 고름, 명세 7.2)이 있으면 기준 값을 제목 줄로 쓰고 그 아래에 줄을 둔다
                 안건    제목 안건 제목, 줄 글은 "{안건 제목}: " 을 뗀 글
                 담당자  제목 할 일의 담당자, 줄 글 그대로
                 종류    제목 결정·미결·결정 확인 필요·요약·의견·할 일, 줄 글 그대로
@@ -14,7 +14,11 @@
               같은 안건 제목이 되풀이된다 (실제 회의: 한 안건만 든 필드에서 줄 4개가 모두 같은 제목으로 시작함).
               담당자 기준은 담당자가 1명 이하이면 안건으로 묶는다. 담당자를 못 적은 회의가 많고, 그때 AI 가 어느 기준을
               골랐는지에 따라 같은 내용의 모양이 달라졌다 (SCRUM-180)
-              묶지 않을 때는 줄 글에 "- " 를 붙여 줄바꿈으로 잇는다
+              모양은 기록 방식(필드 type, 명세 v0.9 7.2)마다 다르다
+                목록형 list (text)       제목 줄 "1. 제목", 그 아래 "   - 글" (번호 폭만큼 들여 씀). 묶지 않으면 "- 글"
+                체크리스트형 checklist    목록형과 같고 "- " 대신 "- [ ] "
+                자유 입력형 free          제목 줄 "**제목**", 다음 줄에 줄 글을 이은 문단. 묶음 사이는 빈 줄.
+                                         묶지 않으면 문단 하나. 마침표로 끝나지 않는 줄에는 "." 을 붙인다
 
 다시 배치 (명세 8장)
   줄의 글     이전 줄 글을 그대로 쓰는 재료(whole_line)는 제목을 다시 붙이지 않는다
@@ -31,10 +35,12 @@ AI 가 채우는 표 필드 (명세 7.6, 5.9)
   행          줄과 같은 순서·근거·표시·출처에 sentence 대신 cells. content 는 마크다운 표
   빈 표       놓인 재료가 없으면 columns []·"해당 내용 없음"·evidence []
 """
-from .models import BY_AGENDA, BY_ASSIGNEE, BY_KIND, KIND_NAMES, NO_GROUPING, TABLE, Field, Material, Placement, Table
+from .models import (BY_AGENDA, BY_ASSIGNEE, BY_KIND, CHECKLIST, FREE, KIND_NAMES, LIST, NO_GROUPING, TABLE, Field,
+                     Material, Placement, Table)
 from .table import markdown
 
 EMPTY_SECTION = "해당 내용 없음"
+_SENTENCE_ENDS = (".", "!", "?")
 
 
 def build_sections(fields: list[Field | str], materials: list[Material], placement: Placement,
@@ -57,7 +63,7 @@ def build_sections(fields: list[Field | str], materials: list[Material], placeme
                            content=markdown(table, [r["cells"] for r in rows]) if ms else EMPTY_SECTION,
                            evidence=rows)
         else:
-            section.update(content=content_of(ms, placement.grouping.get(i, NO_GROUPING)),
+            section.update(content=content_of(ms, placement.grouping.get(i, NO_GROUPING), field.type),
                            evidence=[line_of(m) for m in ms])
         sections.append(section)
     unplaced_refs = set(placement.unplaced)
@@ -105,8 +111,9 @@ def _trace(m: Material) -> dict:
     return out
 
 
-def content_of(materials: list[Material], by: str = NO_GROUPING) -> str:
-    """글 필드 하나의 글. materials 는 그 필드에 놓인 재료를 재료 순서로."""
+def content_of(materials: list[Material], by: str = NO_GROUPING, kind: str = LIST) -> str:
+    """글 필드 하나의 글. materials 는 그 필드에 놓인 재료를 재료 순서로. kind 는 기록 방식(free·list·checklist,
+    text 는 list 와 같음)."""
     if not materials:
         return EMPTY_SECTION
     keys = [group_key(m, by) for m in materials]
@@ -116,7 +123,7 @@ def content_of(materials: list[Material], by: str = NO_GROUPING) -> str:
             by, keys = BY_AGENDA, agendas
     keyed = [k for k in keys if k is not None]
     if len(set(keyed)) <= 1 and (by != BY_AGENDA or len(keyed) <= 1):
-        return "\n".join(f"- {line_text(m)}" for m in materials)
+        return _lines([line_text(m) for m in materials], kind)
     groups: dict[str, list[str]] = {}
     loose = []
     for m, key in zip(materials, keys):
@@ -124,12 +131,30 @@ def content_of(materials: list[Material], by: str = NO_GROUPING) -> str:
             loose.append(line_text(m))
         else:
             groups.setdefault(key, []).append(_child_text(m, by))
+    if kind == FREE:
+        blocks = [f"**{key}**\n{_paragraph(texts)}" for key, texts in groups.items()]
+        return "\n\n".join(blocks + ([_paragraph(loose)] if loose else []))
     out = []
-    for key, texts in groups.items():
-        out.append(f"- {key}")
-        out += [f"  - {t}" for t in texts]
-    out += [f"- {t}" for t in loose]
+    for n, (key, texts) in enumerate(groups.items(), 1):
+        number = f"{n}. "
+        out.append(number + key)
+        out += [" " * len(number) + line for line in _lines(texts, kind).split("\n")]
+    if loose:
+        out.append(_lines(loose, kind))
     return "\n".join(out)
+
+
+def _lines(texts: list[str], kind: str) -> str:
+    """묶지 않은 줄들. 목록형은 "- ", 체크리스트형은 "- [ ] ", 자유 입력형은 문단 하나."""
+    if kind == FREE:
+        return _paragraph(texts)
+    mark = "- [ ] " if kind == CHECKLIST else "- "
+    return "\n".join(mark + t for t in texts)
+
+
+def _paragraph(texts: list[str]) -> str:
+    """줄 글을 공백으로 이은 문단. 마침표로 끝나지 않는 줄에는 "." 을 붙인다 (다듬은 줄은 "~함" 으로 끝난다)."""
+    return " ".join(t if t.endswith(_SENTENCE_ENDS) else t + "." for t in texts)
 
 
 def group_key(m: Material, by: str) -> str | None:

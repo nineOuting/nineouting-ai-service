@@ -47,7 +47,8 @@ class Material:
         return [self.source()] if self.sourced else []
 
 
-TEXT, TABLE = "text", "table"
+FREE, LIST, CHECKLIST, TABLE = "free", "list", "checklist", "table"   # 양식의 기록 방식 (명세 v0.9, 5.8)
+TEXT = "text"                       # v0.8 의 글 필드. 전환 기간에 받아 목록형(LIST)으로 채운다
 
 
 @dataclass(frozen=True)

@@ -11,14 +11,14 @@
           이전 줄의 출처가 요약에 없거나 서로 겹치는 것 (명세 8.3: 거절하지 않고 처리 단계에서 다룬다)
 """
 
-from .models import KIND_RANK, TABLE, TEXT, Field
+from .models import CHECKLIST, FREE, KIND_RANK, LIST, TABLE, TEXT, Field
 
 MAX_ITEMS = 20
 MAX_ITEM_NAME = 100
 MAX_USER_TEXT = 20_000                  # 사용자가 채우는 필드의 글, 머리글·바닥글 (명세 7.5)
 MAX_DESCRIPTION = 2000                  # 필드 설명 (명세 7.5)
 MAX_TABLE_COLUMNS = 6                   # 표 필드의 열 개수 (명세 5.8). 글 필드의 columns 는 읽지 않는다
-FIELD_TYPES = (TEXT, TABLE)
+FIELD_TYPES = (FREE, LIST, CHECKLIST, TABLE, TEXT)   # text 는 전환 기간 (명세 v0.9)
 MAX_REQUEST_ID = 200
 MAX_PREVIOUS_LINES = 600
 MAX_LINE_TEXT = 2000

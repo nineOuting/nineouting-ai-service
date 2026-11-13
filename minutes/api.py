@@ -29,10 +29,10 @@ MAX_TRACE_ID = 200
 EXAMPLE = {
     "requestId": "6f1c2a9e-1b7d-4c55-9d1a-3a8e0f4b2c10", "minutesId": 41, "meetingId": 31,
     "template": {"header": "고객성공팀 주간 회의", "footer": None, "fields": [
-        {"title": "안건별 논의", "description": "안건마다 나온 이야기", "type": "text", "aiFill": True},
-        {"title": "결정 사항", "description": "", "type": "text", "aiFill": True},
-        {"title": "할 일", "description": "", "type": "text", "aiFill": True},
-        {"title": "참석자 메모", "description": "", "type": "text", "aiFill": False, "content": "다음 회의는 2층 회의실"}]},
+        {"title": "안건별 논의", "description": "안건마다 나온 이야기", "type": "list", "aiFill": True},
+        {"title": "결정 사항", "description": "", "type": "free", "aiFill": True},
+        {"title": "할 일", "description": "", "type": "checklist", "aiFill": True},
+        {"title": "참석자 메모", "description": "", "type": "free", "aiFill": False, "content": "다음 회의는 2층 회의실"}]},
     "agendas": [{"agendaId": 101, "title": "배포 일정",
                  "decisionPoints": [{"decisionPointId": 7, "position": 1, "text": "배포 날짜 확정"}]}],
     "summary": {"requestRev": 3, "final": True, "agendas": [{

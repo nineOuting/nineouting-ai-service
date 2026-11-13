@@ -4,10 +4,13 @@
   schema_version "0.1"  임시 형식 (아래). 백엔드가 확정 회의록 형식으로 부르기 시작하면 CN팀과 맞춰 없앤다
 
 확정 회의록 규칙
-  - content 를 줄로 나누고 줄 앞 표시("- ", "* ", "• ")를 뗀다. 빈 줄과 "해당 내용 없음" 줄은 넣지 않는다
-  - 들여 쓴 목록(회의록 초안이 안건·담당자 등으로 묶은 필드, 명세 5.4)은 하위 줄 앞에 위 줄들을 ": " 로 붙여 한 줄로 넣고,
-    하위 줄이 있는 위 줄은 따로 넣지 않는다 ("- 배포 일정\n  - 목요일로 정함" → "배포 일정: 목요일로 정함").
+  - content 를 줄로 나누고 줄 앞 표시("- ", "* ", "• ", 번호 "1. "·"1) ", 체크박스 "[ ] "·"[x] ")를 뗀다.
+    빈 줄과 "해당 내용 없음" 줄은 넣지 않는다
+  - 들여 쓴 목록(회의록 초안이 안건·담당자 등으로 묶은 필드, 명세 7.2)은 하위 줄 앞에 위 줄들을 ": " 로 붙여 한 줄로 넣고,
+    하위 줄이 있는 위 줄은 따로 넣지 않는다 ("1. 배포 일정\n   - 목요일로 정함" → "배포 일정: 목요일로 정함").
     들여쓰기가 없는 예전 형식은 줄마다 그대로다. 들여쓰기는 앞 공백 수로 보고 탭은 4칸으로 센다
+  - 굵은 글만 있는 줄("**배포 일정**", 자유 입력형 필드의 묶음 제목)은 제목 줄이다. 그 아래 줄부터 빈 줄·다음 제목 줄·표
+    전까지의 줄 앞에 "제목: " 을 붙이고, 제목 줄은 따로 넣지 않는다. 아래 줄이 없으면 굵은 표시를 뗀 제목을 넣는다
   - content 안의 마크다운 표("|" 로 시작하는 줄이 이어지고 둘째 줄이 |---| 구분 줄)는 머리 행 아래의 행 하나가 Piece 하나.
     행은 "열 이름: 값 | …" (빈 칸은 뺌, 워드·엑셀 표와 같은 규칙). 몸통 행이 없으면 머리 행 이름들을 한 줄로.
     칸 안의 "\\|" 는 칸 구분이 아니다. 구분 줄이 없는 "|" 줄은 표가 아니라 보고 줄 그대로 넣는다
@@ -45,6 +48,9 @@ FORMAT_VERSION = "1.0"
 SECTIONS = ("summary", "decisions", "action_items")
 EMPTY_SECTION = "해당 내용 없음"           # 회의록 초안이 빈 칸에 쓰는 글 (minutes/lines.py)
 _BULLET = re.compile(r"^(?:[-*•]\s+)")
+_NUMBER = re.compile(r"^\d{1,3}[.)]\s+")                                       # 번호 목록 "1. "·"1) " (명세 v0.9)
+_CHECKBOX = re.compile(r"^\[[ xX]\]\s+")                                       # 작업 목록 "[ ] "·"[x] "
+_HEADING = re.compile(r"^\*\*(.+?)\*\*$")                                      # 굵은 글만 있는 줄 = 제목 줄
 _TABLE_RULE = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$")     # |---|:---:| 같은 구분 줄
 _CELL_SPLIT = re.compile(r"(?<!\\)\|")                                         # \| 는 칸 안의 글
 EDGES = (("header", "머리글"), ("footer", "바닥글"))
@@ -149,26 +155,45 @@ def section_lines(content: str) -> list[str]:
             entries.append(("table", _table_lines(line, [r.strip() for r in raw[i + 2:end]])))
             i = end
             continue
-        text = _BULLET.sub("", line).strip()
-        if text:
+        heading = _HEADING.match(line)
+        text = _strip_marks(line)
+        if heading and heading.group(1).strip():
+            entries.append(("heading", heading.group(1).strip()))
+        elif text:
             entries.append(("line", len(raw[i]) - len(raw[i].lstrip()), text))
+        else:
+            entries.append(("blank",))
         i += 1
 
     out, parents = [], []                 # parents: (들여쓰기, 글) 지금 줄의 위 줄들
+    heading, heading_used = None, False   # 굵은 제목 줄과, 그 아래 줄을 넣었는지
     for k, entry in enumerate(entries):
+        if entry[0] in ("heading", "blank", "table") and heading and not heading_used:
+            out.append(heading)           # 아래 줄이 없는 제목 줄은 그대로 넣는다
+        if entry[0] in ("heading", "blank", "table"):
+            heading, heading_used = (entry[1], False) if entry[0] == "heading" else (None, False)
         if entry[0] == "table":
             out += entry[1]
             parents = []
+        if entry[0] != "line":
             continue
         _, indent, text = entry
         while parents and parents[-1][0] >= indent:
             parents.pop()
-        nxt = entries[k + 1] if k + 1 < len(entries) else None
+        nxt = next((e for e in entries[k + 1:] if e[0] != "blank"), None)
         if nxt and nxt[0] == "line" and nxt[1] > indent:     # 하위 줄이 있으면 위 줄로만 쓴다
             parents.append((indent, text))
             continue
-        out.append(": ".join([t for _, t in parents] + [text]))
+        out.append(": ".join(([heading] if heading else []) + [t for _, t in parents] + [text]))
+        heading_used = heading_used or heading is not None
+    if heading and not heading_used:
+        out.append(heading)
     return out
+
+
+def _strip_marks(line: str) -> str:
+    """줄 앞 표시를 뗀다: 글머리("- " 등), 번호("1. "·"1) "), 체크박스("[ ] "·"[x] ")."""
+    return _CHECKBOX.sub("", _NUMBER.sub("", _BULLET.sub("", line))).strip()
 
 
 def _table_lines(head: str, body: list[str]) -> list[str]:

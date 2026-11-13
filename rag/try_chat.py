@@ -87,10 +87,10 @@ def ingest_upload(server, args, doc_id, title, file_url, version, callback_url):
 
 
 def load_live(path: Path) -> dict:
-    """진행 중 회의 파일 (make_live_meeting.py 모양): currentAgendaId, liveAgendas, recentLines."""
+    """진행 중 회의 파일 (make_live_meeting.py 모양): currentAgendaId, liveAgendas, recentLines, liveSummary(있으면)."""
     data = json.loads(path.read_text(encoding="utf-8"))
     return {"currentAgendaId": data.get("currentAgendaId"), "liveAgendas": data.get("liveAgendas") or [],
-            "recentLines": data.get("recentLines") or []}
+            "recentLines": data.get("recentLines") or [], "liveSummary": data.get("liveSummary") or []}
 
 
 class Rewriter:
@@ -225,7 +225,7 @@ def main(argv=None):
             print(f"처리 완료, 조각 {chunks}개 ({info:.1f}초)")
             doc_refs.append({"sourceType": "upload", "docId": doc_id})
         if live:
-            print(f"  - 진행 중 회의: {args.live.name} (안건 {len(live['liveAgendas'])}개, 전사 줄 {len(live['recentLines'])}줄, "
+            print(f"  - 진행 중 회의: {args.live.name} (안건 {len(live['liveAgendas'])}개, 전사 줄 {len(live['recentLines'])}줄, 실시간 요약 {len(live['liveSummary'])}개, "
                   f"지금 안건 {live['currentAgendaId']}). 질문마다 같이 보냄")
         print(f"[3/3] 질문하세요. 앞 대화를 이어받습니다. /new 새 대화, /history 기록 보기"
               + (", /live 진행 중 회의 끄기·켜기" if live else "") + ", 빈 줄이나 q 는 끝\n")

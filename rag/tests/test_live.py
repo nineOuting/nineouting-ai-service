@@ -1,6 +1,7 @@
 """진행 중 회의 → 챗봇 근거 (SCRUM-224). DB·AI 없음. 글은 합성."""
 from rag import live
-from rag.live import TAG_CURRENT, TAG_MINE, TAG_UNCLEAR, board_items, line_bundles, pick_board, pick_lines
+from rag.live import (TAG_CURRENT, TAG_MINE, TAG_SUMMARY, TAG_UNCLEAR, board_items, line_bundles, pick_board,
+                      pick_lines, pick_summary, summary_embed_text, summary_items)
 
 
 def agenda(aid, title, decisions=(), summary=(), opinions=(), todos=()):
@@ -155,3 +156,68 @@ def test_전사_줄은_가장_최근_묶음부터_상한까지_시간_순서로(
 
 def test_정해_둔_값():
     assert (live.BOARD_MAX_CHARS, live.LINES_MAX_CHARS, live.BUNDLE_LINES, live.BUNDLE_CHARS) == (6000, 4000, 5, 400)
+    assert (live.SUMMARY_MAX_CHARS, live.SUMMARY_EMBED_CHARS) == (6000, 300)
+
+
+# ---- 실시간 요약 (SCRUM-249) ----
+
+def summ(text, topic=None, start=None, end=None):
+    ev = [] if start is None else [{"start": start, "end": end}]
+    return {"text": text, "topic": topic, "evidence": ev}
+
+
+def test_요약_항목은_근거_하나이고_위치는_time():
+    items = summary_items([summ("사주 이야기", "사주", 91.92, 117.6), summ("  "), summ("구간 없음"),
+                           {"text": "여러 구간", "evidence": [{"start": 10, "end": 20}, {"start": 3600.4, "end": 3725}]}])
+    assert texts(items) == ["사주 이야기", "구간 없음", "여러 구간"]                     # 빈 글은 뺌
+    assert items[0].location == {"type": "time", "startMs": 91920, "endMs": 117600, "label": "1:31"}
+    assert items[0].tags == (TAG_SUMMARY, "주제 사주")
+    assert items[1].location == {"type": "time", "startMs": None, "endMs": None, "label": "실시간 요약"}
+    assert items[1].tags == (TAG_SUMMARY,)
+    assert items[2].location["startMs"] == 10000 and items[2].location["endMs"] == 3725000
+
+
+def test_가까운_순서를_매길_글은_주제와_앞부분():
+    a, b = summary_items([summ("가" * 500, "사주"), summ("나")])
+    assert summary_embed_text(a) == ("사주: " + "가" * 500)[:300] and summary_embed_text(b) == "나"
+
+
+class FakeEmbedder:
+    """글에 든 낱말로 벡터를 만든다: 질문의 낱말이 든 글이 가깝다. 부른 횟수를 센다."""
+    WORDS = ("사주", "커피", "워크숍")
+
+    def __init__(self):
+        self.calls = 0
+
+    def _vec(self, text):
+        v = [1.0 if w in text else 0.0 for w in self.WORDS] + [0.01]
+        n = sum(x * x for x in v) ** 0.5
+        return [x / n for x in v]
+
+    def embed_query(self, text):
+        self.calls += 1
+        return self._vec(text)
+
+    def embed_passages(self, texts):
+        self.calls += 1
+        return [self._vec(t) for t in texts]
+
+
+def test_요약이_상한_안이면_모두이고_임베딩을_부르지_않음():
+    items = summary_items([summ("사주 " + "가" * 100), summ("커피 " + "나" * 100)])
+    e = FakeEmbedder()
+    assert pick_summary(items, "사주", e, max_chars=10_000) == items and e.calls == 0
+
+
+def test_요약이_넘치면_질문과_가까운_것부터_고르고_시간_순서로_넘김():
+    items = summary_items([summ(f"{w} " + "가" * 97, w) for w in ("사주", "커피", "워크숍", "커피", "사주")])   # 100자씩
+    picked = pick_summary(items, "사주 이야기 뭐였지", FakeEmbedder(), max_chars=250)
+    assert [p.order for p in picked] == [(0,), (4,)]                         # 처음과 끝의 사주 항목, 시간 순서
+    picked = pick_summary(items, "커피 머신", FakeEmbedder(), max_chars=250)
+    assert [p.order for p in picked] == [(1,), (3,)]
+
+
+def test_요약_임베딩이_없으면_가장_최근_것부터():
+    items = summary_items([summ(f"{i}" + "가" * 99) for i in range(5)])
+    assert [p.order for p in pick_summary(items, "질문", None, max_chars=250)] == [(3,), (4,)]
+    assert [p.order for p in pick_summary(items, "  ", FakeEmbedder(), max_chars=250)] == [(3,), (4,)]

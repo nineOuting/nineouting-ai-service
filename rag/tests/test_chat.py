@@ -281,6 +281,35 @@ def test_가짜_AI로_진행_중_회의까지_끝까지(searched):
     assert r["status"] == "answered" and [c["ref"] for c in r["citations"]] == [1, 2, 3, 4, 5]
 
 
+# ---- 실시간 요약 (SCRUM-249) ----
+
+SUMMARY = ({"text": "「태어나서 한 번도 사주를 안 봐봤어요」라는 말이 나옴.", "topic": "사주",
+            "evidence": [{"start": 91.92, "end": 117.6}]},
+           {"text": "근거 구간이 없는 요약 문장.", "topic": None, "evidence": []})
+
+
+def test_실시간_요약은_안건_보드와_전사_줄_사이(searched):
+    llm = QueueLLM(REWRITTEN, "사주 이야기가 나왔어요 [3].")
+    r = run(llm, live_req(live_summary=SUMMARY))
+    user = llm.calls[1][1]
+    assert user.index("[2] (진행 중 회의 · 지금 진행 중 · 지금 안건 · 질문한 사용자의 할 일") \
+        < user.index("[3] (진행 중 회의 · 지금 진행 중 · 실시간 요약 · 주제 사주, 1:31)\n「태어나서") \
+        < user.index("[4] (진행 중 회의 · 지금 진행 중 · 실시간 요약, 실시간 요약)\n근거 구간이 없는") \
+        < user.index("[5] (진행 중 회의 · 지금 진행 중, 30:20)") < user.index("[6] (회의 1, 결정 사항)")
+    assert r["citations"] == [{"ref": 3, "sourceType": "live", "docId": None, "title": "진행 중 회의",
+                               "text": "「태어나서 한 번도 사주를 안 봐봤어요」라는 말이 나옴.",
+                               "location": {"type": "time", "startMs": 91920, "endMs": 117600, "label": "1:31"}}]
+
+
+def test_실시간_요약만_있어도_답하고_로그에는_개수만(searched, caplog):
+    caplog.set_level(logging.INFO, logger="rag.chat")
+    r = run(QueueLLM("사주 이야기가 나왔어요 [1]."), req(history=(), docs=(), live_summary=SUMMARY))
+    assert r["status"] == "answered" and r["citations"][0]["location"]["label"] == "1:31"
+    msg = caplog.records[-1].getMessage()
+    assert "live_summary=2" in msg and "live_summary_picked=2" in msg and "summary_ms=" in msg
+    assert "사주" not in msg
+
+
 def test_찾은_근거가_없어도_답하기를_부름(monkeypatch):
     monkeypatch.setattr(chat_mod, "doc_evidence", lambda *a, **k: [])
     llm = QueueLLM(REWRITTEN, NO_ANSWER)
@@ -415,14 +444,14 @@ def test_마감이_지났으면_AI를_부르지_않고_llm_timeout(searched):
 # ---- 지시문·설정 ----
 
 def test_지시문을_읽고_버전이_있음():
-    assert PROMPTS.chat.version == "chat-v5" and NO_ANSWER in PROMPTS.chat.text and "<고친 질문>" in PROMPTS.chat.text
+    assert PROMPTS.chat.version == "chat-v6" and NO_ANSWER in PROMPTS.chat.text and "<고친 질문>" in PROMPTS.chat.text
     for word in ("올린 날", "지금 진행 중", "결정 확인 필요", "지금 안건", "질문한 사용자의 할 일", "<질문한 사람>",
-                 "[일반]", "<지금>"):
+                 "[일반]", "<지금>", "실시간 요약", "STT 불확실", "들린 대로"):
         assert word in PROMPTS.chat.text
-    assert [chat_prompts(v).chat.version for v in ("v1", "v2", "v3", "v4")] == ["chat-v1", "chat-v2", "chat-v3",
-                                                                                "chat-v4"]
+    assert [chat_prompts(v).chat.version for v in ("v1", "v2", "v3", "v4", "v5")] == [
+        "chat-v1", "chat-v2", "chat-v3", "chat-v4", "chat-v5"]
     assert PROMPTS.rewrite.version == "rewrite-v1"
-    assert chat_prompts("chat-v5", "v1") == PROMPTS
+    assert chat_prompts("chat-v6", "v1") == PROMPTS
 
 
 def test_없는_지시문_버전이면_챗봇만_503():
@@ -518,8 +547,14 @@ def test_요청_읽기():
 
 
 def test_선택_필드는_없거나_null이어도_됨():
-    r = parse_chat({**body(), "history": None, "userName": None, "liveAgendas": None})
+    r = parse_chat({**body(), "history": None, "userName": None, "liveAgendas": None, "liveSummary": None})
     assert r.history == () and r.user_name is None and r.live_agendas == () and r.recent_lines == ()
+    assert r.live_summary == ()
+
+
+def test_실시간_요약_읽기():
+    items = [{"text": "가", "topic": "주제", "evidence": [{"start": 1, "end": 2.5}], "모르는칸": 1}, {"text": "나"}]
+    assert parse_chat(body(liveSummary=items)).live_summary == tuple(items)
 
 
 @pytest.mark.parametrize("over, word", [
@@ -553,6 +588,11 @@ def test_선택_필드는_없거나_null이어도_됨():
      "assigneeUserId"),
     ({"liveAgendas": [{"agendaId": 1, "title": "가", "todos": [{"id": "t", "task": "가", "dueText": 3}]}]}, "dueText"),
     ({"liveAgendas": [{"agendaId": 1, "title": "가", "todos": [{"id": "t", "task": "가", "unclear": "no"}]}]}, "unclear"),
+    ({"liveSummary": {"summary": []}}, "liveSummary 는 배열"), ({"liveSummary": [{"text": "가"}] * 201}, "200"),
+    ({"liveSummary": [{"topic": "가"}]}, "text"), ({"liveSummary": [{"text": "가" * 2001}]}, "2000"),
+    ({"liveSummary": [{"text": "가", "topic": 1}]}, "topic"), ({"liveSummary": [{"text": "가", "evidence": {}}]}, "evidence"),
+    ({"liveSummary": [{"text": "가", "evidence": [{"start": "1", "end": 2}]}]}, "evidence[0]"),
+    ({"liveSummary": [{"text": "가", "evidence": [{"start": True, "end": 2}]}]}, "evidence[0]"),
 ])
 def test_API_입력이_틀리면_400(over, word):
     r = app_with(Chatter(lambda: object(), FakeLLM())).post(URL, json=body(**over))
@@ -566,7 +606,7 @@ def test_API_명세_예시_요청을_받음():
     spec = (Path(__file__).parents[2] / "docs/api/rag-chat-contract.md").read_text(encoding="utf-8")
     example = json.loads(re.search(r"## 3\. 요청\s+```json\n(.*?)```", spec, re.S).group(1))
     r = parse_chat(example)
-    assert len(r.live_agendas) == 1 and len(r.recent_lines) == 1
+    assert len(r.live_agendas) == 1 and len(r.recent_lines) == 1 and len(r.live_summary) == 1
 
 
 def test_API_빈_docs는_DB를_열지_않고_no_result():

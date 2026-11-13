@@ -69,6 +69,19 @@ def test_진행_중_회의_정답은_넘긴_근거_안에서_번호를_찾음():
     assert live_evidence(live_request(case, {**c, "noLive": True}, c["q"])) == ([], [])
 
 
+SUMMARY_CASE = Path(__file__).parent / "fixtures" / "chat_eval_live_summary.json"
+
+
+def test_실시간_요약_사례_파일이_점검을_통과하고_요약은_빼고_돌릴_수_있음():
+    case = load_case(SUMMARY_CASE)
+    chunks = load_chunks(case["docs"], None, len, 256)
+    assert [p for c in case["cases"] for p in check_case(chunks, c, live_all_texts(case, c))] == []
+    c = case["cases"][0]
+    assert len(live_request(case, c, c["q"]).live_summary) == 75
+    assert live_request(case, {**c, "noSummary": True}, c["q"]).live_summary == ()
+    assert live_request({**case, "noSummaryAll": True}, c, c["q"]).live_summary == ()
+
+
 def test_진행_중_회의_정답이_없거나_둘이면_문제로_잡음():
     case = load_case(LIVE_CASE)
     chunks = load_chunks(case["docs"], None, len, 256)

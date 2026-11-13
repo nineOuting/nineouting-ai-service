@@ -56,6 +56,8 @@ MAX_RECENT_LINES = 500
 MAX_RECENT_CHARS = 30000
 MAX_HISTORY_TEXT = 4000               # 대화 한 개의 글
 MAX_USER_NAME = 100
+MAX_LIVE_SUMMARY = 200                # 실시간 요약 항목 (백엔드가 받는 상한과 같음, 명세 v0.5 3.1)
+MAX_LIVE_SUMMARY_TEXT = 2000           # 요약 항목 하나의 글
 API_STATUS = {"queued": "accepted"}  # DB 상태 → 명세의 상태 값
 
 
@@ -148,6 +150,9 @@ CHAT_SCHEMA = {
                         "description": "안건 보드의 모든 안건 + 제목 (명세 3.4). 표에 없는 칸은 무시한다"},
         "recentLines": {"type": "array", "maxItems": MAX_RECENT_LINES,
                         "description": f"최근 전사 줄 (명세 3.5, 글 합계 {MAX_RECENT_CHARS}자 이하). 표에 없는 칸은 무시한다"},
+        "liveSummary": {"type": "array", "maxItems": MAX_LIVE_SUMMARY,
+                        "description": "실시간 요약의 summary 배열 그대로 (명세 3.6). 항목은 {text, topic, evidence}. "
+                                       f"text 는 {MAX_LIVE_SUMMARY_TEXT}자 이하. 표에 없는 칸은 무시한다"},
     },
 }
 CHAT_RESULT_EXAMPLE = {
@@ -255,7 +260,7 @@ def parse_docs(body) -> list[tuple[str, int]]:
 
 def parse_chat(body) -> ChatRequest:
     """챗봇 요청 (명세 3장). 표에 없는 필드와 칸은 무시한다.
-    liveAgendas·recentLines 는 챗봇이 쓰는 칸(명세 3.4·3.5)의 타입만 본다. 상태 값은 검사하지 않는다
+    liveAgendas·recentLines·liveSummary 는 챗봇이 쓰는 칸(명세 3.4~3.6)의 타입만 본다. 상태 값은 검사하지 않는다
     (모르는 결정할 사항 상태는 넘기지 않고, 모르는 의견 종류는 "의견"으로 넘긴다. live.py)."""
     if not isinstance(body, dict):
         raise InvalidInput("본문이 JSON 객체가 아님")
@@ -289,9 +294,12 @@ def parse_chat(body) -> ChatRequest:
         _check_line(ln, f"recentLines[{i}]")
     if sum(len(ln["text"]) for ln in lines) > MAX_RECENT_CHARS:
         raise InvalidInput(f"recentLines 의 글 합계는 {MAX_RECENT_CHARS}자 이하여야 함")
+    summary = _array(body, "liveSummary", MAX_LIVE_SUMMARY)
+    for i, it in enumerate(summary):
+        _check_summary(it, f"liveSummary[{i}]")
 
     return ChatRequest(workspace_id, meeting_id, user_id, query, tuple(docs), tuple(turns), user_name, current,
-                       tuple(agendas), tuple(lines))
+                       tuple(agendas), tuple(lines), tuple(summary))
 
 
 def _is_int(v) -> bool:
@@ -367,6 +375,28 @@ def _check_line(ln, where):
         raise InvalidInput(f"{where}.kind 는 문자열 또는 null 이어야 함")
     if not _opt(ln.get("lowConfidence"), lambda v: isinstance(v, bool)):
         raise InvalidInput(f"{where}.lowConfidence 는 불리언이어야 함")
+
+
+def _is_num(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _check_summary(it, where):
+    """실시간 요약 항목 하나 (명세 3.6). text 는 꼭 있어야 한다. evidence 는 {start, end} 초(숫자)의 배열."""
+    if not isinstance(it, dict) or not isinstance(it.get("text"), str):
+        raise InvalidInput(f"{where} 는 text(문자열)가 있는 객체여야 함")
+    if len(it["text"]) > MAX_LIVE_SUMMARY_TEXT:
+        raise InvalidInput(f"{where}.text 는 {MAX_LIVE_SUMMARY_TEXT}자 이하여야 함")
+    if not _opt(it.get("topic"), lambda v: isinstance(v, str)):
+        raise InvalidInput(f"{where}.topic 은 문자열 또는 null 이어야 함")
+    ev = it.get("evidence")
+    if ev is None:
+        return
+    if not isinstance(ev, list):
+        raise InvalidInput(f"{where}.evidence 는 배열이어야 함")
+    for j, e in enumerate(ev):
+        if not isinstance(e, dict) or not _is_num(e.get("start")) or not _is_num(e.get("end")):
+            raise InvalidInput(f"{where}.evidence[{j}] 는 start·end(초, 숫자)가 있는 객체여야 함")
 
 
 def _array(body, key, max_len):
@@ -554,7 +584,7 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
         description="회의 중 질문에 답한다 (명세 docs/api/rag-chat-contract.md). history 가 있으면 앞 대화를 보고 질문을 "
                     "고쳐 검색하고, 볼 수 있는 문서(docs, {sourceType, docId} 짝)의 조각만 근거로 답한다. 답의 문장마다 근거 번호 [n] 이 붙는다. "
                     "status: answered / no_result(answer 는 \"회의 자료에서 찾을 수 없어요\") / failed(errorCode 참고). "
-                    "세 경우 모두 200 이고, 최대 60초 안에 답한다 (넘으면 failed + llm_timeout). 진행 중 회의(liveAgendas, recentLines)도 근거로 쓴다. "
+                    "세 경우 모두 200 이고, 최대 60초 안에 답한다 (넘으면 failed + llm_timeout). 진행 중 회의(liveAgendas, recentLines, liveSummary)도 근거로 쓴다. "
                     "근거에 없는 개념·용어·방법과 오늘 날짜는 일반 지식으로 답하고 [일반] 을 붙인다 (basis: sources / general / mixed). "
                     "대화 기록은 저장하지 않으므로 요청마다 history 로 보낸다.",
         openapi_extra={"requestBody": {"required": True, "content": {"application/json": {

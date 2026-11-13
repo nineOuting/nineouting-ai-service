@@ -2,8 +2,9 @@
 
   ① 질문 고쳐 쓰기   history 가 있을 때만 AI 를 한 번 부른다. 실패하거나 답이 이상하면 원래 질문을 쓴다
   ② 근거 모으기      출처마다 따로, AI 없이. 출처마다 Evidence 로 바꾼다
-                     진행 중 회의(안건 보드, 최근 전사 줄, live.py)와 지난 회의록·첨부 자료 검색
-  ③ 합치기           진행 중 회의 먼저, 지난 자료 뒤로 [1]..[n] 번호를 붙인다
+                     진행 중 회의(안건 보드, 실시간 요약, 최근 전사 줄, live.py)와 지난 회의록·첨부 자료 검색.
+                     실시간 요약이 넘치면 고친 질문과 가까운 항목을 고르므로 ① 뒤에 고른다 (SCRUM-249)
+  ③ 합치기           진행 중 회의(안건 보드 → 실시간 요약 → 전사 줄) 먼저, 지난 자료 뒤로 [1]..[n] 번호를 붙인다
   ④ 답하기           AI 를 한 번 부른다. <대화>는 질문의 뜻을 알아내는 데만 쓰고, 근거는 <자료>만 쓴다.
                      근거가 없는 개념·용어·방법과 날짜(<지금> 칸, 서버 시각)는 일반 지식으로 답하고 [일반]을 붙인다 (SCRUM-225)
   ⑤ 판정             judge_chat. [n] 은 넘긴 번호 안이어야 하고, [n]·[일반] 이 있는지로 basis(sources/general/mixed)를 정한다
@@ -70,6 +71,7 @@ class ChatRequest:
     current_agenda_id: int | str | None = None
     live_agendas: tuple = ()     # 안건 보드의 안건 (dict, API 가 칸을 검사함)
     recent_lines: tuple = ()     # 최근 전사 줄 (dict)
+    live_summary: tuple = ()     # 실시간 요약 항목 (dict, {text, topic, evidence})
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,12 @@ def live_evidence(req: ChatRequest) -> tuple[list[Evidence], list[Evidence]]:
     board = live.pick_board(live.board_items(req.live_agendas, req.current_agenda_id, req.user_id))
     lines = live.pick_lines(live.line_bundles(req.recent_lines))
     return [to_ev(i) for i in board], [to_ev(i) for i in lines]
+
+
+def summary_evidence(req: ChatRequest, embedder, query: str) -> list[Evidence]:
+    """출처: 진행 중 회의의 실시간 요약. 상한(6,000자)을 넘으면 질문과 가까운 항목을 고른다 (live.pick_summary)."""
+    items = live.pick_summary(live.summary_items(req.live_summary), query, embedder)
+    return [Evidence(live.LIVE, None, live.TITLE, i.text, i.location, live.WHEN, i.tags) for i in items]
 
 
 # ---------- AI 에 넘기는 글 ----------
@@ -273,7 +281,7 @@ def chat(req: ChatRequest, connection, embedder, llm, prompts: ChatPrompts, budg
 
     tag = (f"request_id={request_id} workspace={req.workspace_id} meeting={req.meeting_id} user={req.user_id} "
            f"history={len(req.history)} docs={len(req.docs)} live_agendas={len(req.live_agendas)} "
-           f"recent_lines={len(req.recent_lines)}")
+           f"recent_lines={len(req.recent_lines)} live_summary={len(req.live_summary)}")
     board, lines = live_evidence(req)
     tag += f" live_board={len(board)} live_lines={len(lines)}"
 
@@ -285,8 +293,11 @@ def chat(req: ChatRequest, connection, embedder, llm, prompts: ChatPrompts, budg
         tag += f" rewrite_ms={rw.ms} rewrite_tokens_in={rw.input_tokens} rewrite_tokens_out={rw.output_tokens}"
 
     t1 = time.monotonic()
+    summary = summary_evidence(req, embedder, rw.query) if req.live_summary else []
+    tag += f" live_summary_picked={len(summary)} summary_ms={_ms(t1)}"
+    t1 = time.monotonic()
     found = doc_evidence(connection, embedder, req.workspace_id, req.docs, rw.query) if req.docs else []
-    evidence = board + lines + found
+    evidence = board + summary + lines + found
     tag += f" docs_found={len(found)} evidence={len(evidence)} search_ms={_ms(t1)}"
 
     t2 = time.monotonic()

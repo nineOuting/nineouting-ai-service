@@ -1,10 +1,11 @@
-"""챗봇 평가 (SCRUM-223·224·225). 대화가 이어지는 질문에서 ① 질문을 고쳐 쓰기 전·후의 검색 순위와 ② 답이 맞는지를 잰다.
+"""챗봇 평가 (SCRUM-223·224·225·249). 대화가 이어지는 질문에서 ① 질문을 고쳐 쓰기 전·후의 검색 순위와 ② 답이 맞는지를 잰다.
 
   .venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_two_meetings.json --dry-run     AI 없이 점검·고치기 전 순위
   .venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_two_meetings.json --runs 10     실제 AI. 호출마다 요금
   .venv/bin/python -m rag.eval_chat --summary data/eval/chat/chat_eval_two_meetings-20261112-150000
+  .venv/bin/python -m rag.eval_chat rag/tests/fixtures/chat_eval_live_summary.json --runs 1 --no-summary   실시간 요약을 빼고 (전후 비교)
 
-판마다 사례마다: 서버와 같은 함수로 질문을 고쳐 쓰고(rewrite_query) → 진행 중 회의 근거(live_evidence, 서버와 같음)
+판마다 사례마다: 서버와 같은 함수로 질문을 고쳐 쓰고(rewrite_query) → 진행 중 회의 근거(live_evidence·summary_evidence, 서버와 같음)
 + 고친 질문으로 검색한 상위 5개를 근거로 → 서버와 같은 글(chat_input)과 판정(judge_chat)으로 답한다. 검색은 eval_search 처럼 실제 임베딩 모델로 메모리에서 한다
 (DB 를 쓰지 않음). 고치기 전 순위는 원래 질문으로 한 번만 잰다 (AI 를 쓰지 않아 판마다 같다).
 AI 는 서버와 같은 설정이다 (RAG_LLM_*, 환경변수가 없으면 저장소 루트 .env). 폴백은 쓰지 않는다. 키 값은 출력하지 않는다.
@@ -15,7 +16,7 @@ AI 는 서버와 같은 설정이다 (RAG_LLM_*, 환경변수가 없으면 저�
   {"about": "설명",
    "docs": {"A": {"file": "minutes_confirmed_table.json", "title": "주간 회의 (10/20)", "docId": 1},   file 은 사례 파일 기준
             "R": {"file": "chat_project/requirements.pdf", "title": "요구사항 정의서", "docId": 11}},   json 은 회의록, 그 밖은 첨부 자료
-   "live": "chat_project/live_1112.json",       진행 중 회의 (선택). {currentAgendaId, liveAgendas, recentLines}
+   "live": "chat_project/live_1112.json",       진행 중 회의 (선택). {currentAgendaId, liveAgendas, recentLines, liveSummary}
    "userId": 55, "userName": "한지우",          질문한 사용자 (선택, 사례마다 바꿀 수 있음)
    "now": "2026-11-12T15:40:00+09:00",          <지금> 칸에 넣을 시각 (선택, 없으면 이 값. 판마다 같게 고정)
    "cases": [{"id": "C1", "type": "앞 답을 가리킴",
@@ -31,6 +32,7 @@ AI 는 서버와 같은 설정이다 (RAG_LLM_*, 환경변수가 없으면 저�
              no_result 사례는 비운다 (검색 지표에서 뺀다)
   expect     answered 또는 no_result. 둘 다 맞으면 ["answered", "no_result"] (gold 는 비워도 된다)
   noLive     true 면 이 사례에는 진행 중 회의를 넘기지 않는다
+  noSummary  true 면 이 사례에는 실시간 요약을 넘기지 않는다 (--no-summary 는 모든 사례)
   basis      answered 일 때 맞아야 하는 근거 종류 sources / general / mixed (선택). general 이면 gold 를 비운다
   receivedAt 문서마다 (첨부 자료). 사례 파일 맨 위 "receivedAtAll" 이 있으면 모든 첨부 자료에 그 값을 쓴다
   mustSay    묶음마다 그중 한 말이 답에 있어야 한다 (묶음끼리는 모두)
@@ -51,7 +53,7 @@ import numpy as np
 
 from . import live as live_mod
 from .chat import (DOC_TOP_K, Budget, ChatRequest, Evidence, Turn, chat_input, chat_prompts, judge_chat,
-                   live_evidence, recent_turns, rewrite_query)
+                   live_evidence, recent_turns, rewrite_query, summary_evidence)
 from .eval_answer import Recorder, real_llm
 from .dates import when_label
 from .eval_search import build_index, rank_all
@@ -109,15 +111,27 @@ def user_of(case, c):
 def live_request(case, c, query) -> ChatRequest:
     data = {} if c.get("noLive") else case.get("liveData") or {}
     uid, name = user_of(case, c)
+    summary = () if c.get("noSummary") or case.get("noSummaryAll") else tuple(data.get("liveSummary") or ())
     return ChatRequest(workspace_id=1, meeting_id=data.get("meetingId", 1), user_id=uid, query=query, docs=(),
                        user_name=name, current_agenda_id=data.get("currentAgendaId"),
-                       live_agendas=tuple(data.get("liveAgendas") or ()), recent_lines=tuple(data.get("recentLines") or ()))
+                       live_agendas=tuple(data.get("liveAgendas") or ()), recent_lines=tuple(data.get("recentLines") or ()),
+                       live_summary=summary)
+
+
+def live_ev_of(case, c, query, embedder):
+    """서버와 같은 순서: 안건 보드 → 실시간 요약 → 전사 줄. (안건 보드, 요약, 전사 줄)."""
+    r = live_request(case, c, query)
+    board, lines = live_evidence(r)
+    summary = summary_evidence(r, embedder, query) if r.live_summary else []
+    return board, summary, lines
 
 
 def live_all_texts(case, c) -> list[str]:
-    """고르기 전 진행 중 회의 근거 글 전부 (사례 점검용. 넘쳐서 빠진 항목도 들어 있다)."""
-    r = live_request(case, c, "")
-    items = live_mod.board_items(r.live_agendas, r.current_agenda_id, r.user_id) + live_mod.line_bundles(r.recent_lines)
+    """고르기 전 진행 중 회의 근거 글 전부 (사례 점검용. 넘쳐서 빠진 항목도 들어 있다).
+    실시간 요약을 빼고 돌릴 때(noSummary, --no-summary)도 요약을 넣고 본다. 정답이 사례 파일에 있는지를 보는 것이므로."""
+    r = live_request({**case, "noSummaryAll": False}, {**c, "noSummary": False}, "")
+    items = (live_mod.board_items(r.live_agendas, r.current_agenda_id, r.user_id) + live_mod.summary_items(r.live_summary)
+             + live_mod.line_bundles(r.recent_lines))
     return [i.text for i in items]
 
 
@@ -226,7 +240,7 @@ def run_case(case, index, llm, runs, prompts, out_dir, timeout_s, rewrite_timeou
     out_dir.mkdir(parents=True, exist_ok=True)
     rec = Recorder(llm)
     base = {c["id"]: index.ranks(c, index.order(c["q"])) for c in case["cases"]}
-    meta = {"about": case.get("about"), "live": case.get("live"), "model": f"{rec.name}/{rec.model}", "runs": runs,
+    meta = {"about": case.get("about"), "live": case.get("live"), "noSummary": bool(case.get("noSummaryAll")), "model": f"{rec.name}/{rec.model}", "runs": runs,
             "prompts": [prompts.chat.version, prompts.rewrite.version], "embedModel": index.embedder.model_id,
             "baseRanks": base, "startedAt": datetime.now().isoformat(timespec="seconds")}
     (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -246,8 +260,8 @@ def _one(c, index, rec, prompts, n, timeout_s, rewrite_timeout_s) -> dict:
     before = len(rec.calls)
     rw = rewrite_query(rec, prompts.rewrite, turns, c["q"], rewrite_timeout_s)
     rw_calls = rec.calls[before:]
-    board, lines = live_evidence(live_request(case, c, rw.query))
-    live_ev = board + lines
+    board, summary, lines = live_ev_of(case, c, rw.query, index.embedder)
+    live_ev = board + summary + lines
     order = index.order(rw.query)
     ranks = index.ranks(c, order)
     evidence = live_ev + index.evidence(order)
@@ -265,7 +279,7 @@ def _one(c, index, rec, prompts, n, timeout_s, rewrite_timeout_s) -> dict:
     except Exception as e:
         text, s = None, {"status": "failed", "refs": [], "ok": False, "error": type(e).__name__}
     return {"case": c["id"], "run": n, "rewrite": {"query": rw.query, "state": rw.state, "calls": rw_calls},
-            "ranks": ranks, "live": {"board": len(board), "lines": len(lines), "goldPassed": bool(live_gold_refs(c, live_ev))
+            "ranks": ranks, "live": {"board": len(board), "summary": len(summary), "lines": len(lines), "goldPassed": bool(live_gold_refs(c, live_ev))
                                      if live_gold(c) else None},
             "text": text, "score": s, "calls": rec.calls[before:]}
 
@@ -344,9 +358,10 @@ def dry_run(case, index, out=print) -> bool:
         if doc_gold(c):
             out(f"  고치기 전 정답 조각 순위: {', '.join(map(str, index.ranks(c, index.order(c['q']))))}")
         if live_gold(c):
-            board, lines = live_evidence(live_request(case, c, c["q"]))
-            passed = bool(live_gold_refs(c, board + lines))
-            out(f"  진행 중 회의 근거 {len(board)}+{len(lines)}개, 정답 {'넘김' if passed else '넘치어 빠짐'}")
+            board, summary, lines = live_ev_of(case, c, c["q"], index.embedder)
+            passed = bool(live_gold_refs(c, board + summary + lines))
+            out(f"  진행 중 회의 근거 보드 {len(board)} + 요약 {len(summary)} + 전사 {len(lines)}개, "
+                f"정답 {'넘김' if passed else '넘치어 빠짐'}")
     out("\n점검 " + ("통과" if ok else "실패"))
     return ok
 
@@ -360,6 +375,7 @@ def main(argv=None):
     p.add_argument("--timeout", type=float, default=Budget().primary_s, help="답하기 시간 제한 (서버의 기본 모델과 같음)")
     p.add_argument("--rewrite-timeout", type=float, default=Budget().rewrite_s)
     p.add_argument("--dry-run", action="store_true", help="AI 없이 사례 점검과 고치기 전 순위만 본다")
+    p.add_argument("--no-summary", action="store_true", help="모든 사례에서 실시간 요약을 넘기지 않는다 (전후 비교)")
     p.add_argument("--summary", type=Path, metavar="결과폴더", help="저장된 결과로 요약만 다시 낸다")
     args = p.parse_args(argv)
     if args.summary:
@@ -368,6 +384,7 @@ def main(argv=None):
     if not args.case:
         p.error("사례 파일이 필요함")
     case = load_case(args.case)
+    case["noSummaryAll"] = args.no_summary
     from .embedding import E5Embedder
     print("임베딩 모델 불러오는 중 ...", end=" ", flush=True)
     index = Index(case, E5Embedder(threads=2))
@@ -379,7 +396,7 @@ def main(argv=None):
         sys.exit("사례 파일 문제:\n" + "\n".join(problems))
     llm = real_llm()
     prompts = chat_prompts(args.chat_prompt, args.rewrite_prompt)
-    out_dir = OUT_ROOT / f"{args.case.stem}-{datetime.now():%Y%m%d-%H%M%S}"
+    out_dir = OUT_ROOT / f"{args.case.stem}{'-nosummary' if args.no_summary else ''}-{datetime.now():%Y%m%d-%H%M%S}"
     print(f"사례: {args.case.name} / AI: {llm.name} ({llm.model}) / {args.runs}판 / 사례 {len(case['cases'])}개 / "
           f"{prompts.chat.version} · {prompts.rewrite.version}", flush=True)
     t0 = time.monotonic()

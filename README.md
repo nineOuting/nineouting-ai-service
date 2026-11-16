@@ -190,6 +190,18 @@ curl localhost:8000/health
 ```
 
 ```bash
+# 종료 처리 시간 재기: 전사를 서버 입구에 20초 묶음으로 흘려 보내고, 종료 신호 뒤 최종 보드(회의록 재료)가 나오기까지의 시간을 잰다 (저장소 루트에서)
+# 모델 없이 배선만 점검 (비용 0)
+python3 -m server.try_timing --transcript data/eval_v2/a_1014_mentor.jsonl --agendas data/eval_v2/a_agendas.json --speed 0
+# 실제 모델, 실시간 속도, DEV 와 같은 설정 (유료, 회의 길이만큼 걸린다)
+python3 -m server.try_timing --transcript data/eval_v2/a_1014_mentor.jsonl --agendas data/eval_v2/a_agendas.json --provider openai --model gpt-6-luna --dev --paid-ok
+# 앞 5분만, 최종 보드로 회의록 초안까지 이어서 (유료). 먼저 --estimate-only 를 붙이면 호출 수와 비용 어림만 보여 주고 끝난다
+python3 -m server.try_timing --transcript data/eval_v2/a_1014_mentor.jsonl --agendas data/eval_v2/a_agendas.json --provider openai --model gpt-6-luna --dev --paid-ok --max-minutes 5 --draft
+# 호출 없이 대기열만 계산 (비용 0)
+python3 -m server.sim_queue
+```
+
+```bash
 # 예시 요청 보내기
 curl -X POST localhost:8000/internal/meetings/m_1234/events \
   -H 'content-type: application/json' -d @examples/api/meeting-event-start.json

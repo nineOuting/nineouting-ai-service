@@ -37,6 +37,7 @@ from meeting_live_summary_v2 import LiveSummarizer, Cfg, LIVE_PROMPT_VERSIONS  #
 from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
 from agenda_summarizer import PROMPT_VERSIONS, AgendaSummarizer, SummarizeCfg  # noqa: E402
 from agenda_status import AgendaStatusJudge, StatusCfg  # noqa: E402
+from agenda_items import ITEM_PROMPT_VERSIONS  # noqa: E402
 from agenda_opinions import AgendaOpinions, OpinionCfg  # noqa: E402
 from agenda_todos import AgendaTodos, TodoCfg  # noqa: E402
 from agenda_offtopic import AgendaOffTopic, OffTopicCfg  # noqa: E402
@@ -150,10 +151,21 @@ def status_cfg_from_env(env=None, cfg=None):
     return StatusCfg(**kw)
 
 
+def _item_prompt_from_env(env, key):
+    """의견·할 일 프롬프트 버전 환경변수. 안 넣거나 비우면 기본(v1)이고, 허용값이 아니면 시작할 때 설정 오류다."""
+    v = (env.get(key) or "").strip()
+    if not v:
+        return {}
+    if v not in ITEM_PROMPT_VERSIONS:
+        raise ConfigError(f"{key} 는 {', '.join(ITEM_PROMPT_VERSIONS)} 중 하나여야 함: {v}")
+    return {"prompt_version": v}
+
+
 def opinion_cfg_from_env(env=None, cfg=None):
     """환경변수 -> 안건 의견 정리 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
     AGENDA_OPINION_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), AGENDA_OPINION_MIN_LINES(호출을 시작하는 안건 줄 수, 기본 4),
-    MAX_AGENDA_OPINION_CALLS_PER_MEETING(회의당 호출 상한, 기본 300)
+    MAX_AGENDA_OPINION_CALLS_PER_MEETING(회의당 호출 상한, 기본 300),
+    AGENDA_OPINION_PROMPT(의견 프롬프트 버전, 기본 v1. v2 는 받아쓰기 오류 맥락 교정 + 숫자 표기 그대로. 값이 틀리면 ConfigError)
     """
     env = os.environ if env is None else env
     cfg = cfg or cfg_from_env(env)
@@ -165,12 +177,14 @@ def opinion_cfg_from_env(env=None, cfg=None):
                 kw[name] = int(env[key])
             except ValueError:
                 raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+    kw.update(_item_prompt_from_env(env, "AGENDA_OPINION_PROMPT"))
     return OpinionCfg(**kw)
 
 
 def todo_cfg_from_env(env=None, cfg=None):
     """환경변수 -> 안건 할 일 추출 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
-    AGENDA_TODO_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), MAX_AGENDA_TODO_CALLS_PER_MEETING(회의당 호출 상한, 기본 300)
+    AGENDA_TODO_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), MAX_AGENDA_TODO_CALLS_PER_MEETING(회의당 호출 상한, 기본 300),
+    AGENDA_TODO_PROMPT(할 일 프롬프트 버전, 기본 v1. v2 는 받아쓰기 오류 맥락 교정 + 숫자 표기 그대로. 값이 틀리면 ConfigError)
     """
     env = os.environ if env is None else env
     cfg = cfg or cfg_from_env(env)
@@ -181,6 +195,7 @@ def todo_cfg_from_env(env=None, cfg=None):
                 kw[name] = int(env[key])
             except ValueError:
                 raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+    kw.update(_item_prompt_from_env(env, "AGENDA_TODO_PROMPT"))
     return TodoCfg(**kw)
 
 

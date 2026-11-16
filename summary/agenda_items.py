@@ -40,9 +40,44 @@ if HERE not in sys.path:
 
 from meeting_summary import validate_items, call_llm, parse_llm_json, mmss, squash  # noqa: E402
 from agenda_classifier import _clean  # noqa: E402
-from agenda_summarizer import _b36  # noqa: E402
+from agenda_summarizer import _b36, check_corrections  # noqa: E402
 
 MAX_STREAK = 3                        # 연속 실패가 이만큼이면 이 기능을 멈춘다
+
+# 프롬프트 버전: v1 = 현행(받아쓰기 오류를 고쳐 쓰지 않고 원문을 「」로 인용), v2 = 안건 요약 v8처럼 앞뒤 줄의 맥락으로 고쳐 쓰고
+# 정정 목록(corrections)을 코드가 검사하며, 숫자·날짜·요일은 「」 없이 전사 표기 그대로 쓴다. 평가를 거치기 전에는 기본값이 v1이다.
+ITEM_PROMPT_VERSIONS = ("v1", "v2")
+
+
+def correction_rule(num, field):
+    """v2 프롬프트에 끼우는 받아쓰기 교정 규칙. field 는 항목 문장이 들어 있는 키(의견 text, 할 일 task)다. 안건 요약 v8의 규칙 14와 같은 뜻이다."""
+    return (f'{num}. 전사는 STT 원본이라 받아쓰기 오류가 있어. 영문 약어를 한글 발음대로 받아쓴 것이나 잘못 들은 단어가 앞뒤 줄의 맥락으로 분명하면 '
+            f'맞는 말로 고쳐 써. 고칠 때마다 corrections에 {{"from": 받아쓴 말, "to": 고친 말, "line": 그 말이 있는 줄 번호}}를 적고, '
+            f'from은 그 줄에 있는 글자 그대로 써. corrections에 적지 않고 몰래 고치지 마. 고친 뒤에는 받아쓴 원문을 {field}에 쓰지 마'
+            f'(「」 인용 안이나 괄호 안에도 쓰지 마). 숫자, 금액, 날짜, 요일, 사람 이름은 절대 고치지 마. 이미 맞는 단어는 고치지 마. '
+            f'이미 올바르게 쓴 한글 외래어와 기술 용어는 영문 철자로 바꾸지 마. 한글로 받아쓴 알파벳 철자는 앞뒤 맥락에서 그 말이 무엇인지 분명할 때만 '
+            f'영문 약어로 고쳐. 맥락으로도 하나로 정할 수 없는 말은 고치지도, 빼지도, 다른 말로 바꾸지도 말고 입력 원문과 똑같이 「」로 인용한 뒤 '
+            f'바로 뒤에 (받아쓰기 불확실)을 붙여. corrections는 고친 말이 없으면 빈 목록으로 줘. line은 이 전사의 줄 번호이고 '
+            f'그 항목의 근거 구간 안에 있어야 해.')
+
+
+def swap_rule(prompt, num, new):
+    """번호가 num 인 규칙 한 줄을 new 로 바꾼다. 줄이 하나가 아니면 프롬프트가 바뀐 것이므로 멈춘다."""
+    pat = re.compile(r"(?m)^%d\. .*$" % num)
+    assert len(pat.findall(prompt)) == 1, f"규칙 {num}을 찾지 못함 (프롬프트 모양 확인)"
+    return pat.sub(lambda m: new, prompt)
+
+
+def replace_once(prompt, old, new):
+    assert prompt.count(old) == 1, f"바꿀 문구를 하나만 찾지 못함: {old[:30]}"
+    return prompt.replace(old, new)
+
+
+def add_correction_rule(prompt, num, field, fmt_old, fmt_new):
+    """v2: 맨 끝에 교정 규칙을 더하고 출력 형식에 corrections 칸을 더한다."""
+    assert prompt.count("\n\n출력은 JSON만.") == 1 and prompt.count(fmt_old) == 1, "프롬프트 끝 모양이 달라짐"
+    prompt = prompt.replace("\n\n출력은 JSON만.", "\n" + correction_rule(num, field) + "\n\n출력은 JSON만.")
+    return prompt.replace(fmt_old, fmt_new)
 
 
 # 이름·단위 글자에 낫표가 잘못 붙는 문제를 고친다. 「박」 주무관, 요원 「한」 명 처럼 숫자가 아닌 말을 인용으로 묶으면 낫표를 뗀다.
@@ -84,10 +119,13 @@ class ItemCfg:
         self.max_calls = 300              # 회의당 모델 호출 상한 (비용을 추정한 뒤 정한다)
         self.max_lines = 200              # 한 번에 모델에 주는 줄 수 (넘으면 가장 최근 줄)
         self.backchannel_gap_sec = 10     # 맞장구를 앞 줄의 안건에 붙이는 최대 간격 (앞 줄의 끝부터, 음성 시간)
+        self.prompt_version = "v1"        # v1 현행, v2 받아쓰기 맥락 교정 + 숫자 표기 그대로 (ITEM_PROMPT_VERSIONS)
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError(f"알 수 없는 설정: {k}")
             setattr(self, k, v)
+        if self.prompt_version not in ITEM_PROMPT_VERSIONS:
+            raise ValueError(f"알 수 없는 프롬프트 버전: {self.prompt_version} ({', '.join(ITEM_PROMPT_VERSIONS)} 중 하나여야 함)")
 
 
 def _h(s):
@@ -106,6 +144,7 @@ class AgendaItemExtractor:
     LETTER = "x"                      # 항목 번호에 들어가는 글자
     ROOT = None                       # 모델 JSON 의 최상위 키
     SYSTEM_PROMPT = ""
+    SYSTEM_PROMPT_V2 = ""             # 하위 클래스가 정한다 (add_correction_rule 로 만든다)
 
     def __init__(self, classifier, cfg, llm=None, id_prefix=None, now=time.time):
         self.c = classifier
@@ -130,7 +169,8 @@ class AgendaItemExtractor:
     def _make_llm(self):
         if self.cfg.provider == "echo":
             return self.echo
-        return lambda user: call_llm(self.cfg.provider, self.cfg.model, self.SYSTEM_PROMPT, user, task=self.TASK)
+        prompt = self.SYSTEM_PROMPT_V2 if self.cfg.prompt_version == "v2" else self.SYSTEM_PROMPT
+        return lambda user: call_llm(self.cfg.provider, self.cfg.model, prompt, user, task=self.TASK)
 
     # ---------------- 하위 클래스가 정하는 것 ----------------
     def echo(self, user):                                   # pragma: no cover (하위 클래스가 정한다)
@@ -349,7 +389,13 @@ class AgendaItemExtractor:
     def _validate(self, items, lines):
         """모델이 낸 항목을 검증한다. 반환: (통과한 항목 [{"data", "evidence", "warns"}], 오류 [(번호, [메시지])])."""
         cands = [self._candidate(d) for d in items]
-        res = validate_items(cands, lines)
+        v2 = self.cfg.prompt_version == "v2"
+        if v2:                                               # 정정 목록은 모델이 낸 항목에서 검증 후보로 옮긴다
+            for cand, d in zip(cands, items):
+                cand["corrections"] = d.get("corrections") if isinstance(d, dict) else None
+        res = validate_items(cands, lines, plain_numbers=v2)
+        if v2:
+            res = check_corrections(res, lines, strict=True)  # 어긋난 정정이 있으면 그 항목은 탈락한다 (안건 요약 v8과 같은 검사)
         good, errors = [], []
         for n, (d, (_it, errs, warns, spans)) in enumerate(zip(items, res), 1):
             if errs:
@@ -475,4 +521,5 @@ class AgendaItemExtractor:
             items = [it for st in self.ag.values() for it in st["items"]]
             return {"agendas": len(self.ag), "items": len(items), "edited": sum(1 for it in items if it["edited"]),
                     "needsCheck": sum(1 for it in items if it["needs_check"]),
-                    "calls": self.calls, "errors": self.errors, "rejected": self.rejected, "halted": self.halted}
+                    "calls": self.calls, "errors": self.errors, "rejected": self.rejected, "halted": self.halted,
+                    "promptVersion": self.cfg.prompt_version}

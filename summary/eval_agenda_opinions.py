@@ -39,6 +39,7 @@ from input_adapter import adapt_agendas  # noqa: E402
 import agenda_classifier as ac  # noqa: E402
 import agenda_opinions as ao  # noqa: E402
 import agenda_todos as at  # noqa: E402
+from agenda_items import ITEM_PROMPT_VERSIONS  # noqa: E402
 import eval_agenda as ea  # noqa: E402
 import eval_agenda_summary as es  # noqa: E402
 
@@ -266,7 +267,7 @@ SYN_EXPECT = [("철수", "수요일까지", "MATCHED", 7), ("영희", "금요일
               ("민수", None, "AMBIGUOUS", None), ("지호", None, "NOT_IN_ROSTER", None)]
 
 
-def synthetic(provider, model, dry):
+def synthetic(provider, model, dry, prompt_version="v1"):
     def ln(i):
         t = SYN_LINES[i - 1]
         s = i * 3000
@@ -281,7 +282,7 @@ def synthetic(provider, model, dry):
     c.halted = "평가: 지어낸 대화"
     c.advance(30000)
     rec = Rec(at, None, dry)
-    t = at.AgendaTodos(c, at.TodoCfg(provider=provider, model=model), llm=rec)
+    t = at.AgendaTodos(c, at.TodoCfg(provider=provider, model=model, prompt_version=prompt_version), llm=rec)
     rec.inner = t._make_llm() if not dry else None
     t.set_roster([{"user_id": p["user_id"], "name": p["name"]} for p in SYN_ROSTER])
     t.process(final=True)
@@ -315,6 +316,8 @@ def main():
     ap.add_argument("--synthetic", action="store_true", help="이름·기한이 나오는 지어낸 대화로 담당자 맞추기도 본다")
     ap.add_argument("--roster", help="참석자 명단 JSON ([{user_id,name}]). 주면 담당자 이름 확인과 담당·기한 채점을 한다")
     ap.add_argument("--min-new-lines", type=int, help="새 줄이 이만큼 쌓이면 바로 호출 (기본 2). 비용을 줄이는 평가용 설정")
+    ap.add_argument("--prompt", default="v1", choices=ITEM_PROMPT_VERSIONS,
+                    help="의견·할 일 프롬프트 버전 (v1 현행, v2 받아쓰기 맥락 교정). 의견과 할 일에 같이 적용되고 결과 JSON에 기록된다")
     ap.add_argument("--provider", default="echo")
     ap.add_argument("--model")
     ap.add_argument("--dry-run", action="store_true", help="모델을 부르지 않고 호출 수와 비용 추정만 낸다")
@@ -354,9 +357,10 @@ def main():
     dry = a.dry_run or a.provider == "echo"
     t0 = time.time()
     board, cls, mods, recs = replay(batches, agendas_msg, gold, targets, a.provider, a.model, dry,
-                                    {"min_new_lines": a.min_new_lines} if a.min_new_lines else None, roster=roster)
+                                    {**({"min_new_lines": a.min_new_lines} if a.min_new_lines else {}), "prompt_version": a.prompt},
+                                    roster=roster)
     result = {"provider": a.provider, "model": a.model, "dryRun": dry, "labels": len(gold), "truthConfirmed": confirmed,
-              "criteria": CRITERIA, "minNewLines": a.min_new_lines or 2, "targets": {}}
+              "criteria": CRITERIA, "minNewLines": a.min_new_lines or 2, "promptVersion": a.prompt, "targets": {}}
     total_krw, total_usd, total_calls = 0, 0.0, 0
     for t in targets:
         rec = recs[t]
@@ -374,7 +378,7 @@ def main():
         total_krw += cst["krw"]; total_usd += cst["usd"]; total_calls += rec.calls
     syn_out = None
     if a.synthetic and "todos" in targets:
-        out, tm, rec = synthetic(a.provider, a.model, dry)
+        out, tm, rec = synthetic(a.provider, a.model, dry, a.prompt)
         cst = es.cost(rec.in_chars, rec.calls * OUT_TOK_PER_CALL["todos"], a.model)
         r = {"calls": rec.calls, "cost": cst}
         if tm.halted and not dry:

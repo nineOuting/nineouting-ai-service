@@ -646,7 +646,7 @@ def test_agenda_summary_flow(cap):
 
 
 def test_summary_config():
-    from .service import summarize_cfg_from_env
+    from .service import summarize_cfg_from_env, opinion_cfg_from_env, todo_cfg_from_env
     d = summarize_cfg_from_env({})
     assert (d.provider, d.refresh_sec, d.max_calls, d.min_new_lines, d.max_sentences) == ("echo", 60, 300, 2, 3)
     c = summarize_cfg_from_env({"LLM_PROVIDER": "gemini", "LLM_MODEL": "m", "AGENDA_SUMMARY_REFRESH_SEC": "45",
@@ -658,6 +658,18 @@ def test_summary_config():
     for v in ("v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"):
         assert summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": v}).prompt_version == v
     assert summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": " v7 "}).prompt_version == "v7"
+    # 의견·할 일 프롬프트 버전: 기본 v1(안 넣거나 비워도), v1·v2 허용, 앞뒤 공백 무시, 그 밖의 값은 시작할 때 설정 오류
+    for fn, key in ((opinion_cfg_from_env, "AGENDA_OPINION_PROMPT"), (todo_cfg_from_env, "AGENDA_TODO_PROMPT")):
+        assert fn({}).prompt_version == "v1" and fn({key: ""}).prompt_version == "v1" and fn({key: "  "}).prompt_version == "v1"
+        assert fn({key: "v1"}).prompt_version == "v1" and fn({key: "v2"}).prompt_version == "v2" and fn({key: " v2 "}).prompt_version == "v2"
+        for bad in ("v0", "v3", "2", "V2", "latest"):
+            try:
+                fn({key: bad})
+                raise SystemExit(f"잘못된 {key} 를 못 잡음: {bad}")
+            except ConfigError:
+                pass
+    assert opinion_cfg_from_env({"AGENDA_TODO_PROMPT": "v2"}).prompt_version == "v1", "의견 설정은 할 일 변수를 읽지 않는다"
+    assert todo_cfg_from_env({"AGENDA_OPINION_PROMPT": "v2"}).prompt_version == "v1", "할 일 설정은 의견 변수를 읽지 않는다"
     for bad in ("v0", "v9", "7", "V8", "latest"):
         try:
             summarize_cfg_from_env({"AGENDA_SUMMARY_PROMPT": bad})

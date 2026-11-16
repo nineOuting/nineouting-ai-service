@@ -27,7 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from agenda_items import AgendaItemExtractor, ItemCfg, unquote_trivial  # noqa: E402
+from agenda_items import AgendaItemExtractor, ItemCfg, unquote_trivial, swap_rule, add_correction_rule  # noqa: E402
 
 TASK = "agenda_opinions"
 KINDS = ("OPINION", "EVIDENCE", "CONCERN", "QUESTION")
@@ -53,6 +53,17 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건에 나온 의견을 정리하�
 
 출력은 JSON만. 형식:
 {"opinions": [{"text": "...", "kind": "OPINION", "evidence": [[첫 번호, 끝 번호]]}]}"""
+
+
+# v2: 받아쓰기 오류를 맥락으로 고쳐 쓰고(규칙 12, 정정 목록은 코드가 검사) 숫자·날짜·요일은 「」 없이 전사 표기 그대로 쓴다. 안건 요약 v8과 같은 방식.
+_V2_RULE_9 = ('9. text에는 근거 줄에 없는 사실, 이름, 숫자를 쓰지 마. 단, corrections의 to에 적은 고친 말은 써도 돼. 숫자, 날짜, 요일, 시간, 금액, 수량은 '
+              '전사에 나온 표기 그대로 자연스럽게 쓰고 「」로 묶거나 괄호로 환산하지 마. 한글로 말한 숫자를 아라비아 숫자로 바꾸거나 값을 계산하지 마. '
+              '「」 인용은 규칙 12의 풀리지 않는 말에만 쓰고, 인용할 때는 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). 사람 이름, 호칭, "한 명"처럼 단위 앞의 한 글자 말은 '
+              '「」로 묶지 말고 그냥 써. ⟨ ⟩로 묶인 글자는 STT가 확신하지 못한 부분이야. 그 부분을 근거로 쓰면 text에 "(받아쓰기 불확실)"을 붙여.')
+SYSTEM_PROMPT_V2 = add_correction_rule(
+    swap_rule(SYSTEM_PROMPT, 9, _V2_RULE_9), 12, "text",
+    '"evidence": [[첫 번호, 끝 번호]]}]}',
+    '"evidence": [[첫 번호, 끝 번호]], "corrections": [{"from": "받아쓴 말", "to": "고친 말", "line": 줄번호}]}]}')
 
 
 class OpinionCfg(ItemCfg):
@@ -99,6 +110,7 @@ class AgendaOpinions(AgendaItemExtractor):
     LETTER = "o"
     ROOT = "opinions"
     SYSTEM_PROMPT = SYSTEM_PROMPT
+    SYSTEM_PROMPT_V2 = SYSTEM_PROMPT_V2
     echo = staticmethod(echo_llm)
 
     def _intro(self, n_lines, need):
@@ -384,7 +396,79 @@ def selftest():
     except TypeError:
         pass
     info = o.info()
-    assert set(info) == {"agendas", "items", "edited", "needsCheck", "calls", "errors", "rejected", "halted"}, info
+    assert set(info) == {"agendas", "items", "edited", "needsCheck", "calls", "errors", "rejected", "halted", "promptVersion"}, info
+    assert info["promptVersion"] == "v1"
+
+    # 20-2) 프롬프트 v2: 받아쓰기 오류를 맥락으로 고쳐 쓰고 정정 목록을 코드가 검사한다. 숫자·날짜는 전사 표기 그대로(값이 바뀌면 탈락)
+    import agenda_items as _ai
+    assert OpinionCfg().prompt_version == "v1" and OpinionCfg(prompt_version="v2").prompt_version == "v2"
+    try:
+        OpinionCfg(prompt_version="v3")
+        assert False, "잘못된 프롬프트 버전을 못 잡음"
+    except ValueError:
+        pass
+    assert "corrections" not in SYSTEM_PROMPT, "현행(v1) 프롬프트에는 정정 목록 문구가 없어야 함"
+    assert SYSTEM_PROMPT_V2 != SYSTEM_PROMPT and '"corrections": [{"from"' in SYSTEM_PROMPT_V2 and "12. 전사는 STT 원본" in SYSTEM_PROMPT_V2
+    assert "(받아쓰기 불확실)" in SYSTEM_PROMPT_V2 and "숫자는 말한 한글 표기를 「」로 그대로 인용해" not in SYSTEM_PROMPT_V2
+    assert SYSTEM_PROMPT_V2.count("\n9. ") == 1 and "단, corrections의 to에 적은 고친 말은 써도 돼" in SYSTEM_PROMPT_V2
+    sent = []
+    _orig_call = _ai.call_llm
+    _ai.call_llm = lambda provider, model, prompt, user, task=None: sent.append(prompt) or "{}"
+    try:
+        c, _x = fresh()
+        AgendaOpinions(c, OpinionCfg(provider="openai", model="m", prompt_version="v2")).llm("x")
+        AgendaOpinions(c, OpinionCfg(provider="openai", model="m")).llm("x")
+    finally:
+        _ai.call_llm = _orig_call
+    assert sent == [SYSTEM_PROMPT_V2, SYSTEM_PROMPT], "버전에 맞는 프롬프트를 모델에 보내야 함"
+
+    V2LINES = [ln(1, 0, "배포는 목요일로 하죠"), ln(2, 4000, "배포 에스티티 정확도 점검이 필요해요"),
+               ln(3, 8000, "배포 비용은 이십만 원 정도예요"), ln(4, 12000, "배포 금요일은 어때요")]
+
+    def one(text, ev, corr=None):
+        d = {"text": text, "kind": "OPINION", "evidence": ev}
+        if corr is not None:
+            d["corrections"] = corr
+        return json.dumps({"opinions": [d]}, ensure_ascii=False)
+
+    FIX = [{"from": "에스티티", "to": "STT", "line": 2}]
+    # (가) 정상: 고친 말이 문장에 들어가고 받아쓴 원문은 남지 않는다
+    c, o = fresh(llm=lambda u: one("STT 정확도 점검이 필요하다는 의견이 있었어요", [[2, 2]], FIX), prompt_version="v2")
+    feed(c, V2LINES, 13000)
+    assert o.process() == 1
+    b = items(o)
+    assert len(b) == 1 and "STT" in b[0]["text"] and "에스티티" not in b[0]["text"] and o.rejected == 0, b
+    # (나) 정정 목록이 없어도 된다(고친 말이 없는 항목)
+    c, o = fresh(llm=lambda u: one("금요일 배포는 어떠냐는 질문이 있었어요", [[4, 4]]), prompt_version="v2")
+    feed(c, V2LINES, 13000)
+    assert o.process() == 1 and len(items(o)) == 1 and o.rejected == 0
+    # (다) 몰래 고친 것(고쳤다고 적었지만 문장에 받아쓴 원문이 남음)은 탈락하고 오류를 알려 한 번 더 부른다
+    answers = [one("에스티티 정확도 점검이 필요하다는 의견이 있었어요", [[2, 2]], FIX),
+               one("STT 정확도 점검이 필요하다는 의견이 있었어요", [[2, 2]], FIX)]
+    seen = []
+    c, o = fresh(llm=lambda u: seen.append(u) or answers[len(seen) - 1], prompt_version="v2")
+    feed(c, V2LINES, 13000)
+    assert o.process() == 2 and "[검증 오류]" in seen[1] and "STT" in items(o)[0]["text"], seen[-1]
+    # (라) 근거 줄에 없는 말을 고친 것으로 적으면 탈락한다
+    answers = [one("STT 정확도 점검이 필요하다는 의견이 있었어요", [[2, 2]], [{"from": "레그", "to": "STT", "line": 2}])] * 2
+    seen = []
+    c, o = fresh(llm=lambda u: seen.append(u) or answers[len(seen) - 1], prompt_version="v2")
+    feed(c, V2LINES, 13000)
+    assert o.process() == 2 and items(o) == [] and o.rejected == 1
+    # (마) 숫자는 전사 표기 그대로 써야 한다. 아라비아 숫자로 바꾼 값은 탈락한다 (한글 숫자를 다른 한글 숫자로 바꾼 것은 공유 검증기가 경고만 한다. 요약 v8과 같은 한계)
+    answers = [one("비용이 30만 원 정도라는 의견이 있었어요", [[3, 3]], [])] * 2
+    seen = []
+    c, o = fresh(llm=lambda u: seen.append(u) or answers[len(seen) - 1], prompt_version="v2")
+    feed(c, V2LINES, 13000)
+    assert o.process() == 2 and items(o) == [] and o.rejected == 1
+    # (바) 숫자를 전사 표기 그대로 「」 없이 쓰면 통과한다
+    c, o = fresh(llm=lambda u: one("비용은 이십만 원 정도라고 했어요", [[3, 3]], []), prompt_version="v2")
+    feed(c, V2LINES, 13000)
+    assert o.process() == 1 and items(o)[0]["text"] == "비용은 이십만 원 정도라고 했어요" and o.rejected == 0
+    # (사) 기본(v1)은 정정 목록을 보지 않는다. 같은 답이어도 고친 말 검사를 하지 않고 지금처럼 통과한다
+    c, o = fresh(llm=lambda u: one("에스티티 정확도 점검이 필요하다는 의견이 있었어요", [[2, 2]], FIX))
+    feed(c, V2LINES, 13000)
+    assert o.process() == 1 and len(items(o)) == 1 and o.calls == 1 and o.info()["promptVersion"] == "v1"
 
     # 21) 로그에는 전사, 안건 제목, 항목 문장이 남지 않는다
     logging.getLogger("ai-service").removeHandler(h)

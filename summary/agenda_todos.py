@@ -35,7 +35,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from agenda_items import AgendaItemExtractor, ItemCfg, unquote_trivial  # noqa: E402
+from agenda_items import AgendaItemExtractor, ItemCfg, unquote_trivial, replace_once, add_correction_rule  # noqa: E402
 from meeting_summary import build_char_stream, squash  # noqa: E402
 
 TASK = "agenda_todos"
@@ -61,6 +61,21 @@ SYSTEM_PROMPT = """너는 회의에서 한 안건에 나온 할 일을 뽑는 �
 
 출력은 JSON만. 형식:
 {"todos": [{"task": "...", "assigneeName": "이름 또는 null", "dueText": "기한 또는 null", "unclear": false, "evidence": [[첫 번호, 끝 번호]]}]}"""
+
+
+# v2: 받아쓰기 오류를 맥락으로 고쳐 쓰고(규칙 12, 정정 목록은 코드가 검사) 숫자·날짜·요일은 「」 없이 전사 표기 그대로 쓴다. 안건 요약 v8과 같은 방식.
+# 이름(assigneeName)과 기한(dueText)은 고치지 않고 근거 줄의 글자 그대로 둔다(기존 검사가 그대로 적용된다).
+_V2 = replace_once(SYSTEM_PROMPT,
+                   '숫자(금액, 날짜, 시간처럼 값이 있는 말)나 고유한 용어만 「」로 묶고 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). ',
+                   '숫자, 날짜, 요일, 시간, 금액, 수량은 전사에 나온 표기 그대로 자연스럽게 쓰고 「」로 묶거나 괄호로 환산하지 마. '
+                   '「」 인용은 규칙 12의 풀리지 않는 말에만 쓰고, 인용할 때는 입력 원문과 똑같이 써(⟨ ⟩ 기호는 빼). ')
+_V2 = replace_once(_V2, '그 부분을 근거로 쓰면 task에 "STT 불확실"이라고 밝혀. 숫자는 말한 한글 표기를 「」로 그대로 인용해.',
+                   '그 부분을 근거로 쓰면 task에 "(받아쓰기 불확실)"을 붙여. 한글로 말한 숫자를 아라비아 숫자로 바꾸거나 값을 계산하지 마.')
+_V2 = replace_once(_V2, '전사에 없는 사실, 이름, 숫자를 쓰지 마.', '전사에 없는 사실, 이름, 숫자를 쓰지 마. 단, corrections의 to에 적은 고친 말은 써도 돼.')
+SYSTEM_PROMPT_V2 = add_correction_rule(
+    _V2, 12, "task",
+    '"evidence": [[첫 번호, 끝 번호]]}]}',
+    '"evidence": [[첫 번호, 끝 번호]], "corrections": [{"from": "받아쓴 말", "to": "고친 말", "line": 줄번호}]}]}')
 
 
 class TodoCfg(ItemCfg):
@@ -135,6 +150,7 @@ class AgendaTodos(AgendaItemExtractor):
     LETTER = "t"
     ROOT = "todos"
     SYSTEM_PROMPT = SYSTEM_PROMPT
+    SYSTEM_PROMPT_V2 = SYSTEM_PROMPT_V2
     echo = staticmethod(echo_llm)
 
     def __init__(self, classifier, cfg, llm=None, id_prefix=None, now=time.time):
@@ -516,7 +532,63 @@ def selftest():
     t.process()
     info = t.info()
     assert set(info) == {"agendas", "items", "edited", "needsCheck", "calls", "errors", "rejected", "halted", "unclear", "scrubbed",
-                         "roster"} and info["unclear"] == 1 and info["roster"] == 2, info
+                         "roster", "promptVersion"} and info["unclear"] == 1 and info["roster"] == 2 and info["promptVersion"] == "v1", info
+
+    # 15-2) 프롬프트 v2: 받아쓰기 오류를 맥락으로 고쳐 쓰고 정정 목록을 코드가 검사한다. 이름·기한은 고치지 않는다
+    import agenda_items as _ai
+    assert TodoCfg().prompt_version == "v1" and TodoCfg(prompt_version="v2").prompt_version == "v2"
+    try:
+        TodoCfg(prompt_version="v3")
+        assert False, "잘못된 프롬프트 버전을 못 잡음"
+    except ValueError:
+        pass
+    assert "corrections" not in SYSTEM_PROMPT, "현행(v1) 프롬프트에는 정정 목록 문구가 없어야 함"
+    assert SYSTEM_PROMPT_V2 != SYSTEM_PROMPT and '"corrections": [{"from"' in SYSTEM_PROMPT_V2 and "12. 전사는 STT 원본" in SYSTEM_PROMPT_V2
+    assert "(받아쓰기 불확실)" in SYSTEM_PROMPT_V2 and "숫자는 말한 한글 표기를 「」로 그대로 인용해" not in SYSTEM_PROMPT_V2
+    assert '"STT 불확실"' not in SYSTEM_PROMPT_V2 and "고유한 용어만 「」로 묶고" not in SYSTEM_PROMPT_V2
+    assert all(x in SYSTEM_PROMPT_V2 for x in ("assigneeName은 전사에 나온 이름을 글자 그대로", "dueText는 기한을 전사에 나온 말 그대로", "해요체"))
+    sent = []
+    _orig_call = _ai.call_llm
+    _ai.call_llm = lambda provider, model, prompt, user, task=None: sent.append(prompt) or "{}"
+    try:
+        c, _x = fresh()
+        AgendaTodos(c, TodoCfg(provider="openai", model="m", prompt_version="v2")).llm("x")
+        AgendaTodos(c, TodoCfg(provider="openai", model="m")).llm("x")
+    finally:
+        _ai.call_llm = _orig_call
+    assert sent == [SYSTEM_PROMPT_V2, SYSTEM_PROMPT], "버전에 맞는 프롬프트를 모델에 보내야 함"
+
+    V2LINES = [ln(1, 0, "배포 에스티티 정확도 점검은 제가 할게요"), ln(2, 4000, "배포 결과는 수요일에 공유할게요")]
+    TFIX = [{"from": "에스티티", "to": "STT", "line": 1}]
+
+    def todo_ans(task, corr=None, due="수요일", ev=((1, 2),)):
+        d = {"task": task, "assigneeName": None, "dueText": due, "unclear": False, "evidence": [list(e) for e in ev]}
+        if corr is not None:
+            d["corrections"] = corr
+        return json.dumps({"todos": [d]}, ensure_ascii=False)
+
+    # (가) 정상: 고친 말이 문장에 들어가고 받아쓴 원문은 남지 않는다. 기한은 전사 그대로
+    c, t = fresh(llm=lambda u: todo_ans("STT 정확도를 점검하고 결과를 수요일에 공유해야 해요", TFIX), prompt_version="v2")
+    feed(c, V2LINES, 9000)
+    assert t.process() == 1
+    b = items(t)
+    assert len(b) == 1 and "STT" in b[0]["task"] and "에스티티" not in b[0]["task"] and b[0]["dueText"] == "수요일" and t.rejected == 0, b
+    # (나) 몰래 고친 것(문장에 받아쓴 원문이 남음)은 탈락하고 오류를 알려 한 번 더 부른다
+    answers = [todo_ans("에스티티 정확도를 점검해야 해요", TFIX), todo_ans("STT 정확도를 점검해야 해요", TFIX)]
+    seen = []
+    c, t = fresh(llm=lambda u: seen.append(u) or answers[len(seen) - 1], prompt_version="v2")
+    feed(c, V2LINES, 9000)
+    assert t.process() == 2 and "[검증 오류]" in seen[1] and "STT" in items(t)[0]["task"]
+    # (다) 이름은 고칠 수 없다: 근거 줄에 없는 이름은 기존처럼 지우고 불분명으로 표시한다(정정으로 이름을 만들 수 없다)
+    d = json.loads(todo_ans("STT 정확도를 점검하기로 했어요", TFIX))
+    d["todos"][0]["assigneeName"] = "민수"
+    c, t = fresh(llm=lambda u: json.dumps(d, ensure_ascii=False), prompt_version="v2")
+    feed(c, V2LINES, 9000)
+    assert t.process() == 1 and items(t)[0]["assigneeName"] is None and items(t)[0]["unclear"] is True and t.scrubbed == 1
+    # (라) 기본(v1)은 정정 목록을 보지 않는다. 같은 답이어도 지금처럼 통과한다
+    c, t = fresh(llm=lambda u: todo_ans("에스티티 정확도를 점검해야 해요", TFIX))
+    feed(c, V2LINES, 9000)
+    assert t.process() == 1 and len(items(t)) == 1 and t.calls == 1
 
     # 16) 로그에는 전사, 이름, 할 일 문장이 남지 않는다
     logging.getLogger("ai-service").removeHandler(h)

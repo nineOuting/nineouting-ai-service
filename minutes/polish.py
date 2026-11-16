@@ -38,10 +38,14 @@
 
 다듬지 않는 것: 사람이 고친 항목(edited), 다시 배치의 줄(이전 초안 글 그대로, 명세 8장), 표 필드의 재료, 넣지 못한 재료.
 끄기: MINUTES_POLISH=0 이면 ② 를 하지 않는다 (① 은 코드라 늘 한다).
+나눠 부르기: MINUTES_POLISH_CHUNK=N(5-200)이면 다듬을 줄이 N 줄을 넘을 때 N 줄씩 나눠 동시에 부른다. 호출 하나의 출력이 줄 수에 비례해
+  길어져 시간 제한(MINUTES_LLM_TIMEOUT_S)에 닿는 것을 막고, 걸리는 시간을 조각 하나 수준으로 줄인다. 줄마다 따로 다시 쓰고 검사하는
+  일이라 조각을 나눠도 결과의 뜻은 같다. 조각 하나가 실패하면 그 조각의 줄만 ① 의 글로 간다. 0(기본)이면 한 번에 부른다.
 AI 에 보내는 글에는 회의 내용이 들어가므로 로그에는 개수만 남긴다 (draft.py).
 """
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 
 from .models import Material
@@ -50,6 +54,9 @@ from .placement import Prompt, _one_line, _quote, ask, load_prompt
 POLISH_KIND = "polish"
 POLISH_ERROR = "POLISH_ERROR"
 SWITCH_KEY = "MINUTES_POLISH"
+CHUNK_KEY = "MINUTES_POLISH_CHUNK"
+MIN_CHUNK, MAX_CHUNK = 5, 200                   # 조각 하나의 줄 수 범위 (0 은 나누지 않음)
+MAX_WORKERS = 8                                 # 동시에 부르는 조각 수 상한 (모델 API 속도 제한을 아끼려고)
 MIN_RATIO = 0.5
 RETRIES = 1                                     # 검사에 걸린 줄을 다시 보내는 횟수 (실제 회의 33줄 중 4줄이 걸려 문체가 섞였음)
 log = logging.getLogger("minutes.polish")
@@ -108,6 +115,18 @@ def enabled_from_env(env) -> bool:
     if raw not in ("0", "1"):
         raise ValueError(f"{SWITCH_KEY} 는 0 이나 1 이어야 함")
     return raw == "1"
+
+
+def chunk_from_env(env) -> int:
+    """MINUTES_POLISH_CHUNK: 없거나 "0" 이면 나누지 않음(0). 5-200 이면 그 줄 수씩 나눠 동시에 부른다. 그 밖은 ValueError."""
+    raw = (env.get(CHUNK_KEY) or "0").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        raise ValueError(f"{CHUNK_KEY} 는 정수여야 함") from None
+    if n != 0 and not MIN_CHUNK <= n <= MAX_CHUNK:
+        raise ValueError(f"{CHUNK_KEY} 는 0(나누지 않음) 이거나 {MIN_CHUNK}-{MAX_CHUNK} 여야 함")
+    return n
 
 
 # ---------- ① 정리 ----------
@@ -331,7 +350,7 @@ def targets(materials: list[Material], refs: set[str]) -> list[Material]:
 
 
 def polish(materials: list[Material], refs: set[str], llm, timeout_s: float, prompt: Prompt | None = None,
-           call_retries: int = 1, enabled: bool = True) -> Polish:
+           call_retries: int = 1, enabled: bool = True, chunk: int = 0) -> Polish:
     """refs 는 글 필드에 놓인 재료 번호. ① 은 늘 하고, enabled 면 ② ③ 을 한다. 실패해도 예외 없이 ① 의 글로 돌려준다."""
     chosen = targets(materials, refs)
     if not chosen:
@@ -341,10 +360,41 @@ def polish(materials: list[Material], refs: set[str], llm, timeout_s: float, pro
     if not enabled:
         return Polish(_apply(materials, parts, before))
     try:
+        if chunk and len(chosen) > chunk:
+            return _polish_chunked(materials, chosen, parts, before, llm, timeout_s, prompt, call_retries, chunk)
         return _polish(materials, chosen, parts, before, llm, timeout_s, prompt, call_retries)
     except Exception as e:                               # 다듬기 때문에 초안이 실패하지 않게 한다
         log.warning("다듬기 건너뜀 error=%s", type(e).__name__)
         return Polish(_apply(materials, parts, before), sent=len(chosen), error_code=POLISH_ERROR)
+
+
+def _polish_chunked(materials, chosen, parts, before, llm, timeout_s, prompt, call_retries, chunk) -> Polish:
+    """chosen 을 chunk 줄씩 나눠 동시에 다듬는다. 조각마다 따로 다시 쓰고 검사하고 다시 묻는다(_polish). 조각 하나가
+    예외로 끝나도 그 조각의 줄만 ① 의 글로 가고 나머지는 그대로 쓴다."""
+    groups = [chosen[i:i + chunk] for i in range(0, len(chosen), chunk)]
+
+    def run(group):
+        g_parts = {m.ref: parts[m.ref] for m in group}
+        g_before = {m.ref: before[m.ref] for m in group}
+        try:
+            return _polish(materials, group, g_parts, g_before, llm, timeout_s, prompt, call_retries)
+        except Exception as e:                           # 이 조각만 ① 의 글. 다른 조각은 계속
+            log.warning("다듬기 조각 건너뜀 error=%s", type(e).__name__)
+            return Polish(_apply(materials, g_parts, g_before), sent=len(group), error_code=POLISH_ERROR)
+
+    with ThreadPoolExecutor(max_workers=min(len(groups), MAX_WORKERS)) as pool:
+        results = list(pool.map(run, groups))
+    owner = {m.ref: k for k, group in enumerate(groups) for m in group}
+    merged = [results[owner[m.ref]].materials[i] if m.ref in owner else m for i, m in enumerate(materials)]
+    failed: dict[str, int] = {}
+    for r in results:
+        for k, v in r.failed.items():
+            failed[k] = failed.get(k, 0) + v
+    return Polish(merged, sent=sum(r.sent for r in results), polished=sum(r.polished for r in results), failed=failed,
+                  error_code=next((r.error_code for r in results if r.error_code), None),
+                  retried=sum(r.retried for r in results), attempts=sum(r.attempts for r in results),
+                  input_tokens=sum(r.input_tokens for r in results), output_tokens=sum(r.output_tokens for r in results),
+                  fallback_calls=sum(r.fallback_calls for r in results))
 
 
 def _polish(materials, chosen, parts, before, llm, timeout_s, prompt, call_retries) -> Polish:

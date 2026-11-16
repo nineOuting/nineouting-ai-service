@@ -35,7 +35,7 @@ DEFAULT_LLM_TIMEOUT_S = 60.0
 class Worker:
     def __init__(self, conn, llm, callback, timeout_s=DEFAULT_LLM_TIMEOUT_S, prompt=None, relayout_prompt=None,
                  max_attempts=MAX_ATTEMPTS, retry_delays_s=RETRY_DELAYS_S, connect=None, table_prompt=None,
-                 correction_prompt=None, correction=True, polish_prompt=None, polish=True):
+                 correction_prompt=None, correction=True, polish_prompt=None, polish=True, polish_chunk=0):
         """connect 를 주면 conn 이 없거나 끊겼을 때 run() 이 그것으로 다시 접속한다 (conn=None 으로 시작해도 됨)."""
         self.conn = conn
         self.llm = llm
@@ -48,6 +48,7 @@ class Worker:
         self.correction = correction                  # False 면 오인식 교정을 하지 않는다 (MINUTES_CORRECTION=0)
         self.polish_prompt = polish_prompt
         self.polish = polish                          # False 면 AI 문장 다듬기를 하지 않는다 (MINUTES_POLISH=0)
+        self.polish_chunk = polish_chunk              # 0 이 아니면 다듬을 줄을 이 줄 수씩 나눠 동시에 부른다 (MINUTES_POLISH_CHUNK)
         self.max_attempts = max_attempts
         self.retry_delays_s = tuple(retry_delays_s)
         self._connect = connect
@@ -68,7 +69,7 @@ class Worker:
                 result = make_draft(job.payload, self.llm, timeout_s=self.timeout_s, prompt=self.prompt,
                                     relayout_prompt=self.relayout_prompt, table_prompt=self.table_prompt,
                                     correction_prompt=self.correction_prompt, correction=self.correction,
-                                    polish_prompt=self.polish_prompt, polish=self.polish)
+                                    polish_prompt=self.polish_prompt, polish=self.polish, polish_chunk=self.polish_chunk)
             except Exception as e:                    # 일시 실패로 본다
                 if job.attempts < self.max_attempts:
                     delay = self.retry_delays_s[min(job.attempts, len(self.retry_delays_s)) - 1]
@@ -134,6 +135,7 @@ def from_env(env=None, llm=None, prompt=None, relayout_prompt=None, table_prompt
     from .db import connect
     from .placement import RELAYOUT_KIND, load_prompt
     from .polish import POLISH_KIND
+    from .polish import chunk_from_env as polish_chunk_from_env
     from .polish import enabled_from_env as polish_enabled
     from .table import TABLE_KIND
 
@@ -156,10 +158,12 @@ def from_env(env=None, llm=None, prompt=None, relayout_prompt=None, table_prompt
     correction = enabled_from_env(env)                 # 틀린 값이면 ValueError (따로 띄운 작업자는 뜨지 않는다)
     polish_prompt = polish_prompt or load_prompt(env.get("MINUTES_POLISH_PROMPT_VERSION") or None, POLISH_KIND)
     polish = polish_enabled(env)                       # 같음
+    polish_chunk = polish_chunk_from_env(env)          # 같음
     timeout_s = float(env.get("MINUTES_LLM_TIMEOUT_S", DEFAULT_LLM_TIMEOUT_S))
     return Worker(None, llm, CallbackSender(allowed=allowed), timeout_s=timeout_s, prompt=prompt,
                   relayout_prompt=relayout_prompt, connect=connect_db, table_prompt=table_prompt,
-                  correction_prompt=correction_prompt, correction=correction, polish_prompt=polish_prompt, polish=polish)
+                  correction_prompt=correction_prompt, correction=correction, polish_prompt=polish_prompt, polish=polish,
+                  polish_chunk=polish_chunk)
 
 
 def start_in_thread(worker, stop=None):
@@ -177,10 +181,10 @@ def main():
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
-    log.info("작업자 시작 (지시문 %s, %s, %s, %s, %s, 오인식 교정 %s, 문장 다듬기 %s, 시간 제한 %.0f초)", worker.prompt.version,
+    log.info("작업자 시작 (지시문 %s, %s, %s, %s, %s, 오인식 교정 %s, 문장 다듬기 %s, 다듬기 조각 %s, 시간 제한 %.0f초)", worker.prompt.version,
              worker.relayout_prompt.version, worker.table_prompt.version, worker.correction_prompt.version,
              worker.polish_prompt.version, "켬" if worker.correction else "끔", "켬" if worker.polish else "끔",
-             worker.timeout_s)
+             worker.polish_chunk or "없음", worker.timeout_s)
     worker.run(stop)
     log.info("작업자 멈춤")
 

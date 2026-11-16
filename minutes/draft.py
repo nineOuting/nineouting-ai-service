@@ -53,7 +53,7 @@ MESSAGES = {                                    # 실패 설명. 요약·초안 
 def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, prompt: Prompt | None = None,
                call_retries: int = 1, relayout_prompt: Prompt | None = None, table_prompt: Prompt | None = None,
                correction_prompt: Prompt | None = None, correction: bool = True,
-               polish_prompt: Prompt | None = None, polish: bool = True) -> dict:
+               polish_prompt: Prompt | None = None, polish: bool = True, polish_chunk: int = 0) -> dict:
     """결과 콜백 본문(명세 3.1·3.2)을 돌려준다. 다시 배치에는 relayout_prompt, 표 채우기에는 table_prompt,
     오인식 교정에는 correction_prompt, 문장 다듬기에는 polish_prompt 를 쓴다 (없으면 각 종류의 가장 큰 번호)."""
     t0 = time.monotonic()
@@ -127,9 +127,10 @@ def make_draft(body: dict, llm, timeout_s: float = 60.0, max_retries: int = 2, p
     if not previous:
         text_refs = {ref for ref, i in placement.sections.items() if fields[i].type != TABLE}
         polish_prompt = polish_prompt or load_prompt(kind=POLISH_KIND)
-        polished = polish_lines(materials, text_refs, llm, timeout_s, polish_prompt, call_retries, enabled=polish)
+        polished = polish_lines(materials, text_refs, llm, timeout_s, polish_prompt, call_retries, enabled=polish,
+                                chunk=polish_chunk)
         materials = polished.materials
-        tag += _polish_tag(polish_prompt, polished, polish)
+        tag += _polish_tag(polish_prompt, polished, polish) + (f" polish_chunk={polish_chunk}" if polish and polish_chunk else "")
     sections, unplaced = build_sections(fields, materials, placement, v07, tables)
     unplaced = not_sent + unplaced
     lost_lines = unplaced_lines(materials, placement, previous)

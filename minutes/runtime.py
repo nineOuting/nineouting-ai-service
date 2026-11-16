@@ -45,10 +45,11 @@ class MinutesRuntime:
                                table_prompt=self.table_prompt, correction_prompt=self.correction_prompt,
                                polish_prompt=self.polish_prompt)
         self.thread, self.stop_event = start_in_thread(self.worker)
-        log.info("회의록 초안 작업자 시작 (지시문 %s, %s, %s, %s, %s, 오인식 교정 %s, 문장 다듬기 %s, 시간 제한 %.0f초)",
+        log.info("회의록 초안 작업자 시작 (지시문 %s, %s, %s, %s, %s, 오인식 교정 %s, 문장 다듬기 %s, 다듬기 조각 %s, 시간 제한 %.0f초)",
                  self.prompt.version, self.relayout_prompt.version, self.table_prompt.version,
                  self.worker.correction_prompt.version, self.worker.polish_prompt.version,
-                 "켬" if self.worker.correction else "끔", "켬" if self.worker.polish else "끔", self.worker.timeout_s)
+                 "켬" if self.worker.correction else "끔", "켬" if self.worker.polish else "끔",
+                 self.worker.polish_chunk or "없음", self.worker.timeout_s)
 
     def stop(self, timeout_s=90):
         """처리 중인 작업을 마칠 때까지 기다린다. AI 응답 시간 제한(기본 60초)보다 길게 둔다."""
@@ -70,6 +71,7 @@ def setup(app, env) -> MinutesRuntime:
     from .llm_config import make_minutes_llm
     from .placement import RELAYOUT_KIND, load_prompt
     from .polish import POLISH_KIND
+    from .polish import chunk_from_env as polish_chunk_from_env
     from .polish import enabled_from_env as polish_enabled
     from .table import TABLE_KIND
 
@@ -93,6 +95,7 @@ def setup(app, env) -> MinutesRuntime:
         polish_prompt = load_prompt(env.get("MINUTES_POLISH_PROMPT_VERSION") or None, POLISH_KIND)
         enabled_from_env(env)                                 # 틀린 값이면 설정 오류 (작업자는 from_env 에서 다시 읽는다)
         polish_enabled(env)                                   # 같음
+        polish_chunk_from_env(env)                            # 같음
     except (LLMConfigError, ValueError) as e:                 # 지시문 오류(PromptError)도 ValueError
         llm, config_error = None, str(e)
         log.error("회의록 초안 설정 오류: %s", e)

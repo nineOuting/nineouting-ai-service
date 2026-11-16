@@ -27,6 +27,7 @@ from shared.envfile import local_env
 
 from .draft import make_draft
 from .llm_config import make_minutes_llm
+from .polish import chunk_from_env
 from .relayout import previous_lines_from
 from .request import InvalidInput, validate_request
 
@@ -151,7 +152,8 @@ def run(body, llm, args, previous=None, before_items=None):
     except InvalidInput as e:
         sys.exit(f"요청 형식 오류 (API 였다면 400): {e}")
     start = len(llm.calls)
-    result = make_draft(body, llm, timeout_s=args.timeout, max_retries=args.retries)
+    result = make_draft(body, llm, timeout_s=args.timeout, max_retries=args.retries, correction=getattr(args, "correction", True),
+                        polish=getattr(args, "polish", True), polish_chunk=getattr(args, "polish_chunk", 0))
     if args.show_io:
         show_io(llm.calls[start:])
     show(result, previous, before_items)
@@ -169,12 +171,23 @@ def main():
     p.add_argument("--json", action="store_true", help="결과 JSON 전체도 출력")
     p.add_argument("--show-io", action="store_true", help="AI 호출마다 지시문·입력·원래 답·토큰을 출력")
     p.add_argument("--relayout-to", metavar="칸1,칸2", help="처음 초안을 만든 뒤 그 줄을 이 양식으로 다시 배치한다")
+    p.add_argument("--polish-chunk", type=int, help="다듬을 줄을 이 줄 수(5-200)씩 나눠 동시에 부른다. 생략하면 MINUTES_POLISH_CHUNK(없으면 나누지 않음)")
     args = p.parse_args()
+    env = local_env()                                  # 서버와 같은 이름의 설정을 읽는다: MINUTES_CORRECTION=0, MINUTES_POLISH=0, MINUTES_POLISH_CHUNK=N
+    args.correction = env.get("MINUTES_CORRECTION", "1") != "0"
+    args.polish = env.get("MINUTES_POLISH", "1") != "0"
+    try:
+        args.polish_chunk = args.polish_chunk if args.polish_chunk is not None else chunk_from_env(env)
+        if args.polish_chunk:
+            chunk_from_env({"MINUTES_POLISH_CHUNK": str(args.polish_chunk)})
+    except ValueError as e:
+        sys.exit(f"설정 오류: {e}")
 
     logging.basicConfig(level=logging.INFO, format="[로그] %(message)s")
     body = json.loads(args.file.read_text(encoding="utf-8"))
     llm = Recorder(real_llm() if args.real else PlaceAllFakeLLM())
-    print(f"요청: {args.file.name} / AI: {llm.name} ({llm.model})", flush=True)
+    print(f"요청: {args.file.name} / AI: {llm.name} ({llm.model}) / 교정 {'켬' if args.correction else '끔'}, 다듬기 "
+          f"{'끔' if not args.polish else (f'켬, {args.polish_chunk}줄씩 나눠 동시에' if args.polish_chunk else '켬, 한 번에')}", flush=True)
     if not args.relayout_to:
         run(body, llm, args, body.get("previousLines"))
         return

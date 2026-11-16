@@ -367,3 +367,113 @@ def test_옮기는_꼴은_걸린_말과_바로_쓰는_예를_알려_준다():
     after = "얼마나 걸릴지 모른다고 우려함."
     hint = _hint("reported", after, after, after)
     assert "\"모른다고 우려함\"" in hint and "주기로 함" in hint and "~는지 물음" in hint
+
+
+# ---------- 나눠 부르기 (MINUTES_POLISH_CHUNK) ----------
+
+class AnswerFromGood:
+    """줄 번호별 정해 둔 답(GOOD_LINES)으로 낸다. 조각마다 받은 줄만 답한다. 호출 수와 받은 줄을 기록한다 (동시에 불려도 안전하게 잠근다)."""
+    name = "good"
+    model = "good"
+
+    def __init__(self, barrier=None, fail_for=()):
+        import threading
+        self.lock = threading.Lock()
+        self.got = []                                         # 호출마다 받은 줄 번호
+        self.barrier, self.fail_for = barrier, set(fail_for)
+        self.answers = {x["m"]: x["text"] for x in GOOD_LINES["lines"]}
+
+    def generate(self, system, user, timeout_s, effort=None):
+        import json
+        from shared.llm import Reply
+        refs = [line.split(" | ")[0] for line in user.splitlines() if " | " in line and not line.startswith("<")]
+        with self.lock:
+            self.got.append(refs)
+        if self.barrier is not None:
+            self.barrier.wait(timeout=5)                      # 조각이 동시에 불리지 않으면 여기서 기다리다 실패한다
+        if self.fail_for & set(refs):
+            raise LLMTimeout("시간 초과")
+        out = [{"m": r, "text": self.answers[r]} for r in refs if r in self.answers]
+        return Reply(json.dumps({"lines": out}, ensure_ascii=False), 100, 20)
+
+
+def _targets(materials):
+    return {m.ref for m in materials if m.ref in PLACED}
+
+
+@pytest.mark.parametrize("env, want", [({}, 0), ({"MINUTES_POLISH_CHUNK": ""}, 0), ({"MINUTES_POLISH_CHUNK": "0"}, 0),
+                                       ({"MINUTES_POLISH_CHUNK": " 20 "}, 20), ({"MINUTES_POLISH_CHUNK": "5"}, 5),
+                                       ({"MINUTES_POLISH_CHUNK": "200"}, 200)])
+def test_다듬기_조각_설정은_기본_0이고_5에서_200까지_받는다(env, want):
+    from minutes.polish import chunk_from_env
+    assert chunk_from_env(env) == want
+
+
+@pytest.mark.parametrize("raw", ["4", "201", "-1", "abc", "1.5", "true"])
+def test_다듬기_조각_설정이_범위_밖이면_설정_오류(raw):
+    from minutes.polish import chunk_from_env
+    with pytest.raises(ValueError, match="MINUTES_POLISH_CHUNK"):
+        chunk_from_env({"MINUTES_POLISH_CHUNK": raw})
+
+
+def test_조각으로_나눠도_결과가_한_번에_부른_것과_같다(materials):
+    refs = _targets(materials)
+    whole = polish(materials, refs, AnswerFromGood(), 60.0)
+    llm = AnswerFromGood()
+    parts = polish(materials, refs, llm, 60.0, chunk=3)
+    assert [m.text for m in parts.materials] == [m.text for m in whole.materials]
+    assert parts.sent == whole.sent and parts.polished == whole.polished and parts.error_code is None
+    from minutes.polish import targets
+    order = [m.ref for m in targets(materials, refs)]            # 사람이 고친 항목(m6, m7)은 다듬지 않는다
+    assert len(llm.got) == -(-len(order) // 3) and sorted(sum(llm.got, [])) == sorted(order)
+
+
+def test_조각이_하나_이하면_나누지_않고_한_번_부른다(materials):
+    refs = _targets(materials)
+    llm = AnswerFromGood()
+    polish(materials, refs, llm, 60.0, chunk=len(refs))      # 줄 수가 조각 크기를 넘지 않음
+    assert len(llm.got) == 1
+    llm = AnswerFromGood()
+    polish(materials, refs, llm, 60.0, chunk=0)
+    assert len(llm.got) == 1
+
+
+def test_조각은_동시에_부른다(materials):
+    import threading
+    from minutes.polish import targets
+    refs = _targets(materials)
+    n_chunks = -(-len(targets(materials, refs)) // 3)
+    assert n_chunks >= 2
+    llm = AnswerFromGood(barrier=threading.Barrier(n_chunks))   # 모든 조각이 동시에 도착해야 통과한다
+    result = polish(materials, refs, llm, 60.0, chunk=3)
+    assert len(llm.got) == n_chunks and result.error_code is None and result.polished > 0
+
+
+def test_조각_하나가_실패해도_나머지는_다듬고_그_조각만_원래_글이다(materials):
+    refs = _targets(materials)
+    # 조각은 targets() 의 순서(재료 순서)로 나뉜다. 두 번째 조각의 첫 줄이 들어 있는 조각만 시간 초과
+    from minutes.polish import targets
+    order = [m.ref for m in targets(materials, refs)]
+    groups = [order[i:i + 3] for i in range(0, len(order), 3)]
+    llm = AnswerFromGood(fail_for={groups[1][0]})
+    result = polish(materials, refs, llm, 60.0, chunk=3)
+    whole = polish(materials, refs, AnswerFromGood(), 60.0)
+    base = {m.ref: m.text for m in polish(materials, refs, AnswerFromGood(), 60.0, enabled=False).materials}
+    got = {m.ref: m.text for m in result.materials}
+    want = {m.ref: m.text for m in whole.materials}
+    for ref in groups[1]:
+        assert got[ref] == base[ref], "실패한 조각은 ① 의 글"
+    for ref in set(order) - set(groups[1]):
+        assert got[ref] == want[ref], "다른 조각은 다듬은 글"
+    assert result.error_code is not None and result.polished > 0
+
+
+def test_초안은_조각_수를_받아_로그에_남기고_결과는_같다(body, caplog):
+    llm_whole, llm_chunk = ScriptLLM(GOOD, polishes=[GOOD_LINES]), ScriptLLM(GOOD, polishes=[GOOD_LINES])
+    with caplog.at_level(logging.INFO, logger="minutes.draft"):
+        whole = make_draft(body, llm_whole, polish_chunk=0)
+        chunk = make_draft(body, llm_chunk, polish_chunk=100)   # 줄이 100개를 넘지 않아 나누지 않음
+    assert whole["status"] == chunk["status"] == SUCCEEDED
+    assert whole["sections"] == chunk["sections"]
+    done = [r.getMessage() for r in caplog.records if "초안 완료" in r.getMessage()]
+    assert len(done) == 2 and "polish_chunk" not in done[0] and "polish_chunk=100" in done[1]

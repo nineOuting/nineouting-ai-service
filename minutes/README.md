@@ -14,6 +14,7 @@
 | STT 오인식 교정 (명세 7.7) | 구현 (SCRUM-150, `correction.py`). 처음 초안에서 칸을 고르기 전에 AI 를 한 번 더 불러 "잘못 적힌 말 → 맞는 표기" 쌍만 받는다. 맞는 표기는 요청 안(요약 글의 「」 밖, 안건 제목, 결정할 사항)의 것을 먼저 쓰고, 없으면 앞뒤 글로 분명할 때만 짐작한다 (SCRUM-151). 소리가 비슷한 쌍만 코드가 `테라폼(STT: 테로폰)`, `버그 수정(STT: 어그 수정)` 모양으로 반영한다. 원래 글이 남아 사용자가 판단한다. 실패하면 교정 없이 간다. 다시 배치에서는 하지 않는다 |
 | 문장 다듬기 (명세 7.8) | 구현 (SCRUM-218, `polish.py`). 배치·표 채우기 뒤 글 필드의 줄을 개조식 "~함/~음"·아라비아 숫자·대괄호 표시(`[맞는 표기]`, `[불확실한 말?]`)로 다시 쓴다. 코드가 숫자·표시·영어 낱말·길이를 검사해 걸린 줄은 원문(읽은 값만 바꾼 글). 실패하면 원문. 사람이 고친 항목·표·다시 배치는 다듬지 않는다 |
 | 양식 변경 시 다시 배치 (`previousLines`) | 구현 (SCRUM-98, `relayout.py`). 고친 줄·새로 쓴 줄은 글 그대로 칸만 다시 고름. 처음 초안과 지시문을 따로 씀 (`prompts/relayout/`) |
+| 양식 가져오기 (REQ-195, SCRUM-289) | 모듈과 손 시험 도구 구현, 서버 주소 없음 (`template_import.py`). 양식 PDF 에서 항목(제목, 기록 방식, 표 열 개수, 설명, 머리글·바닥글)을 읽어 `template.fields` 모양으로 만든다. AI 는 줄 번호만 고르고 글은 코드가 원문에서 가져온다. 실제 양식 PDF 로는 아직 평가하지 않았다. 계약은 `docs/api/template-import-contract.md` (초안, 협의 전) |
 | 근거·맥락 연결 (AI-11) | ai-service API 없음. 결과의 `sources`·`transcriptSeqs` 를 백엔드가 따라간다 |
 
 ## 흐름
@@ -89,6 +90,13 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 .venv/bin/python -m minutes.try_draft                           # 합성 요청, 가짜 AI (비용 없음)
 .venv/bin/python -m minutes.try_draft --real                    # 실제 AI (MINUTES_LLM_*. 환경변수가 없으면 .env). 호출마다 요금이 나간다
 .venv/bin/python -m minutes.try_draft --file 요청.json --real --show-io   # AI 입력·출력·토큰까지
+```
+
+양식 가져오기: 양식 PDF 한 개를 읽는다. 먼저 모델 없이 꺼낸 줄을 본다 (비용 0).
+
+```bash
+.venv/bin/python -m minutes.try_template_import 양식.pdf                 # 줄 보기만. 표가 어떻게 나오는지 먼저 확인
+.venv/bin/python -m minutes.try_template_import 양식.pdf --real --show-io  # 실제 AI. 호출 1번 이상, 요금이 나간다
 ```
 
 - 실제 AI 를 쓰면 요약 내용이 공급자(Google)로 전송된다

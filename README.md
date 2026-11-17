@@ -39,7 +39,7 @@ flowchart LR
 | 안건 상태 판정 | 구현, 평가 전 | 안건마다 아직 안 다룸·논의 중·결정·미결·결정 확인 필요 중 하나와 근거 줄을 안건 보드에 담음. 줄이 있는 안건만 모델이 결정 여부를 판정하고, 결정에는 근거 줄이 필수 (`docs/api/agenda-status-contract.md`) |
 | 안건별 의견·할 일 정리 | 구현, 평가 전 | 안건마다 주요 의견·근거와 할 일(담당자·기한)을 안건 보드에 담음. 의견과 할 일은 모델을 따로 부르고 그 안건의 원문 줄만 입력으로 씀. 참석자 명단은 안건 목록 요청의 선택 필드로 받아 담당자 이름을 코드로 맞춤. 사람이 고친 항목은 고정하고 근거가 달라지면 "확인 필요" 표시 (`docs/api/agenda-opinions-contract.md`) |
 | 주제 변경 감지·새 안건 제안 | 구현, 평가 전 | 등록된 안건과 관계없는 이야기(해당 없음)가 끊김 없이 60초 이어지면 안건 보드 `offTopic`에 새 안건 제안(제목 포함)을 담음. 무시한 뒤 180초 더 이어지면 "지금 다른 이야기" 알림. 감지는 분류 결과만 읽고, 모델은 제목을 만들 때 한 번만 부름 (`docs/api/agenda-offtopic-contract.md`) |
-| 용어 카드(먼저 알려드려요) | 구현, 평가 전, 기본 꺼짐 | 회의 중 처음 나온 낯선 용어의 뜻을 안건 보드 `hints`(최근 카드 3장)와 `terms`(찾은 용어 전체: 전사에서 용어를 칠하고 뜻 카드를 띄우는 데 씀)에 담음. 팀 용어집에 있는 말은 모델 없이, 없는 말은 모델로 찾아 코드가 근거를 확인함. `TRANSCRIPT_TERMS=1`일 때만 동작 (`docs/api/transcript-terms-contract.md`) |
+| 전사 속 용어 | 구현, 평가 전, 기본 꺼짐 | 회의 중 전사에 나온 낯선 용어와 한 줄 뜻의 목록을 안건과 상관없이 따로 보냄. 화면은 이 목록으로 전사에서 용어를 칠하고 마우스를 올리면 뜻을 보여 줌. 팀 용어집에 있는 말은 모델 없이, 없는 말은 모델로 찾아 코드가 근거를 확인함. `TRANSCRIPT_TERMS=1`일 때만 동작 (`docs/api/transcript-terms-contract.md`) |
 | 미결 안건 추출 | 구현, 모델 호출 없음 | 종료 버튼을 누르면 안건 상태를 종료 확정으로 가정해 다음 회의로 넘길 후보(미결·아직 안 다룸·결정 확인 필요)와 지금까지의 논의 요약(AI-03 요약 문장)을 안건 보드 `leftover`에 담음. 종료 직전 마지막 판정(flush)을 한 번 하고, 이어서 논의하기로 거둘 수 있음 (`docs/api/agenda-leftover-contract.md`) |
 | 오늘 회의 요약 정리본 | 구현, 모델 호출 없음 | 종료 버튼을 누르면(미결 안건과 같은 시점) 안건마다 상태·판정 근거·요약 문장·의견·할 일을 묶은 정리본을 안건 보드 `todaySummary`에 담음. 새로 요약하지 않고 보드의 값을 복사해 배치만 하며 결정 문장은 만들지 않음(회의록 초안이 판정 근거로 씀) (`docs/api/agenda-today-summary-contract.md`) |
 | 회의록 초안 | 구현, 평가 전 | 회의 끝 요약(`todaySummary`)과 양식을 받아 칸마다 근거가 붙은 줄 목록을 만들고 콜백으로 돌려줌. AI 는 칸 고르기와 결정 문장 다듬기만 함. `MINUTES_DATABASE_URL`이 있을 때만 켜짐 (`minutes/README.md`, `docs/api/minutes-draft-contract.md`) |
@@ -89,7 +89,6 @@ flowchart LR
 | 사람이 고친 결정 내용 | `POST /internal/meetings/{meetingId}/decision-edits` |
 | 사용자가 정한 결정할 사항 상태 | `POST /internal/meetings/{meetingId}/status-edits` |
 | 새 안건 제안을 무시했다는 알림 | `POST /internal/meetings/{meetingId}/off-topic-actions` |
-| 용어 카드 닫기, "먼저 알려드려요" 끄기·켜기 | `POST /internal/meetings/{meetingId}/hint-actions` (`TRANSCRIPT_TERMS=1`일 때만 받음) |
 | 종료 버튼·이어서 논의하기 알림 | `POST /internal/meetings/{meetingId}/end-requests` |
 | 상태 확인 | `GET /health` |
 
@@ -109,6 +108,7 @@ flowchart LR
 - 안건별 요약은 `PUT {백엔드 주소}/internal/meetings/{meetingId}/agenda-board`로 보낸다. 안건 목록의 모든 안건을 담은 전체 상태이고, 담을 값이 바뀌었을 때만 보내며 1초에 한 번보다 자주 보내지 않는다. 가장 큰 `version`이 최신이다 (`docs/api/agenda-summary-contract.md`).
 - 새 안건 제안은 같은 안건 보드의 `offTopic`에 담는다. 제안이 없으면 `null`이고, 사용자가 제안을 닫으면 백엔드가 `POST .../off-topic-actions`로 알린다 (`docs/api/agenda-offtopic-contract.md`).
 - 미결 안건 목록은 같은 안건 보드의 `leftover`에 담는다. 종료 버튼 요청이 없으면 `null`, 남은 안건이 없으면 `agendas`가 빈 배열이다. 사용자가 회의 종료를 누르면 백엔드가 `POST .../end-requests`(`request`)로, 이어서 논의하기를 고르면 `cancel`로 알린다. `end`는 회의가 정말 끝날 때만 보낸다 (`docs/api/agenda-leftover-contract.md`).
+- 전사 속 용어 목록은 `PUT {백엔드 주소}/internal/meetings/{meetingId}/transcript-terms`로 보낸다. 안건 보드와 따로, 안건이 없는 회의에서도 나간다. 이 회의에서 찾은 용어 전체이고, 바뀌었을 때만 보내며 1초에 한 번보다 자주 보내지 않는다. 회의가 끝나면 `final: true`로 한 번 보낸다. 가장 큰 `version`이 최신이다. `TRANSCRIPT_TERMS=1`일 때만 보낸다 (`docs/api/transcript-terms-contract.md`).
 - 오늘 회의 요약 정리본은 같은 안건 보드의 `todaySummary`에 담는다. 채워지는 시점은 `leftover`와 같고(종료 버튼 요청 뒤, 이어서 논의하기를 받으면 `null`, 회의가 끝나면 마지막 값), 만들다 실패하면 이 칸만 `null`로 나간다 (`docs/api/agenda-today-summary-contract.md`).
 - 일시적 실패(408, 429, 5xx, 연결 오류)는 1, 2, 4초 간격으로 3번 다시 보내고, 그 밖의 4xx는 버린다. 백엔드가 어떤 4xx를 돌려주는지는 연동 때 확인한다.
 
@@ -139,6 +139,7 @@ flowchart LR
 | `CLASSIFY_REFRESH_SEC` | 안건 분류 모델 호출 간격(음성 시간 초) | 30 |
 | `MAX_CLASSIFY_CALLS_PER_MEETING` | 회의당 안건 분류 호출 상한 | 200 |
 | `AGENDA_BOARD_PATH` | 안건 보드를 보낼 경로 (`BACKEND_BASE_URL`과 같은 주소로) | `/internal/meetings/{meeting_id}/agenda-board` |
+| `TRANSCRIPT_TERMS_PATH` | 전사 속 용어 목록을 보낼 경로 (`BACKEND_BASE_URL`과 같은 주소로) | `/internal/meetings/{meeting_id}/transcript-terms` |
 | `AGENDA_SUMMARY_REFRESH_SEC` | 안건에 새 줄이 1개뿐일 때 요약을 기다리는 시간(음성 시간 초). 2개 이상이면 바로 요약 | 60 |
 | `MAX_AGENDA_SUMMARY_CALLS_PER_MEETING` | 회의당 안건별 요약 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
 | `AGENDA_SUMMARY_PROMPT` | 안건 요약 프롬프트 버전. `v1`은 지금 방식(받아쓰기 오류를 고쳐 쓰지 않고 명사형 어미). `v7`은 맥락으로 분명한 받아쓰기 오류를 고쳐 쓰고 정정 목록을 검사하며 해요체로 씀. `v8`은 `v7`에 더해 마침표까지 해요체로 쓰고 숫자·날짜·요일을 「」나 환산 없이 전사 표기 그대로 씀. 합성 대본 4개 평가에서 일부 기준(몰래 교정 0, 핵심 포함)이 미달이었고 실제 회의로는 아직 확인하지 않았음. 값이 `v1`~`v8`이 아니면 시작할 때 설정 오류. 실제 회의로 확인하기 전에는 `v1` | `v1` |
@@ -155,8 +156,8 @@ flowchart LR
 | `AGENDA_OFFTOPIC_SEC` | 해당 없음이 이만큼 이어지면 새 안건 제안(음성 시간 초) | 60 |
 | `AGENDA_OFFTOPIC_LONG_SEC` | 제안을 무시한 뒤 이만큼 더 이어지면 "지금 다른 이야기" 알림(초) | 180 |
 | `MAX_AGENDA_OFFTOPIC_CALLS_PER_MEETING` | 회의당 새 안건 제목 호출 상한 (평가 뒤 다시 정함) | 20 |
-| `TRANSCRIPT_TERMS` | `1`이면 용어 카드(먼저 알려드려요)를 켬: 보드에 `hints`·`terms` 칸이 생기고 용어 후보를 찾는 모델도 부름. `0`이나 비우면 끔(보드 모양이 지금과 같고 모델도 안 부름). `0`·`1`이 아니면 시작할 때 설정 오류. 실제 회의로 용어 후보를 평가하기 전에는 `0` | `0` |
-| `TRANSCRIPT_TERMS_GLOSSARY_PATH` | 팀 용어집 JSON 경로. 용어집에 있는 말은 모델 없이 카드로 만들고 `name`(화면에 보일 이름)·`aliases`(같은 뜻의 다른 표기)도 낸다. 경로가 있는데 파일이 없거나 형식이 틀리면 시작할 때 설정 오류. 비우면 모델 길만. `TRANSCRIPT_TERMS=1`일 때만 읽음 | 없음 |
+| `TRANSCRIPT_TERMS` | `1`이면 전사 속 용어를 켬: 용어 목록을 따로 보내고 용어 후보를 찾는 모델도 부름. `0`이나 비우면 끔(목록을 보내지 않고 모델도 안 부름). `0`·`1`이 아니면 시작할 때 설정 오류. 실제 회의로 용어 후보를 평가하기 전에는 `0` | `0` |
+| `TRANSCRIPT_TERMS_GLOSSARY_PATH` | 팀 용어집 JSON 경로. 용어집에 있는 말은 모델 없이 목록에 넣고 `name`(화면에 보일 이름)·`aliases`(같은 뜻의 다른 표기)도 낸다. 경로가 있는데 파일이 없거나 형식이 틀리면 시작할 때 설정 오류. 비우면 모델 길만. `TRANSCRIPT_TERMS=1`일 때만 읽음 | 없음 |
 | `TRANSCRIPT_TERMS_REFRESH_SEC` | 새 줄이 4개 안 모였어도 이만큼(음성 시간 초) 지나면 용어 후보를 찾음 | 60 |
 | `MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING` | 회의당 용어 후보 찾기 호출 상한 (넘으면 모델 길만 멈추고 용어집 길은 계속) | 60 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 토큰 지표를 OTLP(HTTP)로도 보낼 주소 | 없음 |

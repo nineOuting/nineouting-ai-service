@@ -32,7 +32,7 @@ if SUMMARY_DIR not in sys.path:
     sys.path.insert(0, SUMMARY_DIR)
 
 from input_adapter import (adapt_batch, adapt_event, adapt_agendas, adapt_corrections, adapt_summary_edits,  # noqa: E402
-                           adapt_item_edits, adapt_decision_edits, adapt_status_edits, adapt_offtopic_action, adapt_hint_action, adapt_end_request, AdapterError)
+                           adapt_item_edits, adapt_decision_edits, adapt_status_edits, adapt_offtopic_action, adapt_end_request, AdapterError)
 from meeting_live_summary_v2 import LiveSummarizer, Cfg, LIVE_PROMPT_VERSIONS  # noqa: E402
 from agenda_classifier import AgendaClassifier, ClassifyCfg  # noqa: E402
 from agenda_summarizer import PROMPT_VERSIONS, AgendaSummarizer, SummarizeCfg  # noqa: E402
@@ -43,7 +43,7 @@ from agenda_todos import AgendaTodos, TodoCfg  # noqa: E402
 from agenda_offtopic import AgendaOffTopic, OffTopicCfg  # noqa: E402
 from agenda_leftover import AgendaLeftover  # noqa: E402
 from transcript_terms import TranscriptTerms, Glossary, TermsCfg  # noqa: E402
-from .publisher import AGENDA_CLASSIFICATION, AGENDA_BOARD  # noqa: E402
+from .publisher import AGENDA_CLASSIFICATION, AGENDA_BOARD, TRANSCRIPT_TERMS  # noqa: E402
 
 log = logging.getLogger("ai-service")
 
@@ -201,8 +201,8 @@ def todo_cfg_from_env(env=None, cfg=None):
 
 
 def terms_from_env(env=None, cfg=None):
-    """환경변수 -> 용어 카드("먼저 알려드려요") 설정. 반환: (TermsCfg, Glossary). 꺼져 있으면 (None, None).
-    TRANSCRIPT_TERMS(0 또는 1, 기본 0 = 끔. 끄면 보드에 hints·terms 칸도 없고 모델도 부르지 않는다),
+    """환경변수 -> 전사 속 용어 설정. 반환: (TermsCfg, Glossary). 꺼져 있으면 (None, None).
+    TRANSCRIPT_TERMS(0 또는 1, 기본 0 = 끔. 끄면 용어 목록을 보내지 않고 모델도 부르지 않는다),
     TRANSCRIPT_TERMS_GLOSSARY_PATH(팀 용어집 JSON 경로, 없으면 모델 길만), TRANSCRIPT_TERMS_REFRESH_SEC(새 줄이 모자랄 때 기다리는 시간, 기본 60초),
     MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING(회의당 모델 호출 상한, 기본 60). 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
     값이 틀리거나 용어집을 읽지 못하면 ConfigError (서버가 뜨지 않는다)."""
@@ -294,9 +294,10 @@ class MeetingState:
         self.offtopic = AgendaOffTopic(self.classifier, offtopic_cfg or OffTopicCfg(provider=cfg.provider, model=cfg.model),
                                        llm=offtopic_llm)                 # 분류 결과를 읽어 해당 없음이 오래 이어지면 새 안건을 제안
         self.leftover = AgendaLeftover()    # 종료 버튼을 누르면 미결 안건 목록을 만든다 (모델을 부르지 않는다)
-        self.hints = (TranscriptTerms(self.classifier, terms_glossary, terms_cfg, llm=terms_llm)   # 용어 카드. TRANSCRIPT_TERMS=1 일 때만 (기본 꺼짐)
+        self.terms = (TranscriptTerms(self.classifier, terms_glossary, terms_cfg, llm=terms_llm)   # 전사 속 용어. TRANSCRIPT_TERMS=1 일 때만 (기본 꺼짐)
                       if terms_cfg is not None else None)
-        self.hint_rev = 0                   # 용어 카드 조작(닫기, 끄기·켜기)의 마지막 rev. 이보다 작거나 같은 것은 오래된 요청이다
+        self.terms_sig = None               # 마지막으로 보낸 용어 목록 (같으면 다시 보내지 않는다)
+        self.terms_version = 0              # 마지막으로 보낸 용어 목록의 version
         self.cls_version = 0                # 백엔드로 보낸 안건 분류 결과의 마지막 version
         self.status = "new"                 # new -> running <-> paused -> ended
         self.lock = threading.Lock()
@@ -556,32 +557,6 @@ class Registry:
             self._ensure_worker(m)
         return {"accepted": True, "result": {"applied": "accepted", "stale": "stale", "not_active": "not_active"}[r], "applied": r == "applied"}
 
-    def receive_hint_action(self, path_meeting_id, msg):
-        """용어 카드 닫기, "먼저 알려드려요" 끄기·켜기 (transcript-terms-contract.md 6장). 기능이 꺼져 있으면 무시한다.
-        rev 가 앞서 받은 것보다 크지 않으면 오래된 요청이라 stale 로 돌려준다."""
-        self._require_ready()
-        a = adapt_hint_action(msg)
-        self._check_same_id(path_meeting_id, a["meeting_id"])
-        m = self._get(a["meeting_id"], a.get("meeting_id_raw"))
-        with m.lock:
-            if m.status == "ended":
-                return {"accepted": False, "result": "ignored", "reason": "ended"}
-        if m.hints is None:
-            return {"accepted": False, "result": "ignored", "reason": "off"}
-        with m.lock:
-            if a["rev"] <= m.hint_rev:
-                return {"accepted": True, "result": "stale", "applied": False}
-            m.hint_rev = a["rev"]
-        if a["action"] == "dismiss":
-            result = "accepted" if m.hints.dismiss(a["hint_id"]) == "accepted" else "not_found"
-        else:
-            m.hints.set_enabled(a["action"] == "enable")
-            result = "accepted"
-        if result == "accepted":
-            m.queue.put(("tick", None))                         # 다음 주기에 바뀐 hints·terms 로 보드를 보낸다
-            self._ensure_worker(m)
-        return {"accepted": True, "result": result, "applied": result == "accepted"}
-
     def receive_end_request(self, path_meeting_id, msg):
         """종료 버튼 요청·이어서 논의하기 (agenda-leftover-contract.md 4장). 목록은 다음 안건 보드의 leftover 칸으로 나간다."""
         self._require_ready()
@@ -734,8 +709,8 @@ class Registry:
                  ("agenda_opinions", lambda: m.opinions.process(final=final)),
                  ("agenda_todos", lambda: m.todos.process(final=final)),
                  ("agenda_offtopic", lambda: m.offtopic.process(final=final))]
-        if m.hints is not None:
-            steps.append(("transcript_terms", lambda: m.hints.process(final=final)))
+        if m.terms is not None:
+            steps.append(("transcript_terms", lambda: m.terms.process(final=final)))
         if self.parallel:
             threads = [threading.Thread(target=self._step, args=(m, name, fn), name=f"meeting-{m.meeting_id}-{name}", daemon=True)
                        for name, fn in steps]
@@ -748,6 +723,8 @@ class Registry:
                 self._step(m, name, fn)
         self._step(m, "agenda_leftover", lambda: m.leftover.process(final=final))
         self._step(m, "agenda_board", lambda: self._publish_board(m))
+        if m.terms is not None:
+            self._step(m, "transcript_terms_publish", lambda: self._publish_terms(m, final))
 
     @staticmethod
     def _safe(m, name, fn):
@@ -776,15 +753,25 @@ class Registry:
         todos = self._safe(m, "todos", m.todos.board_items)
         off_topic = self._safe(m, "offtopic", m.offtopic.board)
         leftover = self._safe(m, "leftover", lambda: self._leftover_meta(m))     # 읽지 못하면 칸을 비운다(null). 보드 전송은 계속한다
-        hints = terms = None
-        if m.hints is not None:                                                   # 꺼져 있으면 보드에 두 칸 모두 넣지 않는다
-            hints = self._safe(m, "hints", m.hints.board) or []
-            terms = self._safe(m, "hint_terms", m.hints.terms) or []
         board = m.agenda_summarizer.take_board(status_info=m.status_judge.board_status(), opinions=opinions, todos=todos,
                                                based_extra=max(m.opinions.based_on_seq(), m.todos.based_on_seq()), off_topic=off_topic,
-                                               leftover=leftover, hints=hints, terms=terms)
+                                               leftover=leftover)
         if board is not None:
             self.publisher.submit(m.meeting_id, board, kind=AGENDA_BOARD)
+
+    def _publish_terms(self, m, final):
+        """이 회의에서 찾은 전사 속 용어 목록을 안건과 상관없이 보낸다 (transcript-terms-contract.md).
+        목록이 바뀌었을 때만 보내고, 회의가 끝나면(final) 바뀌지 않았어도 final=true 로 한 번 보낸다. 아무것도 찾지 않았으면 끝날 때만 보낸다."""
+        if self.publisher is None or not self.publisher.enabled:
+            return
+        terms = m.terms.terms()
+        sig = json.dumps(terms, ensure_ascii=False, sort_keys=True)
+        if not final and (sig == m.terms_sig or (not terms and m.terms_sig is None)):
+            return
+        m.terms_sig = sig
+        m.terms_version = max(m.terms_version + 1, int(time.time() * 1000))   # 재시작해도 줄어들지 않도록 시각(밀리초) 이상으로
+        self.publisher.submit(m.meeting_id, {"meetingId": m.id_raw, "version": m.terms_version, "final": bool(final), "terms": terms},
+                              kind=TRANSCRIPT_TERMS)
 
     def _maybe_publish(self, m, final):
         """요약이 바뀌었으면(또는 종료이면) 백엔드로 보낼 목록에 올린다."""
@@ -843,7 +830,7 @@ class Registry:
                 "agendaOpinions": m.opinions.info(),
                 "agendaTodos": m.todos.info(),
                 "agendaOffTopic": m.offtopic.info(),
-                "transcriptTerms": m.hints.info() if m.hints is not None else None,
+                "transcriptTerms": m.terms.info() if m.terms is not None else None,
                 "agendaLeftover": m.leftover.info(),
                 "agendaTodaySummary": m.agenda_summarizer.today_info(),
                 "publisher": self.publisher.info() if self.publisher else {"enabled": False},

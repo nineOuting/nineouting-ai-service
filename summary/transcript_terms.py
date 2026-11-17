@@ -1,31 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-먼저 알려드려요 - 용어 카드 (기능 추가 제안 1번의 1차 범위)
+전사 속 용어 (REQ-191, 화면 기획서 Live_24)
 
-회의 중 낯선 용어가 처음 나오면 "이 말은 이런 뜻이에요" 카드를 만든다. 지난 회의 카드는 이 모듈에 넣지 않았다.
-**서버에는 연결하지 않았다.** server/service.py, 보드 조립, 백엔드 계약은 건드리지 않고, 모듈과 자체 시험만 있다. 형식 제안은 docs/api/transcript-terms-contract.md.
+회의 중 전사에 낯선 용어가 나오면 그 용어와 한 줄 뜻을 목록에 더한다. 화면은 이 목록으로 전사 전체에서 용어에 색을 칠하고,
+마우스를 올리면 뜻을 보여 준다. 목록은 안건과 상관없이 따로 보낸다(server/service.py). 형식은 docs/api/transcript-terms-contract.md.
 
-카드를 만드는 길 두 가지
-  1) 용어집(JSON)에 있는 말이 새 줄에 나오면 -> 모델 없이 카드를 만든다. origin = GLOSSARY, 뜻은 용어집 문장 그대로.
+용어를 찾는 길 두 가지
+  1) 용어집(JSON)에 있는 말이 새 줄에 나오면 -> 모델 없이 더한다. origin = GLOSSARY, 뜻은 용어집 문장 그대로.
   2) 용어집에 없는 낯선 말 -> 모델을 불러 용어 후보와 한 줄 뜻을 받는다. origin = AI_EXPLAIN. 새 줄이 min_new_lines 개 모이거나
-     refresh_sec(음성 시간)이 지나면 부른다. 코드가 후보를 확인해서 통과한 것만 카드로 만든다.
+     refresh_sec(음성 시간)이 지나면 부른다. 코드가 후보를 확인해서 통과한 것만 더한다.
 
 코드가 확인하는 것 (모델 출력을 믿지 않는다)
   - 용어가 근거로 낸 줄 안에 실제로 있어야 한다. STT 불확실 표시 안의 글자이면 안 된다 (잘못 받아쓴 말을 설명하지 않으려는 것).
-  - confident 가 true 가 아니면 카드를 만들지 않는다 (오류로 세지 않는다).
+  - confident 가 true 가 아니면 더하지 않는다 (오류로 세지 않는다).
   - 용어는 2~20자 한 줄, 뜻은 한 줄이고 60자 이하이며 「」 인용이 없어야 한다.
-  - 이미 안내한 용어, 용어집에 있는 용어(용어집 길로 처리), 안건 제목에 든 말은 만들지 않는다.
+  - 이미 찾은 용어, 용어집에 있는 용어(용어집 길로 처리), 안건 제목에 든 말은 더하지 않는다. 안건이 없으면 제목 검사만 건너뛴다.
   - 낮은 확신도 줄과 맞장구·간투사 줄은 용어를 찾는 입력에서 뺀다 (build_input 규칙).
 
-카드 정책
-  - 같은 용어는 회의 한 번에 한 번만 (사용자가 닫은 카드도 다시 만들지 않는다).
-  - 동시에 보이는 카드는 최대 max_cards(3)장. 더 만들어지면 가장 오래된 카드는 목록에서 빠진다 (화면이 접는다).
-  - 사용자가 "먼저 알려드려요"를 끄면(set_enabled(False)) 카드도 모델 호출도 없다. 다시 켜면 그 뒤 줄부터 본다.
+목록 정책
+  - 같은 용어(별칭 포함)는 회의 한 번에 한 번만 목록에 들어간다.
+  - 목록은 오래된 것부터 최대 max_terms(200)개까지 남긴다. 넘으면 가장 오래된 것이 빠지고, 빠진 용어도 다시 더하지 않는다.
 
 호출 상한: 회의당 max_calls. 연속 3번 실패하거나 상한에 닿으면 모델 호출만 멈춘다 (용어집 길은 계속 된다).
 줄은 한 번만 본다: 한 번 본 줄이 나중에 고쳐져도 다시 보지 않는다.
-스레드: 일꾼 스레드(process, board)와 요청 스레드(dismiss, set_enabled, info)가 함께 쓴다. 상태 변경은 락 안에서, 모델 호출은 락 밖에서 한다.
+스레드: 일꾼 스레드(process)와 요청 스레드(terms, info)가 함께 쓴다. 상태 변경은 락 안에서, 모델 호출은 락 밖에서 한다.
 로그 규칙: 전사 내용, 안건 제목, 용어, 뜻을 남기지 않는다. 개수와 예외 이름만 남긴다.
 LLM_PROVIDER=echo 이면 모델을 부르지 않는다 (비용 0).
 """
@@ -46,7 +45,6 @@ log = logging.getLogger("ai-service.transcript-terms")
 
 TASK = "transcript_terms"                 # 토큰 사용량 지표의 ai.task 값 (새 값이라 cn 팀 집계 확인이 필요하다)
 MAX_STREAK = 3                        # 연속 실패가 이만큼이면 모델 호출을 멈춘다
-KIND_TERM = "TERM"
 ORIGIN_GLOSSARY = "GLOSSARY"
 ORIGIN_AI = "AI_EXPLAIN"
 
@@ -64,7 +62,7 @@ SYSTEM_PROMPT = """너는 회의 전사에서 참석자가 낯설어할 만한 �
 
 
 class TermsCfg:
-    """용어 카드 설정. 값은 모두 제안이며 평가 뒤에 다시 정한다."""
+    """전사 속 용어 설정. 값은 모두 제안이며 평가 뒤에 다시 정한다."""
 
     def __init__(self, **kw):
         self.provider = "echo"
@@ -73,9 +71,8 @@ class TermsCfg:
         self.refresh_sec = 60             # 새 줄이 있는데 이 시간(음성 시간)이 지났으면 모자라도 찾는다
         self.max_lines = 30               # 모델 한 번에 주는 줄 수
         self.max_calls = 60               # 회의당 호출 상한
-        self.max_cards = 3                # 동시에 보이는 카드 수
         self.max_per_call = 3             # 한 번의 응답에서 받는 용어 수
-        self.max_terms = 200              # 보드 terms 칸에 담는 용어 수 상한 (넘으면 가장 오래된 것부터 뺀다)
+        self.max_terms = 200              # 목록에 담는 용어 수 상한 (넘으면 가장 오래된 것부터 뺀다)
         self.term_max_chars = 20
         self.explain_max_chars = 60
         for k, v in kw.items():
@@ -194,13 +191,12 @@ class TranscriptTerms:
         self.cfg = cfg or TermsCfg()
         self.llm = llm or make_llm(self.cfg)
         self.lock = threading.RLock()
-        self.enabled = True
         self.ended = False
         self.seen = set()             # 이미 본 줄 id
         self.pending = []             # 용어 후보를 아직 찾지 않은 줄
         self.pending_since = 0        # pending 이 비어 있다가 채워진 음성 시간(ms)
-        self.cards = []               # 만든 카드 전부 (순서대로): {"id","key","term","text","origin","evidence","dismissed"}
-        self.shown = set()            # 카드를 만든 용어 키 (닫은 것도 포함)
+        self.items = []               # 찾은 용어 전부 (순서대로): {"id","key","term","name","aliases","text","origin","first_seq"}
+        self.known = set()            # 목록에 넣은 적 있는 용어 키 (목록에서 빠진 것도 포함)
         self.serial = 0
         self.calls = 0
         self.errors = 0
@@ -219,22 +215,20 @@ class TranscriptTerms:
         return {"kept": kept, "titles": titles, "now_ms": now_ms}
 
     def process(self, final=False):
-        """새 줄에서 카드를 만든다. 용어집 길은 항상, 모델 길은 시점이 되면. 반환: 모델을 부른 횟수."""
+        """새 줄에서 용어를 찾는다. 용어집 길은 항상, 모델 길은 시점이 되면. 반환: 모델을 부른 횟수.
+        final(회의 끝)이면 마지막 줄까지 용어집 길만 보고 모델은 부르지 않는다. 그 뒤로는 아무것도 하지 않는다."""
         view = self._view()
         with self.lock:
-            if final:
-                self.ended = True
-                self.pending = []
-                return 0
             if self.ended:
                 return 0
             new = [ln for ln in view["kept"] if ln["id"] not in self.seen]
             for ln in new:
                 self.seen.add(ln["id"])
-            if not self.enabled:
+            self._scan_glossary(new)
+            if final:
+                self.ended = True
                 self.pending = []
                 return 0
-            self._scan_glossary(new)
             if new and not self.pending:
                 self.pending_since = view["now_ms"]
             self.pending += new
@@ -259,7 +253,7 @@ class TranscriptTerms:
             found = [f for f in found if not any(o is not f and o[0] <= f[0] and f[1] <= o[1] and o[1] - o[0] > f[1] - f[0] for o in found)]
             for _pos, _end, key in sorted(found):
                 entry = self.glossary.find(key)
-                self._add_card(entry["key"], entry["term"], entry["explain"], ORIGIN_GLOSSARY, [ln["id"]],
+                self._add(entry["key"], entry["term"], entry["explain"], ORIGIN_GLOSSARY, [ln["id"]],
                                name=entry["name"], aliases=entry["aliases"])
 
     # ---------------- 모델 길 ----------------
@@ -277,7 +271,7 @@ class TranscriptTerms:
         lines = self.pending[:self.cfg.max_lines]
         self.pending = self.pending[self.cfg.max_lines:]
         self.pending_since = view["now_ms"]
-        told = [c["term"] for c in self.cards]
+        told = [c["term"] for c in self.items]
         user = self._user_text(told, view["titles"], lines)
         return {"lines": lines, "user": user, "titles": list(view["titles"])}
 
@@ -296,7 +290,7 @@ class TranscriptTerms:
         return None
 
     def _check_term(self, it, job):
-        """후보 하나를 확인한다. 반환: (카드 재료 또는 None, 오류 문자열 또는 None). 오류 없이 None 이면 조용히 건너뛴 것(확신 낮음, 이미 안내함 등)."""
+        """후보 하나를 확인한다. 반환: (목록 재료 또는 None, 오류 문자열 또는 None). 오류 없이 None 이면 조용히 건너뛴 것(확신 낮음, 이미 안내함 등)."""
         if not isinstance(it, dict):
             return None, "후보가 객체가 아님"
         term, meaning, ev = it.get("term"), it.get("meaning"), it.get("evidence")
@@ -305,7 +299,7 @@ class TranscriptTerms:
         if it.get("confident") is not True:
             return None, None
         key = _norm(term)
-        if key in self.shown or self.glossary.find(key) is not None:
+        if key in self.known or self.glossary.find(key) is not None:
             return None, None
         if any(key in _norm(t) for t in job["titles"]):
             return None, None
@@ -365,7 +359,7 @@ class TranscriptTerms:
             return calls
         with self.lock:
             self.err_streak = 0
-            if not self.enabled or self.ended:
+            if self.ended:
                 return calls
             for it in d["terms"][:self.cfg.max_per_call]:
                 card, err = self._check_term(it, job)
@@ -373,7 +367,7 @@ class TranscriptTerms:
                     self.rejected += 1
                 elif card:
                     term, meaning, ids = card
-                    self._add_card(_norm(term), term, meaning, ORIGIN_AI, ids)
+                    self._add(_norm(term), term, meaning, ORIGIN_AI, ids)
         return calls
 
     def _fail(self, name):
@@ -384,56 +378,31 @@ class TranscriptTerms:
             self.halted = "연속 실패"
             log.error("용어 후보 찾기를 멈춤 meeting=%s 연속 실패 %s번", self.c.meeting_id, self.err_streak)
 
-    # ---------------- 카드 ----------------
-    def _add_card(self, key, term, text, origin, evidence, name=None, aliases=()):
-        """락 안에서 부른다. 이미 안내한 용어(닫은 것 포함)는 만들지 않는다. name(화면에 보일 이름)·aliases(같은 뜻의 다른 표기)는 용어집 길만 있다."""
-        if key in self.shown:
+    # ---------------- 목록 ----------------
+    def _add(self, key, term, text, origin, evidence, name=None, aliases=()):
+        """락 안에서 부른다. 이미 찾은 용어(목록에서 빠진 것 포함)는 더하지 않는다. name(화면에 보일 이름)·aliases(같은 뜻의 다른 표기)는 용어집 길만 있다."""
+        if key in self.known:
             return
-        self.shown.add(key)
+        self.known.add(key)
         self.serial += 1
-        self.cards.append({"id": f"h-{self.serial}", "key": key, "term": term, "text": text, "origin": origin,
-                           "evidence": list(evidence), "dismissed": False, "name": name, "aliases": list(aliases)})
-        log.info("용어 카드 생성 meeting=%s origin=%s", self.c.meeting_id, origin)
-
-    def board(self):
-        """보드의 hints 칸. 닫지 않은 카드 중 가장 최근 max_cards 장. 꺼져 있으면 빈 목록."""
-        with self.lock:
-            if not self.enabled:
-                return []
-            live = [c for c in self.cards if not c["dismissed"]][-self.cfg.max_cards:]
-            return [{"id": c["id"], "kind": KIND_TERM, "term": c["term"], **({"name": c["name"]} if c.get("name") else {}),
-                     "text": c["text"], "origin": c["origin"], "evidenceSeqs": list(c["evidence"])} for c in live]
+        self.items.append({"id": f"t-{self.serial}", "key": key, "term": term, "text": text, "origin": origin,
+                           "first_seq": min(evidence), "name": name, "aliases": list(aliases)})
+        log.info("용어 추가 meeting=%s origin=%s", self.c.meeting_id, origin)
 
     def terms(self):
-        """보드의 terms 칸. 이 회의에서 지금까지 찾은 용어 전부 (닫은 카드도 포함, 가장 오래된 것부터 max_terms 개까지 남김). 화면이 전사에서
-        용어를 칠하고 뜻 카드를 띄우고 용어 수를 세는 데 쓴다. 꺼져 있으면 빈 목록(이미 찾은 용어도 보이지 않는다)."""
+        """이 회의에서 지금까지 찾은 용어 전부 (가장 오래된 것부터 max_terms 개까지 남김). 화면이 전사 전체에서 용어를 칠하고
+        마우스를 올리면 뜻을 보여 주는 데 쓴다. 매번 새 목록을 만들어 돌려준다."""
         with self.lock:
-            if not self.enabled:
-                return []
             return [{"id": c["id"], "term": c["term"], **({"name": c["name"]} if c.get("name") else {}),
                      "aliases": list(c.get("aliases") or []), "text": c["text"], "origin": c["origin"],
-                     "firstSeq": c["evidence"][0]} for c in self.cards[-self.cfg.max_terms:]]
-
-    # ---------------- 사람의 조작 ----------------
-    def dismiss(self, card_id):
-        """사용자가 카드를 닫았다. 반환: accepted / not_found. 닫은 용어는 다시 만들지 않는다."""
-        with self.lock:
-            for c in self.cards:
-                if c["id"] == card_id:
-                    c["dismissed"] = True
-                    return "accepted"
-            return "not_found"
-
-    def set_enabled(self, on):
-        with self.lock:
-            self.enabled = bool(on)
+                     "firstSeq": c["first_seq"]} for c in self.items[-self.cfg.max_terms:]]
 
     def info(self):
         """상태 조회용. 전사 내용, 안건 제목, 용어, 뜻은 넣지 않는다."""
         with self.lock:
-            return {"enabled": self.enabled, "cards": len(self.cards), "dismissed": sum(1 for c in self.cards if c["dismissed"]),
-                    "fromGlossary": sum(1 for c in self.cards if c["origin"] == ORIGIN_GLOSSARY),
-                    "fromAi": sum(1 for c in self.cards if c["origin"] == ORIGIN_AI),
+            return {"terms": len(self.items), "listed": min(len(self.items), self.cfg.max_terms),
+                    "fromGlossary": sum(1 for c in self.items if c["origin"] == ORIGIN_GLOSSARY),
+                    "fromAi": sum(1 for c in self.items if c["origin"] == ORIGIN_AI),
                     "glossaryTerms": len(self.glossary), "pending": len(self.pending),
                     "calls": self.calls, "errors": self.errors, "rejected": self.rejected, "halted": self.halted}
 
@@ -450,9 +419,10 @@ def selftest():
                       {"term": "리텐션율", "explain": "일정 기간 뒤에도 남은 사용자 비율이에요."}])
 
     class World:
-        def __init__(self, glossary=None, replies=None, **cfg):
+        def __init__(self, glossary=None, replies=None, agendas=A, **cfg):
             self.c = AgendaClassifier("t", ClassifyCfg(refresh_sec=0, max_lines=30))
-            self.c.set_agendas(1, A)
+            if agendas:
+                self.c.set_agendas(1, agendas)
             self.t, self.nid = 0, 0
             self.prompts, self.replies = [], list(replies or [])
             cfg.setdefault("min_new_lines", 4)
@@ -483,7 +453,7 @@ def selftest():
         raise SystemExit(f"{exc.__name__} 이 나야 하는데 안 남")
 
     def terms(w):
-        return [c["term"] for c in w.h.board()]
+        return [c["term"] for c in w.h.terms()]
 
     # 1) 용어집 파일: 읽기, 없는 파일, 틀린 형식
     with tempfile.TemporaryDirectory() as d:
@@ -502,14 +472,14 @@ def selftest():
         raises(ValueError, lambda: Glossary(bad))
     assert Glossary([{"term": "OKR", "explain": "x"}]).find(_norm("okr"))["term"] == "OKR"
 
-    # 2) 용어집에 있는 말은 모델 없이 카드가 된다. 같은 말은 한 번만, 별칭도 같은 카드
+    # 2) 용어집에 있는 말은 모델 없이 목록에 들어간다. 같은 말은 한 번만, 별칭도 같은 용어
     w = World(GLOSS)
     assert w.say("이번 분기 리텐션이 떨어졌어요") == 0 and w.prompts == []
-    b = w.h.board()
-    assert len(b) == 1 and b[0] == {"id": "h-1", "kind": "TERM", "term": "리텐션", "text": "앱을 다시 찾는 사용자 비율이에요.",
-                                   "origin": "GLOSSARY", "evidenceSeqs": [1]}, b
+    b = w.h.terms()
+    assert b == [{"id": "t-1", "term": "리텐션", "aliases": ["retention"], "text": "앱을 다시 찾는 사용자 비율이에요.",
+                  "origin": "GLOSSARY", "firstSeq": 1}], b
     w.say("리텐션 얘기 다시 하면", "retention 도 같이 보죠")
-    assert len(w.h.board()) == 1 and w.h.info()["fromGlossary"] == 1
+    assert len(w.h.terms()) == 1 and w.h.info()["fromGlossary"] == 1
 
     # 3) 영문 약어는 다른 단어 속에서 찾지 않는다. 한글은 조사가 붙어도 찾는다
     w = World(GLOSS)
@@ -523,14 +493,14 @@ def selftest():
     w.say("리텐션율을 봐야죠")
     assert terms(w) == ["리텐션율"], terms(w)
 
-    # 5) STT 불확실 글자, 낮은 확신도 줄, 맞장구·간투사 줄에서는 카드를 만들지 않는다
+    # 5) STT 불확실 글자, 낮은 확신도 줄, 맞장구·간투사 줄에서는 찾지 않는다
     w = World(GLOSS)
     w.say("이번 ⟨리텐션⟩ 문제는요")
     w.say("리텐션 낮은 확신도", low=True)
     w.say("리텐션", kind="backchannel")
     w.say("리텐션", kind="filler")
-    assert terms(w) == [] and w.h.info()["cards"] == 0
-    w.say("KPI ⟨아닌⟩ 말")                                                # 마스크 밖이면 카드
+    assert terms(w) == [] and w.h.info()["terms"] == 0
+    w.say("KPI ⟨아닌⟩ 말")                                                # 마스크 밖이면 찾는다
     assert terms(w) == ["KPI"]
 
     # 6) 줄은 한 번만 본다: 고쳐진 줄을 다시 보지 않고, 같은 줄로 두 번 만들지 않는다
@@ -546,8 +516,8 @@ def selftest():
     w = World(replies=[reply])
     assert w.say("첫 줄", "코호트 분석을 해야", "셋째") == 0 and w.prompts == [] and w.h.info()["pending"] == 3
     assert w.say("넷째") == 1 and len(w.prompts) == 1 and w.h.info()["pending"] == 0
-    b = w.h.board()
-    assert b == [{"id": "h-1", "kind": "TERM", "term": "코호트", "text": "비슷한 조건의 사용자 묶음이에요.", "origin": "AI_EXPLAIN", "evidenceSeqs": [2]}], b
+    b = w.h.terms()
+    assert b == [{"id": "t-1", "term": "코호트", "aliases": [], "text": "비슷한 조건의 사용자 묶음이에요.", "origin": "AI_EXPLAIN", "firstSeq": 2}], b
     pr = w.prompts[0]
     assert "[이미 안내한 용어]\n(없음)" in pr and "- 배포 일정" in pr and "[2] 00:04 코호트 분석을 해야" in pr, pr
 
@@ -598,7 +568,7 @@ def selftest():
     w = tries(one(term="배포"))                                    # 안건 제목에 든 말
     assert terms(w) == [] and w.h.info()["rejected"] == 0
     w = tries(one(), glossary=Glossary([{"term": "코호트", "explain": "x"}]))        # 용어집에 있으면 용어집 길로만
-    assert terms(w) == ["코호트"] and w.h.board()[0]["origin"] == "GLOSSARY"
+    assert terms(w) == ["코호트"] and w.h.terms()[0]["origin"] == "GLOSSARY"
     w = World(replies=[one(evidence=[[2, 2]])])
     w.say("첫 줄", "⟨코호트⟩ 분석", "셋째", "넷째")                  # 불확실 글자 안의 용어
     assert terms(w) == [] and w.h.info()["rejected"] == 1
@@ -650,53 +620,34 @@ def selftest():
         w.say(f"줄 {i}")
     assert len(w.prompts) == 2 and w.h.halted == "호출 상한" and w.h.info()["calls"] == 2
 
-    # 15) 카드는 동시에 3장까지. 닫은 카드, 밀려난 카드는 다시 만들지 않는다
+    # 15) 목록 상한: 넘으면 가장 오래된 것부터 빠지고, 빠진 용어는 다시 더하지 않는다
     g = Glossary([{"term": t, "explain": f"{t} 설명이에요."} for t in ("가나", "다라", "마바", "사아")])
-    w = World(g)
+    w = World(g, max_terms=3)
     w.say("가나"); w.say("다라"); w.say("마바")
     assert terms(w) == ["가나", "다라", "마바"]
     w.say("사아")
-    assert terms(w) == ["다라", "마바", "사아"]
-    w.say("가나 다시")                                                # 밀려난 카드는 다시 만들지 않는다
-    assert terms(w) == ["다라", "마바", "사아"] and w.h.info()["cards"] == 4
-    assert w.h.dismiss("h-3") == "accepted" and w.h.dismiss("h-99") == "not_found"
-    b = [c["id"] for c in w.h.board()]
-    assert "h-3" not in b, b
-    w.say("마바 다시")                                                # 닫은 카드도 다시 만들지 않는다
-    assert "마바" not in terms(w) and w.h.info()["cards"] == 4 and w.h.info()["dismissed"] == 1
+    assert terms(w) == ["다라", "마바", "사아"] and [x["id"] for x in w.h.terms()] == ["t-2", "t-3", "t-4"]
+    w.say("가나 다시")                                                # 빠진 용어는 다시 더하지 않는다
+    assert terms(w) == ["다라", "마바", "사아"] and w.h.info()["terms"] == 4 and w.h.info()["listed"] == 3
 
-    # 16) 껐다 켜기: 꺼져 있는 동안은 카드도 호출도 없고, 그 사이 줄은 다시 보지 않는다
-    w = World(GLOSS, replies=[reply], min_new_lines=1)
-    w.h.set_enabled(False)
-    w.say("리텐션 코호트")
-    assert w.h.board() == [] and w.prompts == [] and w.h.info()["cards"] == 0
-    w.h.set_enabled(True)
-    w.h.process()
-    assert terms(w) == [] and w.prompts == []
-    w.say("KPI 보자")
-    assert terms(w) == ["KPI"]
-    w.h.set_enabled(False)
-    assert w.h.board() == [] and w.h.info()["cards"] == 1                # 꺼지면 보이지 않지만 만든 기록은 남는다
+    # 16) 안건이 없는 회의에서도 두 길 모두 동작한다 (안건 제목 검사만 건너뛴다)
+    w = World(GLOSS, replies=[one(term="배포", meaning="만든 것을 쓸 수 있게 내놓는 일이에요.", evidence=[[2, 2]])], agendas=None)
+    w.say("리텐션 얘기", "배포 날짜", "셋째", "넷째")
+    assert terms(w) == ["리텐션", "배포"], terms(w)
+    assert "[등록된 안건]\n(없음)" in w.prompts[0], w.prompts[0]
 
-    # 17) 회의가 끝나면 아무것도 만들지 않는다
+    # 17) 회의가 끝나면: 마지막 줄까지 용어집 길만 보고 모델은 부르지 않는다. 그 뒤로는 아무것도 하지 않는다
     w = World(GLOSS, replies=[reply])
     w.say("첫 줄", "둘째", "셋째")
+    w.c.receive({"lines": [{"id": 99, "start_ms": w.t, "end_ms": w.t + 1000, "arrival_ms": w.t + 1000, "type": "final", "kind": None,
+                            "low_confidence": False, "text": "끝으로 KPI 코호트", "text_marked": "끝으로 KPI 코호트", "manual": False}],
+                 "edits": [], "sent_ms": w.t + 1000})
     assert w.h.process(final=True) == 0
-    w.say("KPI", "코호트")
-    assert w.prompts == [] and terms(w) == [] and w.h.info()["pending"] == 0
+    assert w.prompts == [] and terms(w) == ["KPI"] and w.h.info()["pending"] == 0
+    w.say("리텐션", "코호트", "a", "b")
+    assert w.prompts == [] and terms(w) == ["KPI"]
 
-    # 18) 응답을 기다리는 사이에 꺼지면 카드를 만들지 않는다
-    w = World(replies=[reply])
-    orig = w.h.llm
-
-    def off_then_answer(user):
-        w.h.set_enabled(False)
-        return orig(user)
-    w.h.llm = off_then_answer
-    w.say("첫 줄", "코호트 분석", "셋째", "넷째")
-    assert w.h.info()["cards"] == 0
-
-    # 18b) 응답을 기다리는 사이에 회의가 끝나도 카드를 만들지 않는다
+    # 18) 응답을 기다리는 사이에 회의가 끝나면 모델 결과를 더하지 않는다
     w = World(replies=[reply])
     orig = w.h.llm
 
@@ -705,7 +656,7 @@ def selftest():
         return orig(user)
     w.h.llm = end_then_answer
     w.say("첫 줄", "코호트 분석", "셋째", "넷째")
-    assert w.h.info()["cards"] == 0
+    assert w.h.info()["terms"] == 0
 
     # 18c) echo 모드는 모델을 부르지 않고 후보도 내지 않는다
     assert json.loads(make_llm(TermsCfg())("아무 입력")) == {"terms": []}
@@ -717,7 +668,7 @@ def selftest():
     w = World(GLOSS)
     w.say("리텐션 SECRETWORD 전사")
     assert "SECRETWORD" not in json.dumps(w.h.info(), ensure_ascii=False) and "리텐션" not in json.dumps(w.h.info(), ensure_ascii=False)
-    assert set(w.h.info()) == {"enabled", "cards", "dismissed", "fromGlossary", "fromAi", "glossaryTerms", "pending", "calls", "errors", "rejected", "halted"}
+    assert set(w.h.info()) == {"terms", "listed", "fromGlossary", "fromAi", "glossaryTerms", "pending", "calls", "errors", "rejected", "halted"}
 
     # 20) 로그에 전사·안건 제목·용어·뜻이 남지 않는다
     reply1 = one(evidence=[[1, 1]])
@@ -742,11 +693,9 @@ def selftest():
 
     def hammer():
         try:
-            for i in range(300):
-                w.h.board()
-                w.h.dismiss(f"h-{i % 5}")
+            for _ in range(300):
+                w.h.terms()
                 w.h.info()
-                w.h.set_enabled(i % 7 != 0)
         except Exception as e:                                   # pragma: no cover
             errs.append(e)
     th = threading.Thread(target=hammer)
@@ -756,8 +705,7 @@ def selftest():
     th.join()
     assert not errs, errs
 
-
-    # 22) terms 칸 (v0.2): 닫은 카드도 남고, 용어집 길은 이름·별칭을 담고, 꺼지면 비고, 상한을 넘으면 오래된 것부터 뺀다
+    # 22) 목록 모양: 용어집 길은 이름·별칭을 담고, 모델 길은 별칭이 비어 있다. 돌려준 목록을 바꿔도 안쪽은 그대로다
     named = Glossary([{"term": "리텐션", "name": "리텐션 (Retention)", "aliases": ["retention"], "explain": "다시 찾는 사용자 비율이에요."},
                       {"term": "KPI", "explain": "목표 달성 정도를 재는 핵심 지표예요."}])
     w = World(named, replies=[{"terms": []}, {"terms": []},          # 앞의 두 줄에서는 모델 후보가 없다
@@ -768,16 +716,12 @@ def selftest():
     w.say("KPI 먼저 봐요")
     w.say("코호트로 나눠 볼까요")
     t = w.h.terms()
-    assert [(x["id"], x["term"], x["origin"]) for x in t] == [("h-1", "리텐션", "GLOSSARY"), ("h-2", "KPI", "GLOSSARY"), ("h-3", "코호트", "AI_EXPLAIN")], t
+    assert [(x["id"], x["term"], x["origin"]) for x in t] == [("t-1", "리텐션", "GLOSSARY"), ("t-2", "KPI", "GLOSSARY"), ("t-3", "코호트", "AI_EXPLAIN")], t
     assert t[0]["name"] == "리텐션 (Retention)" and t[0]["aliases"] == ["retention"] and "name" not in t[1] and t[1]["aliases"] == [] and t[2]["aliases"] == []
     assert all(isinstance(x["firstSeq"], int) and x["text"] for x in t) and t[0]["firstSeq"] < t[1]["firstSeq"] < t[2]["firstSeq"]
-    assert [b["id"] for b in w.h.board()] == ["h-1", "h-2", "h-3"] and w.h.board()[0]["name"] == "리텐션 (Retention)" and "name" not in w.h.board()[1]
-    w.h.dismiss("h-1")
-    assert [x["id"] for x in w.h.terms()] == ["h-1", "h-2", "h-3"] and [b["id"] for b in w.h.board()] == ["h-2", "h-3"], "닫은 카드도 terms 에는 남는다"
-    w.h.set_enabled(False)
-    assert w.h.terms() == [] and w.h.board() == []
-    w.h.set_enabled(True)
-    assert len(w.h.terms()) == 3
+    t[0]["aliases"].append("바뀜")
+    t[0]["term"] = "바뀜"
+    assert w.h.terms()[0]["term"] == "리텐션" and w.h.terms()[0]["aliases"] == ["retention"]
     w = World(Glossary([{"term": f"용어{i:02d}", "explain": "뜻이에요."} for i in range(5)]), min_new_lines=1, max_terms=3)
     for i in range(5):
         w.say(f"용어{i:02d} 이야기")
@@ -792,7 +736,7 @@ def selftest():
             pass
     assert Glossary([{"term": "리텐션", "name": "  리텐션 (Retention)  ", "explain": "뜻이에요."}]).entries[0]["name"] == "리텐션 (Retention)"
 
-    print("용어 카드 자체 시험 통과 (용어집 파일 형식, 용어집 길, 별칭, 영문 경계, 긴 이름 우선, STT 불확실·낮은 확신도·맞장구, 줄 한 번만 보기, 모델 호출 시점, 후보 코드 확인과 경계값, 상한, JSON 재시도, 연속 실패, 호출 상한, 카드 3장·닫기·다시 만들지 않음, 끄기·켜기, 종료, 로그에 내용 없음, 동시 접근, terms 칸과 이름·별칭)")
+    print("전사 속 용어 자체 시험 통과 (용어집 파일 형식, 용어집 길, 별칭, 영문 경계, 긴 이름 우선, STT 불확실·낮은 확신도·맞장구, 줄 한 번만 보기, 모델 호출 시점, 후보 코드 확인과 경계값, 상한, JSON 재시도, 연속 실패, 호출 상한, 목록 상한·다시 더하지 않음, 안건 없는 회의, 종료, 로그에 내용 없음, 동시 접근, 목록 모양과 이름·별칭)")
 
 
 if __name__ == "__main__":

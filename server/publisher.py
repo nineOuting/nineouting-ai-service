@@ -5,11 +5,13 @@ AI 서버가 만든 결과를 백엔드로 보낸다 (PUT).
   회의 중 요약   PUT {BACKEND_BASE_URL}{LIVE_SUMMARY_PATH}            (기본: /internal/meetings/{meeting_id}/live-summary)
   안건 분류 결과 PUT {BACKEND_BASE_URL}{AGENDA_CLASSIFICATION_PATH}   (기본: /internal/meetings/{meeting_id}/agenda-classification)
   안건 보드      PUT {BACKEND_BASE_URL}{AGENDA_BOARD_PATH}            (기본: /internal/meetings/{meeting_id}/agenda-board)
+  전사 속 용어   PUT {BACKEND_BASE_URL}{TRANSCRIPT_TERMS_PATH}        (기본: /internal/meetings/{meeting_id}/transcript-terms)
 
 규칙
   - 회의마다, 종류마다 가장 최신 것 하나만 보낸다. 보내는 중에 더 새 것이 생기면 옛것은 버린다.
     단, 안건 분류 결과는 바뀐 줄만 담으므로 버리지 않고 줄 번호별 최신 값으로 합쳐서 보낸다 (merge_classification).
     안건 보드는 전체 상태라서 가장 큰 version 하나만 남긴다 (merge_latest). 같은 회의의 안건 보드는 1초에 한 번보다 자주 보내지 않는다.
+    전사 속 용어도 전체 목록이라 안건 보드와 같은 규칙이다 (merge_latest, 1초 간격).
   - 2xx 가 아니면 재시도 3회, 간격 1초·2초·4초(지수 백오프). 408·429·5xx·연결 오류만 재시도하고, 그 밖의 4xx 는 바로 포기한다.
   - 안건 분류 결과는 재시도를 다 써도 실패하면(5xx·연결 오류) 보관했다가 다음 결과에 합쳐 보낸다. 4xx 는 다시 보내도 소용없으므로 보관하지 않는다.
   - BACKEND_BASE_URL 이 없으면 보내지 않는다 (개발·시험용).
@@ -27,9 +29,11 @@ log = logging.getLogger("ai-service.publisher")
 DEFAULT_PATH = "/internal/meetings/{meeting_id}/live-summary"
 CLASSIFICATION_PATH = "/internal/meetings/{meeting_id}/agenda-classification"
 BOARD_PATH = "/internal/meetings/{meeting_id}/agenda-board"
+TERMS_PATH = "/internal/meetings/{meeting_id}/transcript-terms"
 LIVE_SUMMARY = "live_summary"
 AGENDA_CLASSIFICATION = "agenda_classification"
 AGENDA_BOARD = "agenda_board"
+TRANSCRIPT_TERMS = "transcript_terms"
 BOARD_MIN_INTERVAL_SEC = 1.0           # 연동 API 초안 7장: 안건 보드는 최대 초당 1번
 
 
@@ -50,19 +54,19 @@ def merge_latest(old, new):
 
 
 MERGERS = {AGENDA_CLASSIFICATION: merge_classification,      # 이 종류들은 못 보낸 것을 버리지 않고 보관해 다음에 합친다
-           AGENDA_BOARD: merge_latest}
-MIN_INTERVAL = {AGENDA_BOARD: BOARD_MIN_INTERVAL_SEC}
+           AGENDA_BOARD: merge_latest, TRANSCRIPT_TERMS: merge_latest}
+MIN_INTERVAL = {AGENDA_BOARD: BOARD_MIN_INTERVAL_SEC, TRANSCRIPT_TERMS: BOARD_MIN_INTERVAL_SEC}
 
 
 class Publisher:
     def __init__(self, base_url, path=DEFAULT_PATH, timeout=5.0, backoffs=(1.0, 2.0, 4.0), sender=None, sleep=time.sleep,
                  classification_path=CLASSIFICATION_PATH, board_path=BOARD_PATH, board_interval=BOARD_MIN_INTERVAL_SEC,
-                 clock=time.monotonic):
+                 clock=time.monotonic, terms_path=TERMS_PATH, terms_interval=BOARD_MIN_INTERVAL_SEC):
         self.base_url = (base_url or "").rstrip("/")
         self.enabled = bool(self.base_url)
         self.paths = {LIVE_SUMMARY: path, AGENDA_CLASSIFICATION: classification_path or CLASSIFICATION_PATH,
-                      AGENDA_BOARD: board_path or BOARD_PATH}
-        self.intervals = dict(MIN_INTERVAL, **{AGENDA_BOARD: board_interval})
+                      AGENDA_BOARD: board_path or BOARD_PATH, TRANSCRIPT_TERMS: terms_path or TERMS_PATH}
+        self.intervals = dict(MIN_INTERVAL, **{AGENDA_BOARD: board_interval, TRANSCRIPT_TERMS: terms_interval})
         self.clock = clock
         self.last_start = {}                       # (회의 번호, 종류) -> 마지막으로 보내기 시작한 시각
         self.timeout = timeout
@@ -84,7 +88,8 @@ class Publisher:
     def from_env(cls, env):
         return cls(env.get("BACKEND_BASE_URL"), env.get("LIVE_SUMMARY_PATH") or DEFAULT_PATH,
                    classification_path=env.get("AGENDA_CLASSIFICATION_PATH") or CLASSIFICATION_PATH,
-                   board_path=env.get("AGENDA_BOARD_PATH") or BOARD_PATH)
+                   board_path=env.get("AGENDA_BOARD_PATH") or BOARD_PATH,
+                   terms_path=env.get("TRANSCRIPT_TERMS_PATH") or TERMS_PATH)
 
     def submit(self, meeting_id, payload, kind=LIVE_SUMMARY):
         if not self.enabled:

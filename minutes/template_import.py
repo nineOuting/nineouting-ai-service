@@ -3,10 +3,13 @@
   1. 파일 읽기      PDF 만 (docx 등은 아직 정하지 않음). 쪽마다 글을 꺼내 줄마다 번호(L1, L2, ...)를 단다.
                     머리글·바닥글은 지우지 않는다 (양식의 header·footer 로 쓰기 위해). 글이 없으면(스캔 PDF) no_text
   2. AI 에게 묻기   줄 번호가 붙은 글을 주고 항목 제목의 줄 번호(ref), 기록 방식, 표의 열 개수, 설명 줄, 머리글·바닥글 줄을 받는다
-  3. 코드 검사      제목이 그 줄에 실제로 있는지, 줄 번호가 있는지, 순서·중복·개수(1~20), 기록 방식, 표의 열 개수(1~6),
+  3. 코드 검사      제목이 그 줄에 실제로 있는지(한 줄에 "회의명 일시"처럼 칸 이름이 여럿이면 줄에 나온 순서대로 같은 줄 번호),
+                    줄 번호가 있는지, 순서·중복·개수(1~20), 기록 방식, 표의 열 개수(1~8),
                     머리글은 첫 쪽의 위쪽 줄·바닥글은 마지막 쪽의 아래쪽 줄인지. 걸리면 이유를 붙여 다시 시킨다 (placement.ask)
   4. 글은 코드가 정함  설명·머리글·바닥글은 AI 가 쓴 글이 아니라 AI 가 고른 줄의 원문을 코드가 이어 붙인 것이다
-                    체크리스트인데 체크박스 글자(☐ □ [ ])가 그 항목 안에 없으면 목록(list)으로 낮추고 경고를 남긴다
+                    체크리스트인데 체크박스 글자(☐ □ [ ])가 그 항목 안에 없으면 종류는 그대로 두고 경고(CHECKLIST_NO_BOX)를 남긴다.
+                    설명 줄에 빈칸(____)이 있으면 서식 문장이라 설명에서 빼고 경고(DESCRIPTION_DROPPED)를 남긴다.
+                    표의 열이 8보다 많으면 8로 자르고 센 값을 경고(COLUMNS_CAPPED, detected)로 남긴다 (명세 5.8 의 상한)
 
 결과 모양은 회의록 초안 명세 5.8 TemplateField 와 같다: {"title", "type", "columns"?, "description"?, "aiFill": true}.
 `aiFill` 은 모두 true 로 둔다 (가져온 항목을 AI 가 채울지는 아직 정하지 않았다. docs/api/template-import-contract.md).
@@ -28,13 +31,17 @@ MAX_CHARS = 20_000                    # 제안값. 한 번에 AI 에 보내는 �
 MAX_FIELDS = 20                       # 회의록 초안 명세 5.1 template.fields 1~20개
 MAX_TITLE = 100                       # 명세 5.8 title 1~100자
 MAX_DESCRIPTION = 2000                # 명세 5.8 description
-MAX_COLUMNS = 6                       # 명세 5.8 columns 1~6
+MAX_COLUMNS = 8                       # 명세 5.8 columns 1~8 (양식 편집 화면 상한과 같다). 이보다 많은 표는 8로 자르고 경고(COLUMNS_CAPPED)로 센 값을 알린다
+MAX_COUNTED_COLUMNS = 12              # AI 가 셀 수 있는 열 개수 (상한보다 넉넉히). 넘으면 다시 시킨다
 EDGE_LINES = 5                        # 머리글은 쪽의 위 5줄, 바닥글은 아래 5줄 안에서만 받는다
 TYPES = ("free", "list", "checklist", "table")
+_BLANK = re.compile(r"_{3,}")
 _BOX = re.compile(r"[☐□▢☑☒✓✔]|\[\s*[xX✓]?\s*\]")
 _SPACE = re.compile(r"\s+")
 
-CHECKLIST_NO_BOX = "CHECKLIST_NO_BOX"
+CHECKLIST_NO_BOX = "CHECKLIST_NO_BOX"      # 체크리스트인데 그 항목 안에서 체크박스 글자를 못 찾음 (종류는 AI 가 고른 대로 둔다)
+DESCRIPTION_DROPPED = "DESCRIPTION_DROPPED"  # 빈칸(____)이 든 서식 문장은 쓰는 방법 안내가 아니라 양식 본문이라 설명으로 쓰지 않고 뺐다
+COLUMNS_CAPPED = "COLUMNS_CAPPED"          # 표의 열이 상한(8)보다 많아 8로 잘랐다. detected 에 센 값
 
 
 @dataclass(frozen=True)
@@ -119,17 +126,36 @@ def build_user(lines: list[Line], problems: list[str] = ()) -> str:
     return "\n".join(parts)
 
 
+def _pattern(text: str) -> str:
+    """쪽 번호처럼 숫자만 다른 줄을 같은 글로 보기 위해 숫자를 지운다."""
+    return re.sub(r"\d+", "#", _compact(text))
+
+
 def _compact(text: str) -> str:
     return _SPACE.sub("", text).casefold()
+
+
+def _ref_int(value):
+    """줄 번호 하나 읽기. 정수 12 와 "12", "L12" 를 모두 받는다 (AI 가 입력에 보이는 "L12" 모양을 따라 쓰기 쉽다). 아니면 None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        m = re.fullmatch(r"\s*[Ll]?(\d+)\s*", value)
+        return int(m.group(1)) if m else None
+    return None
 
 
 def _refs(raw, by_ref, name, problems) -> list[int]:
     """줄 번호 목록 읽기. 틀리면 문제를 적고 빈 목록."""
     if raw is None:
         return []
-    if not isinstance(raw, list) or any(isinstance(r, bool) or not isinstance(r, int) for r in raw):
+    nums = [_ref_int(r) for r in raw] if isinstance(raw, list) else None
+    if nums is None or None in nums:
         problems.append(f"{name}가 줄 번호(정수)의 목록이 아님")
         return []
+    raw = nums
     bad = [r for r in raw if r not in by_ref]
     if bad:
         problems.append(f"{name}에 없는 줄 번호 {', '.join(f'L{r}' for r in bad[:5])}")
@@ -148,45 +174,56 @@ def check(data, lines: list[Line]) -> tuple[Imported | None, list[str]]:
     header = _refs(data.get("header"), by_ref, "header", problems)
     footer = _refs(data.get("footer"), by_ref, "footer", problems)
     first_page, last_page = lines[0].page, lines[-1].page
-    for r in header:
-        x = by_ref[r]
-        if x.page != first_page or x.pos >= EDGE_LINES:
-            problems.append(f"header의 L{r}이 첫 쪽의 위 {EDGE_LINES}줄 안에 있지 않음")
-    for r in footer:
-        x = by_ref[r]
-        if x.page != last_page or x.pos < x.page_len - EDGE_LINES:
-            problems.append(f"footer의 L{r}이 마지막 쪽의 아래 {EDGE_LINES}줄 안에 있지 않음")
+    in_header = lambda x: x.page == first_page and x.pos < EDGE_LINES                       # noqa: E731
+    in_footer = lambda x: x.page == last_page and x.pos >= x.page_len - EDGE_LINES          # noqa: E731
+
+    def zone(refs, ok, name):
+        """머리글·바닥글은 매 쪽에 반복되므로 AI 가 다른 쪽의 같은 글(숫자만 다른 쪽 번호 포함)을 고르면 첫·마지막 쪽 것으로 본다."""
+        keep = []
+        for r in refs:
+            x = by_ref[r]
+            same = next((y for y in lines if ok(y) and _pattern(y.text) == _pattern(x.text)), None)
+            if ok(x):
+                keep.append(r)
+            elif same is not None:
+                keep.append(same.ref)
+            else:
+                problems.append(f"{name}의 L{r}이 {'첫 쪽의 위' if name == 'header' else '마지막 쪽의 아래'} {EDGE_LINES}줄 안에 있지 않음")
+        return sorted(set(keep))
+
+    header, footer = zone(header, in_header, "header"), zone(footer, in_footer, "footer")
     raw_fields = data["fields"]
     if len(raw_fields) > MAX_FIELDS:
         problems.append(f"항목이 {len(raw_fields)}개. 최대 {MAX_FIELDS}개")
-    used = set(header) | set(footer)
-    parsed, titles = [], {}
+    used = set(header) | set(footer)             # 항목이 될 수 없는 줄. 한 줄에 칸 이름이 여럿이면 항목끼리는 줄 번호를 같이 쓸 수 있다
+    parsed, titles, cursor = [], {}, {}      # cursor: 줄마다 앞 항목의 제목이 끝난 위치 (한 줄에 칸 이름이 여럿일 때)
     for i, f in enumerate(raw_fields[:MAX_FIELDS + 1]):
         where = f"fields[{i}]"
         if not isinstance(f, dict):
             problems.append(f"{where}이 객체가 아님")
             continue
-        ref, title, kind = f.get("ref"), f.get("title"), f.get("type")
-        if isinstance(ref, bool) or not isinstance(ref, int) or ref not in by_ref:
+        ref, title, kind = _ref_int(f.get("ref")), f.get("title"), f.get("type")
+        if ref is None or ref not in by_ref:
             problems.append(f"{where}의 ref가 없는 줄 번호")
             continue
         if not isinstance(title, str) or not title.strip() or len(title.strip()) > MAX_TITLE:
             problems.append(f"{where}의 title이 1~{MAX_TITLE}자의 글이 아님")
             continue
         title = title.strip()
-        if _compact(title) not in _compact(by_ref[ref].text):
-            problems.append(f"{where}의 title이 L{ref}의 글에 없음")
+        found = _compact(by_ref[ref].text).find(_compact(title), cursor.get(ref, 0))
+        if found < 0:
+            problems.append(f"{where}의 title이 L{ref}의 글에 없거나, 같은 줄의 앞 항목보다 앞에 있음")
             continue
+        cursor[ref] = found + len(_compact(title))
         if ref in used:
-            problems.append(f"L{ref}를 두 곳에 씀")
-        used.add(ref)
+            problems.append(f"L{ref}는 머리글·바닥글로 쓴 줄이라 항목이 될 수 없음")
         if kind not in TYPES:
             problems.append(f"{where}의 type이 {'/'.join(TYPES)} 중 하나가 아님")
             continue
         columns = f.get("columns")
         if kind == "table":
-            if isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= MAX_COLUMNS:
-                problems.append(f"{where}는 표인데 columns가 1~{MAX_COLUMNS}의 정수가 아님")
+            if isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= MAX_COUNTED_COLUMNS:
+                problems.append(f"{where}는 표인데 columns가 1~{MAX_COUNTED_COLUMNS}의 정수가 아님")
                 continue
         else:
             columns = None
@@ -197,8 +234,8 @@ def check(data, lines: list[Line]) -> tuple[Imported | None, list[str]]:
         desc_refs = _refs(f.get("descriptionRefs"), by_ref, f"{where}의 descriptionRefs", problems)
         parsed.append({"ref": ref, "title": title, "type": kind, "columns": columns, "desc": desc_refs})
     refs = [p["ref"] for p in parsed]
-    if len(set(refs)) != len(refs) or refs != sorted(refs):
-        problems.append("항목은 문서에 나온 순서(ref 오름차순)이고 같은 줄을 두 번 쓰지 않아야 함")
+    if refs != sorted(refs):
+        problems.append("항목은 문서에 나온 순서(ref 오름차순)여야 함")
     for p in parsed:
         clash = [r for r in p["desc"] if r in used or r in set(refs)]
         if clash:
@@ -210,13 +247,16 @@ def check(data, lines: list[Line]) -> tuple[Imported | None, list[str]]:
     for p, end in zip(parsed, ends):
         kind = p["type"]
         if kind == "checklist" and not any(_BOX.search(x.text) for x in lines if p["ref"] <= x.ref < end):
-            kind = "list"
             warnings.append({"code": CHECKLIST_NO_BOX, "title": p["title"]})
         item = {"title": p["title"], "type": kind, "aiFill": True}
         if kind == "table":
-            item["columns"] = p["columns"]
+            item["columns"] = min(p["columns"], MAX_COLUMNS)
+            if p["columns"] > MAX_COLUMNS:
+                warnings.append({"code": COLUMNS_CAPPED, "title": p["title"], "detected": p["columns"]})
         description = " ".join(by_ref[r].text for r in p["desc"])
-        if description:
+        if description and _BLANK.search(description):
+            warnings.append({"code": DESCRIPTION_DROPPED, "title": p["title"]})
+        elif description:
             if len(description) > MAX_DESCRIPTION:
                 return None, [f"{p['title']}의 설명이 {MAX_DESCRIPTION}자를 넘음"]
             item["description"] = description

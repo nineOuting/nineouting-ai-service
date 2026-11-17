@@ -356,22 +356,6 @@ def adapt_offtopic_action(msg):
     return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "action": action, "rev": rev, "at_ms": at_ms}
 
 
-def adapt_hint_action(msg):
-    """용어 카드에 대한 사용자의 조작 (agenda-hints-contract.md 6장)
-    -> {"meeting_id", "action", "rev", "hint_id"}. action 은 dismiss(카드 닫기, hintId 필요), disable(먼저 알려드려요 끄기), enable(켜기)."""
-    meeting_id, raw_id = _meeting_id(msg, "hint-actions")
-    action = _need(msg, "action", str, "hint-actions")
-    if action not in ("dismiss", "enable", "disable"):
-        raise AdapterError(f"hint-actions: 'action' 은 dismiss, enable, disable 중 하나여야 함 ({action})")
-    rev = _need(msg, "rev", int, "hint-actions")
-    hint_id = msg.get("hintId")
-    if action == "dismiss":
-        hint_id = _need(msg, "hintId", str, "hint-actions")
-        if not hint_id.strip():
-            raise AdapterError("hint-actions: 'hintId' 가 비어 있음")
-    return {"meeting_id": meeting_id, "meeting_id_raw": raw_id, "action": action, "rev": rev, "hint_id": hint_id}
-
-
 def adapt_end_request(msg):
     """종료 버튼 요청 (agenda-leftover-contract.md 4장)
     -> {"meeting_id", "action", "rev"}. action: request(종료 버튼을 누름) / cancel(이어서 논의하기).

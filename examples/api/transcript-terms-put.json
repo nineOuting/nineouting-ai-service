@@ -1,0 +1,24 @@
+{
+  "meetingId": 1234,
+  "version": 1792455712004,
+  "final": false,
+  "terms": [
+    {
+      "id": "t-1",
+      "term": "리텐션",
+      "name": "리텐션 (Retention)",
+      "aliases": ["retention"],
+      "text": "한 번 쓴 사용자가 다시 돌아와 계속 쓰는 비율이에요.",
+      "origin": "GLOSSARY",
+      "firstSeq": 214
+    },
+    {
+      "id": "t-2",
+      "term": "코호트",
+      "aliases": [],
+      "text": "비슷한 조건의 사용자 묶음이에요.",
+      "origin": "AI_EXPLAIN",
+      "firstSeq": 231
+    }
+  ]
+}

@@ -587,8 +587,7 @@ class AgendaSummarizer:
                     it["needs_check"] = True
 
     # ---------------- 출력 ----------------
-    def take_board(self, status_info=None, opinions=None, todos=None, based_extra=0, off_topic=None, leftover=None, hints=None,
-                   terms=None):
+    def take_board(self, status_info=None, opinions=None, todos=None, based_extra=0, off_topic=None, leftover=None):
         """안건 보드의 전체 상태. 안건 목록을 아직 못 받았거나 마지막으로 낸 것과 같으면 None.
         돌려준 내용은 보낸 것으로 기록한다.
         status_info: 안건 key -> {"status", "reason"} (AgendaStatusJudge.board_status). 없으면 status 는 None으로 낸다.
@@ -597,9 +596,7 @@ class AgendaSummarizer:
         off_topic: 주제 변경 제안 (AgendaOffTopic.board). 없으면 null 로 낸다. 바뀌면 보드도 바뀐 것으로 본다.
         leftover: 미결 안건 목록의 재료 {"requestRev", "final", "status_info"} (AgendaLeftover.state + board_status(preview_final=True)).
                   없으면 leftover 칸은 null 이다. 넘길 후보를 거르고 요약 문장을 복사해 담는다(agenda_leftover.build_leftover).
-                  같은 재료로 오늘 회의 요약 정리본(todaySummary, AI-08)도 만든다. 만들다 실패하면 그 칸만 null 이다.
-        hints, terms: 용어 카드(AgendaHints.board)와 이 회의에서 찾은 용어 전체(AgendaHints.terms). hints 가 None 이면 두 칸 모두 보드에 넣지 않는다
-                  (기능이 꺼져 있을 때 보드 모양은 예전과 같다). 있으면 바뀔 때 보드도 바뀐 것으로 본다."""
+                  같은 재료로 오늘 회의 요약 정리본(todaySummary, AI-08)도 만든다. 만들다 실패하면 그 칸만 null 이다."""
         view = self._view()
         with self.lock:
             if not view["agendas"]:
@@ -632,19 +629,14 @@ class AgendaSummarizer:
                     log.error("오늘 회의 요약 정리본 만들기 실패 error=%s", type(e).__name__)
             self.today_built, self.today_counts = ts is not None, today_counts(ts)
             cur_id = view["ids"].get(view["current"]) if view["current"] is not None else None
-            sig = _h(json.dumps([cur_id, agendas, off_topic, lf, ts] + ([hints, terms] if hints is not None else []),
-                                ensure_ascii=False, sort_keys=True))
+            sig = _h(json.dumps([cur_id, agendas, off_topic, lf, ts], ensure_ascii=False, sort_keys=True))
             if sig == self.sent_sig:
                 return None
             self.sent_sig = sig
             self.version = max(int(self.now() * 1000), self.version + 1)
             based = max(max((s for st in self.ag.values() for s in st["reflected"]), default=0), based_extra)
-            board = {"version": self.version, "basedOnSeq": based, "currentAgendaId": cur_id,
-                     "agendas": agendas, "offTopic": dict(off_topic) if off_topic else None, "leftover": lf, "todaySummary": ts}
-            if hints is not None:
-                board["hints"] = list(hints)
-                board["terms"] = list(terms or [])
-            return board
+            return {"version": self.version, "basedOnSeq": based, "currentAgendaId": cur_id,
+                    "agendas": agendas, "offTopic": dict(off_topic) if off_topic else None, "leftover": lf, "todaySummary": ts}
 
     def today_info(self):
         """상태 조회용. 정리본의 개수만 담는다. 내용, 안건 제목, 문장은 넣지 않는다."""
@@ -720,19 +712,6 @@ def selftest():
     b = s.take_board(off_topic=ot)
     assert b is not None and b["offTopic"] == ot and b["offTopic"] is not ot, "주제 변경 제안이 바뀌면 보드도 바뀐 것으로 보내야 함"
     assert s.take_board(off_topic=dict(ot)) is None, "같은 제안을 다시 냄"
-    # 1-2) 용어 카드: hints 가 None 이면 두 칸이 없고(꺼진 기능은 보드를 바꾸지 않는다), 있으면 hints·terms 가 담기고 바뀔 때만 다시 낸다
-    c, s = fresh()
-    b0 = s.take_board()
-    assert "hints" not in b0 and "terms" not in b0
-    card = {"id": "h-1", "kind": "TERM", "term": "리텐션", "text": "뜻이에요.", "origin": "GLOSSARY", "evidenceSeqs": [1]}
-    term = {"id": "h-1", "term": "리텐션", "aliases": [], "text": "뜻이에요.", "origin": "GLOSSARY", "firstSeq": 1}
-    b1 = s.take_board(hints=[], terms=[])
-    assert b1["hints"] == [] and b1["terms"] == [], "켠 기능은 카드가 없어도 칸을 낸다 (예전 보드와 다르므로 한 번 다시 낸다)"
-    assert s.take_board(hints=[], terms=[]) is None
-    b2 = s.take_board(hints=[card], terms=[term])
-    assert b2["hints"] == [card] and b2["terms"] == [term] and b2["version"] > b1["version"]
-    assert s.take_board(hints=[dict(card)], terms=[dict(term)]) is None, "같은 카드를 다시 내지 않음"
-    assert s.take_board(hints=[], terms=[term]) is not None, "카드만 닫혀도(terms 는 그대로) 보드가 바뀐 것으로 본다"
     b = s.take_board(off_topic=None)
     assert b is not None and b["offTopic"] is None, "제안을 거둔 보드를 내야 함"
 

@@ -34,6 +34,7 @@ ITEM_EDITS_PATH = "/internal/meetings/{meeting_id}/agenda-item-edits"        # �
 DECISION_EDITS_PATH = "/internal/meetings/{meeting_id}/decision-edits"        # 사람이 고친 결정 내용 (POST)
 STATUS_EDITS_PATH = "/internal/meetings/{meeting_id}/status-edits"            # 사용자가 정한 결정할 사항 상태 (POST)
 OFFTOPIC_ACTIONS_PATH = "/internal/meetings/{meeting_id}/off-topic-actions"  # 새 안건 제안을 무시했다는 알림 (POST)
+HINT_ACTIONS_PATH = "/internal/meetings/{meeting_id}/hint-actions"  # 용어 카드 닫기, 먼저 알려드려요 끄기·켜기 (POST)
 END_REQUESTS_PATH = "/internal/meetings/{meeting_id}/end-requests"           # 종료 버튼·이어서 논의하기 (POST)
 
 metrics = Metrics(default_readers(os.environ))
@@ -190,6 +191,16 @@ def post_item_edits(meeting_id: str, msg: dict = Body(...)):
 def post_offtopic_action(meeting_id: str, msg: dict = Body(...)):
     try:
         return registry.receive_offtopic_action(meeting_id, msg)
+    except NotReady as e:
+        return not_ready(str(e))
+    except AdapterError as e:
+        return invalid(str(e))
+
+
+@app.post(HINT_ACTIONS_PATH)
+def post_hint_action(meeting_id: str, msg: dict = Body(...)):
+    try:
+        return registry.receive_hint_action(meeting_id, msg)
     except NotReady as e:
         return not_ready(str(e))
     except AdapterError as e:

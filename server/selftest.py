@@ -2144,6 +2144,151 @@ def test_parallel_isolated():
     assert reg.status(mid)["agendaSummary"]["halted"] == "연속 실패"
 
 
+def test_hints_config():
+    """AGENDA_HINTS 설정: 기본 꺼짐, 틀린 값·없는 용어집·깨진 용어집은 시작할 때 설정 오류"""
+    import tempfile
+    from .service import hints_from_env
+    assert hints_from_env({}) == (None, None) and hints_from_env({"AGENDA_HINTS": "0"}) == (None, None)
+    assert hints_from_env({"AGENDA_HINTS": " 0 ", "AGENDA_HINTS_GLOSSARY_PATH": "/없는/경로"}) == (None, None), "꺼져 있으면 용어집은 보지 않는다"
+    cfg, g = hints_from_env({"AGENDA_HINTS": "1", "LLM_PROVIDER": "gemini", "LLM_MODEL": "m"})
+    assert (cfg.provider, cfg.model, cfg.refresh_sec, cfg.max_calls, len(g)) == ("gemini", "m", 60, 60, 0)
+    with tempfile.TemporaryDirectory() as d:
+        ok = os.path.join(d, "g.json")
+        json.dump({"terms": [{"term": "리텐션", "name": "리텐션 (Retention)", "aliases": ["retention"], "explain": "다시 찾는 비율이에요."}]},
+                  open(ok, "w", encoding="utf-8"), ensure_ascii=False)
+        cfg, g = hints_from_env({"AGENDA_HINTS": "1", "AGENDA_HINTS_GLOSSARY_PATH": ok, "AGENDA_HINTS_REFRESH_SEC": "30",
+                                 "MAX_AGENDA_HINTS_CALLS_PER_MEETING": "5"})
+        assert (cfg.refresh_sec, cfg.max_calls, len(g)) == (30, 5, 1)
+        broken = os.path.join(d, "b.json")
+        open(broken, "w", encoding="utf-8").write("{ 깨짐")
+        bad_name = os.path.join(d, "n.json")
+        json.dump({"terms": [{"term": "리텐션", "name": "가", "explain": "x 뜻이에요."}]}, open(bad_name, "w", encoding="utf-8"), ensure_ascii=False)
+        for env in ({"AGENDA_HINTS": "2"}, {"AGENDA_HINTS": "on"}, {"AGENDA_HINTS": "1", "AGENDA_HINTS_REFRESH_SEC": "x"},
+                    {"AGENDA_HINTS": "1", "MAX_AGENDA_HINTS_CALLS_PER_MEETING": "x"},
+                    {"AGENDA_HINTS": "1", "AGENDA_HINTS_GLOSSARY_PATH": os.path.join(d, "없음.json")},
+                    {"AGENDA_HINTS": "1", "AGENDA_HINTS_GLOSSARY_PATH": broken},
+                    {"AGENDA_HINTS": "1", "AGENDA_HINTS_GLOSSARY_PATH": bad_name}):
+            try:
+                hints_from_env(env)
+                raise SystemExit(f"잘못된 설정을 못 잡음: {env}")
+            except ConfigError:
+                pass
+    # 조작 요청 형식
+    from input_adapter import adapt_hint_action
+    assert adapt_hint_action({"meetingId": 1, "action": "dismiss", "rev": 3, "hintId": "h-1"})["hint_id"] == "h-1"
+    assert adapt_hint_action({"meetingId": 1, "action": "disable", "rev": 1})["hint_id"] is None
+    for msg in ({"meetingId": 1, "action": "dismiss", "rev": 1}, {"meetingId": 1, "action": "dismiss", "rev": 1, "hintId": " "},
+                {"meetingId": 1, "action": "remove", "rev": 1}, {"meetingId": 1, "action": "enable"},
+                {"meetingId": 1, "action": "enable", "rev": "1"}):
+        try:
+            adapt_hint_action(msg)
+            raise SystemExit(f"잘못된 요청을 못 잡음: {msg}")
+        except AdapterError:
+            pass
+
+
+def test_agenda_hints_flow(cap):
+    """용어 카드(AGENDA_HINTS=1): 용어집 길과 모델 길로 만든 카드가 보드 hints·terms 칸에 담기고, 닫기·끄기·켜기가 보드에 반영되고,
+    꺼져 있으면(기본) 보드에 두 칸이 없고 조작은 무시된다. 모델 실패는 보드 전송을 막지 않는다"""
+    from agenda_classifier import ClassifyCfg
+    from agenda_hints import Glossary, HintsCfg
+    import re as _re
+
+    def fake_llm(user):
+        out = []
+        for m in _re.finditer(r"^\[(\d+)\] \d\d:\d\d (.*)$", user.split("[전사]\n", 1)[-1], _re.M):
+            if "코호트" in m.group(2):
+                out.append({"term": "코호트", "meaning": "비슷한 조건의 사용자 묶음이에요.", "evidence": [[int(m.group(1)), int(m.group(1))]], "confident": True})
+        return json.dumps({"terms": out}, ensure_ascii=False)
+
+    glossary = Glossary([{"term": "리텐션", "name": "리텐션 (Retention)", "aliases": ["retention"], "explain": "다시 찾는 사용자 비율이에요."}])
+    lines = [{"seq": 1, "startMs": 0, "endMs": 3000, "text": "리텐션이 제일 중요해요", "kind": None, "lowConfidence": False, "recovered": False, "manual": False},
+             {"seq": 2, "startMs": 4000, "endMs": 7000, "text": "코호트로 나눠서 볼까요", "kind": None, "lowConfidence": False, "recovered": False, "manual": False},
+             {"seq": 3, "startMs": 8000, "endMs": 11000, "text": "retention 지표도 같이 봐요", "kind": None, "lowConfidence": False, "recovered": False, "manual": False}]
+
+    def build(**kw):
+        sent = []
+        pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0)
+        reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=ClassifyCfg(refresh_sec=0), **kw)
+        return reg, pub, lambda: [p for u, p in sent if u.endswith("/agenda-board")]
+
+    # 1) 켠 서버: 카드가 hints·terms 에 담긴다
+    reg, pub, boards = build(hints_cfg=HintsCfg(min_new_lines=1), hints_llm=fake_llm, hints_glossary=glossary)
+    mid, path = 61, "61"
+    reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(path, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert boards()[0]["hints"] == [] and boards()[0]["terms"] == [], "카드가 없어도 칸은 있다"
+    reg.receive_batch(path, {"meetingId": mid, "batch": 1, "lines": lines, "edits": []})
+    assert reg.wait_idle(path) and pub.wait_idle()
+    b = boards()[-1]
+    assert [(h["id"], h["term"], h["origin"], h["evidenceSeqs"]) for h in b["hints"]] == [("h-1", "리텐션", "GLOSSARY", [1]), ("h-2", "코호트", "AI_EXPLAIN", [2])], b["hints"]
+    assert b["hints"][0]["name"] == "리텐션 (Retention)" and "name" not in b["hints"][1], "이름은 용어집 길에만 있다"
+    assert b["terms"] == [
+        {"id": "h-1", "term": "리텐션", "name": "리텐션 (Retention)", "aliases": ["retention"], "text": "다시 찾는 사용자 비율이에요.",
+         "origin": "GLOSSARY", "firstSeq": 1},
+        {"id": "h-2", "term": "코호트", "aliases": [], "text": "비슷한 조건의 사용자 묶음이에요.", "origin": "AI_EXPLAIN", "firstSeq": 2}], b["terms"]
+    st = reg.status(path)["agendaHints"]
+    assert st["enabled"] and st["cards"] == 2 and st["fromGlossary"] == 1 and st["fromAi"] == 1 and st["calls"] == 1, st
+
+    # 2) 닫기: hints 에서는 빠지고 terms 에는 남는다. 같은 용어는 다시 만들지 않는다
+    n = len(boards())
+    assert reg.receive_hint_action(path, {"meetingId": mid, "action": "dismiss", "rev": 1, "hintId": "h-1"}) == {
+        "accepted": True, "result": "accepted", "applied": True}
+    assert reg.wait_idle(path) and pub.wait_idle()
+    b = boards()[-1]
+    assert len(boards()) == n + 1 and [h["id"] for h in b["hints"]] == ["h-2"] and [t["id"] for t in b["terms"]] == ["h-1", "h-2"]
+    assert reg.receive_hint_action(path, {"meetingId": mid, "action": "dismiss", "rev": 2, "hintId": "h-99"}) == {
+        "accepted": True, "result": "not_found", "applied": False}
+    assert reg.receive_hint_action(path, {"meetingId": mid, "action": "dismiss", "rev": 2, "hintId": "h-2"})["result"] == "stale", "rev 가 같으면 오래된 요청"
+    assert len(boards()) == n + 1, "받아들이지 않은 조작은 보드를 바꾸지 않는다"
+
+    # 3) 끄기: hints·terms 가 비고 새 카드도 없다. 켜면 닫지 않은 카드가 다시 보인다
+    assert reg.receive_hint_action(path, {"meetingId": mid, "action": "disable", "rev": 3})["applied"] is True
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert boards()[-1]["hints"] == [] and boards()[-1]["terms"] == [] and reg.status(path)["agendaHints"]["enabled"] is False
+    assert reg.receive_hint_action(path, {"meetingId": mid, "action": "enable", "rev": 4})["applied"] is True
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert [h["id"] for h in boards()[-1]["hints"]] == ["h-2"] and len(boards()[-1]["terms"]) == 2
+
+    # 4) 끝나면 더 받지 않는다. 로그와 상태에 용어·뜻이 남지 않는다
+    reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": 20000})
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert reg.receive_hint_action(path, {"meetingId": mid, "action": "disable", "rev": 9}) == {
+        "accepted": False, "result": "ignored", "reason": "ended"}
+    st = reg.status(path)
+    assert st["errors"] == 0 and st["agendaHints"]["halted"] is None, st
+    dump = json.dumps(st, ensure_ascii=False) + "\n".join(cap.rows)
+    for secret in ("리텐션", "코호트", "다시 찾는 사용자", "묶음이에요"):
+        assert secret not in dump, f"로그나 상태에 내용이 남음: {secret}"
+
+    # 5) 꺼진 서버(기본): 보드에 hints·terms 칸이 없고 조작은 무시한다
+    reg, pub, boards = build()
+    mid, path = 62, "62"
+    reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(path, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
+    reg.receive_batch(path, {"meetingId": mid, "batch": 1, "lines": lines, "edits": []})
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert boards() and all("hints" not in b and "terms" not in b for b in boards())
+    assert reg.status(path)["agendaHints"] is None
+    assert reg.receive_hint_action(path, {"meetingId": mid, "action": "disable", "rev": 1}) == {
+        "accepted": False, "result": "ignored", "reason": "off"}
+
+    # 6) 모델이 계속 실패해도 보드는 나간다 (용어집 길의 카드는 만들어진다)
+    def boom(user):
+        raise RuntimeError("모델 오류")
+    reg, pub, boards = build(hints_cfg=HintsCfg(min_new_lines=1), hints_llm=boom, hints_glossary=glossary)
+    mid, path = 63, "63"
+    reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(path, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
+    reg.receive_batch(path, {"meetingId": mid, "batch": 1, "lines": lines, "edits": []})
+    assert reg.wait_idle(path) and pub.wait_idle()
+    b = boards()[-1]
+    assert [h["term"] for h in b["hints"]] == ["리텐션"], b["hints"]
+    st = reg.status(path)["agendaHints"]
+    assert st["errors"] >= 1 and st["fromGlossary"] == 1 and reg.status(path)["agendaClassification"]["errors"] == 0, st
+
+
 def main():
     cap = Capture()
     logging.getLogger("ai-service").addHandler(cap)
@@ -2189,6 +2334,8 @@ def main():
     test_api_status_edits()
     test_offtopic_cfg()
     test_agenda_offtopic_flow(cap)
+    test_hints_config()
+    test_agenda_hints_flow(cap)
     test_agenda_offtopic_isolated()
     test_api_offtopic_action()
     test_agenda_leftover_flow(cap)

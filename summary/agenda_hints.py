@@ -75,6 +75,7 @@ class HintsCfg:
         self.max_calls = 60               # 회의당 호출 상한
         self.max_cards = 3                # 동시에 보이는 카드 수
         self.max_per_call = 3             # 한 번의 응답에서 받는 용어 수
+        self.max_terms = 200              # 보드 terms 칸에 담는 용어 수 상한 (넘으면 가장 오래된 것부터 뺀다)
         self.term_max_chars = 20
         self.explain_max_chars = 60
         for k, v in kw.items():
@@ -131,9 +132,11 @@ class Glossary:
     팀 용어집. 파일 형식(JSON):
       {"terms": [{"term": "리텐션", "aliases": ["retention"], "explain": "앱을 다시 찾는 사용자 비율이에요."}]}
     term 2~20자, explain 한 줄 60자 이하, 서로 겹치는 이름(term, aliases)이 없어야 한다. 어긋나면 ValueError.
+    name(선택)은 화면에 보여 줄 이름으로 한 줄 2~40자다 (예: "리텐션 (Retention)"). 없으면 화면은 term 을 쓴다.
     """
     TERM_MAX = 20
     EXPLAIN_MAX = 60
+    NAME_MAX = 40
 
     def __init__(self, entries):
         self.entries = []
@@ -149,7 +152,11 @@ class Glossary:
                 raise ValueError(f"{where}: explain 은 비어 있지 않은 한 줄 {self.EXPLAIN_MAX}자 이하 문자열이어야 함")
             if not isinstance(aliases, list) or not all(isinstance(a, str) and 2 <= len(a.strip()) <= self.TERM_MAX for a in aliases):
                 raise ValueError(f"{where}: aliases 는 2~{self.TERM_MAX}자 문자열 목록이어야 함")
-            entry = {"term": term.strip(), "explain": explain.strip(), "aliases": [a.strip() for a in aliases], "key": _norm(term)}
+            name = e.get("name")
+            if name is not None and (not isinstance(name, str) or not 2 <= len(name.strip()) <= self.NAME_MAX or "\n" in name):
+                raise ValueError(f"{where}: name 은 한 줄 2~{self.NAME_MAX}자 문자열이어야 함")
+            entry = {"term": term.strip(), "explain": explain.strip(), "aliases": [a.strip() for a in aliases], "key": _norm(term),
+                     "name": name.strip() if name else None}
             for name in [term] + aliases:
                 k = _norm(name)
                 if k in self._by_key:
@@ -252,7 +259,8 @@ class AgendaHints:
             found = [f for f in found if not any(o is not f and o[0] <= f[0] and f[1] <= o[1] and o[1] - o[0] > f[1] - f[0] for o in found)]
             for _pos, _end, key in sorted(found):
                 entry = self.glossary.find(key)
-                self._add_card(entry["key"], entry["term"], entry["explain"], ORIGIN_GLOSSARY, [ln["id"]])
+                self._add_card(entry["key"], entry["term"], entry["explain"], ORIGIN_GLOSSARY, [ln["id"]],
+                               name=entry["name"], aliases=entry["aliases"])
 
     # ---------------- 모델 길 ----------------
     def _llm_job(self, view):
@@ -377,14 +385,14 @@ class AgendaHints:
             log.error("용어 후보 찾기를 멈춤 meeting=%s 연속 실패 %s번", self.c.meeting_id, self.err_streak)
 
     # ---------------- 카드 ----------------
-    def _add_card(self, key, term, text, origin, evidence):
-        """락 안에서 부른다. 이미 안내한 용어(닫은 것 포함)는 만들지 않는다."""
+    def _add_card(self, key, term, text, origin, evidence, name=None, aliases=()):
+        """락 안에서 부른다. 이미 안내한 용어(닫은 것 포함)는 만들지 않는다. name(화면에 보일 이름)·aliases(같은 뜻의 다른 표기)는 용어집 길만 있다."""
         if key in self.shown:
             return
         self.shown.add(key)
         self.serial += 1
         self.cards.append({"id": f"h-{self.serial}", "key": key, "term": term, "text": text, "origin": origin,
-                           "evidence": list(evidence), "dismissed": False})
+                           "evidence": list(evidence), "dismissed": False, "name": name, "aliases": list(aliases)})
         log.info("용어 카드 생성 meeting=%s origin=%s", self.c.meeting_id, origin)
 
     def board(self):
@@ -393,8 +401,18 @@ class AgendaHints:
             if not self.enabled:
                 return []
             live = [c for c in self.cards if not c["dismissed"]][-self.cfg.max_cards:]
-            return [{"id": c["id"], "kind": KIND_TERM, "term": c["term"], "text": c["text"], "origin": c["origin"],
-                     "evidenceSeqs": list(c["evidence"])} for c in live]
+            return [{"id": c["id"], "kind": KIND_TERM, "term": c["term"], **({"name": c["name"]} if c.get("name") else {}),
+                     "text": c["text"], "origin": c["origin"], "evidenceSeqs": list(c["evidence"])} for c in live]
+
+    def terms(self):
+        """보드의 terms 칸. 이 회의에서 지금까지 찾은 용어 전부 (닫은 카드도 포함, 가장 오래된 것부터 max_terms 개까지 남김). 화면이 전사에서
+        용어를 칠하고 뜻 카드를 띄우고 용어 수를 세는 데 쓴다. 꺼져 있으면 빈 목록(이미 찾은 용어도 보이지 않는다)."""
+        with self.lock:
+            if not self.enabled:
+                return []
+            return [{"id": c["id"], "term": c["term"], **({"name": c["name"]} if c.get("name") else {}),
+                     "aliases": list(c.get("aliases") or []), "text": c["text"], "origin": c["origin"],
+                     "firstSeq": c["evidence"][0]} for c in self.cards[-self.cfg.max_terms:]]
 
     # ---------------- 사람의 조작 ----------------
     def dismiss(self, card_id):
@@ -738,7 +756,43 @@ def selftest():
     th.join()
     assert not errs, errs
 
-    print("용어 카드 자체 시험 통과 (용어집 파일 형식, 용어집 길, 별칭, 영문 경계, 긴 이름 우선, STT 불확실·낮은 확신도·맞장구, 줄 한 번만 보기, 모델 호출 시점, 후보 코드 확인과 경계값, 상한, JSON 재시도, 연속 실패, 호출 상한, 카드 3장·닫기·다시 만들지 않음, 끄기·켜기, 종료, 로그에 내용 없음, 동시 접근)")
+
+    # 22) terms 칸 (v0.2): 닫은 카드도 남고, 용어집 길은 이름·별칭을 담고, 꺼지면 비고, 상한을 넘으면 오래된 것부터 뺀다
+    named = Glossary([{"term": "리텐션", "name": "리텐션 (Retention)", "aliases": ["retention"], "explain": "다시 찾는 사용자 비율이에요."},
+                      {"term": "KPI", "explain": "목표 달성 정도를 재는 핵심 지표예요."}])
+    w = World(named, replies=[{"terms": []}, {"terms": []},          # 앞의 두 줄에서는 모델 후보가 없다
+                              {"terms": [{"term": "코호트", "meaning": "비슷한 조건의 사용자 묶음이에요.", "evidence": [[1, 1]], "confident": True}]}],
+              min_new_lines=1)
+    assert w.h.terms() == []
+    w.say("리텐션이 중요해요")
+    w.say("KPI 먼저 봐요")
+    w.say("코호트로 나눠 볼까요")
+    t = w.h.terms()
+    assert [(x["id"], x["term"], x["origin"]) for x in t] == [("h-1", "리텐션", "GLOSSARY"), ("h-2", "KPI", "GLOSSARY"), ("h-3", "코호트", "AI_EXPLAIN")], t
+    assert t[0]["name"] == "리텐션 (Retention)" and t[0]["aliases"] == ["retention"] and "name" not in t[1] and t[1]["aliases"] == [] and t[2]["aliases"] == []
+    assert all(isinstance(x["firstSeq"], int) and x["text"] for x in t) and t[0]["firstSeq"] < t[1]["firstSeq"] < t[2]["firstSeq"]
+    assert [b["id"] for b in w.h.board()] == ["h-1", "h-2", "h-3"] and w.h.board()[0]["name"] == "리텐션 (Retention)" and "name" not in w.h.board()[1]
+    w.h.dismiss("h-1")
+    assert [x["id"] for x in w.h.terms()] == ["h-1", "h-2", "h-3"] and [b["id"] for b in w.h.board()] == ["h-2", "h-3"], "닫은 카드도 terms 에는 남는다"
+    w.h.set_enabled(False)
+    assert w.h.terms() == [] and w.h.board() == []
+    w.h.set_enabled(True)
+    assert len(w.h.terms()) == 3
+    w = World(Glossary([{"term": f"용어{i:02d}", "explain": "뜻이에요."} for i in range(5)]), min_new_lines=1, max_terms=3)
+    for i in range(5):
+        w.say(f"용어{i:02d} 이야기")
+    assert [x["term"] for x in w.h.terms()] == ["용어02", "용어03", "용어04"], "상한을 넘으면 가장 오래된 것부터 뺀다"
+    # 용어집 name 검사
+    for bad in ({"term": "리텐션", "name": "가", "explain": "뜻이에요."}, {"term": "리텐션", "name": "가" * 41, "explain": "뜻이에요."},
+                {"term": "리텐션", "name": 5, "explain": "뜻이에요."}, {"term": "리텐션", "name": "두 줄\n이름", "explain": "뜻이에요."}):
+        try:
+            Glossary([bad])
+            raise AssertionError(f"잘못된 name 을 못 잡음: {bad}")
+        except ValueError:
+            pass
+    assert Glossary([{"term": "리텐션", "name": "  리텐션 (Retention)  ", "explain": "뜻이에요."}]).entries[0]["name"] == "리텐션 (Retention)"
+
+    print("용어 카드 자체 시험 통과 (용어집 파일 형식, 용어집 길, 별칭, 영문 경계, 긴 이름 우선, STT 불확실·낮은 확신도·맞장구, 줄 한 번만 보기, 모델 호출 시점, 후보 코드 확인과 경계값, 상한, JSON 재시도, 연속 실패, 호출 상한, 카드 3장·닫기·다시 만들지 않음, 끄기·켜기, 종료, 로그에 내용 없음, 동시 접근, terms 칸과 이름·별칭)")
 
 
 if __name__ == "__main__":

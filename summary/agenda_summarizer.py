@@ -598,7 +598,7 @@ class AgendaSummarizer:
         leftover: 미결 안건 목록의 재료 {"requestRev", "final", "status_info"} (AgendaLeftover.state + board_status(preview_final=True)).
                   없으면 leftover 칸은 null 이다. 넘길 후보를 거르고 요약 문장을 복사해 담는다(agenda_leftover.build_leftover).
                   같은 재료로 오늘 회의 요약 정리본(todaySummary, AI-08)도 만든다. 만들다 실패하면 그 칸만 null 이다.
-        hints, terms: 용어 카드(AgendaHints.board)와 이 회의에서 찾은 용어 전체(AgendaHints.terms). hints 가 None 이면 두 칸 모두 보드에 넣지 않는다
+        hints, terms: 용어 카드(TranscriptTerms.board)와 이 회의에서 찾은 용어 전체(TranscriptTerms.terms). hints 가 None 이면 두 칸 모두 보드에 넣지 않는다
                   (기능이 꺼져 있을 때 보드 모양은 예전과 같다). 있으면 바뀔 때 보드도 바뀐 것으로 본다."""
         view = self._view()
         with self.lock:

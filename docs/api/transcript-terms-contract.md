@@ -1,12 +1,12 @@
 # AI 서버 먼저 알려드려요 - 용어 카드 형식 (AI-10 후보) v0.2 초안
 
 > 회의 중 낯선 용어가 처음 나오면 뜻을 알려 주는 기능의 형식이다. 안건 보드(연동 API 초안 3.2)의 새 칸 `hints`(최근 카드)와 `terms`(찾은 용어 전체)를 채우고, 사용자가 카드를 닫거나 기능을 끄는 알림을 받는다.
-> **v0.2는 화면 기획서(Figma `HiFi Flow Version01`의 Live_22 용어 감지·탭 알림, Live_23 내 도우미·용어 먼저 알려주기, Live_24 전사 속 용어 호버)와 요구사항 REQ-191을 반영한 AI 쪽 제안이다.** 서버에는 연결했고 **기본은 꺼져 있다**(`AGENDA_HINTS=1`일 때만 동작). 켜지 않으면 보드 모양은 예전과 같다. 기획팀·cn 팀·프론트 확인 전이라 모든 값이 바뀔 수 있다. 확정되면 이 문서를 최신 전체본 하나로 교체한다.
+> **v0.2는 화면 기획서(Figma `HiFi Flow Version01`의 Live_22 용어 감지·탭 알림, Live_23 내 도우미·용어 먼저 알려주기, Live_24 전사 속 용어 호버)와 요구사항 REQ-191을 반영한 AI 쪽 제안이다.** 서버에는 연결했고 **기본은 꺼져 있다**(`TRANSCRIPT_TERMS=1`일 때만 동작). 켜지 않으면 보드 모양은 예전과 같다. 기획팀·cn 팀·프론트 확인 전이라 모든 값이 바뀔 수 있다. 확정되면 이 문서를 최신 전체본 하나로 교체한다.
 > 보드 전체 모양은 `agenda-summary-contract.md`에 있다.
 
 - 근거: 노션 "기능 추가 제안: 먼저 알려드려요 · 회의 중 질문 챗봇 · 회의록 양식 가져오기" 1번, 요구사항 명세서 REQ-191(용어 감지. 비고: "AI 용어 감지 필요(ai-service 명세 협의). 지금 화면은 확인용 내장 용어 7개로만 찾음"), 화면 기획서 Live_22~24.
 - 이 문서의 범위: **용어 카드만.** 지난 회의 카드(`PAST_MEETING`)는 포함하지 않는다.
-- 모듈: `summary/agenda_hints.py` (`AgendaHints`, `Glossary`, `HintsCfg`). 서버 연결은 `server/service.py`. 시험은 `python3 agenda_hints.py --selftest`와 `python3 -m server.selftest`.
+- 모듈: `summary/transcript_terms.py` (`TranscriptTerms`, `Glossary`, `TermsCfg`). 서버 연결은 `server/service.py`. 시험은 `python3 transcript_terms.py --selftest`와 `python3 -m server.selftest`.
 - 예시: `examples/api/agenda-board-hints-put.json`, `examples/api/hint-actions-dismiss-post.json`, `examples/api/hint-actions-disable-post.json`.
 
 ## v0.1에서 바뀐 것
@@ -31,13 +31,13 @@
 | 길 | 조건 | 모델 | `origin` | 뜻의 출처 |
 |---|---|---|---|---|
 | 용어집 | 용어집의 `term` 또는 `aliases`가 새 줄에 나옴 | 안 씀 | `GLOSSARY` | 용어집 문장 그대로 |
-| AI 설명 | 용어집에 없는 낯선 말 | 씀 (`ai.task=agenda_hints`, 새 값) | `AI_EXPLAIN` | 모델이 쓴 한 줄, 코드가 확인 |
+| AI 설명 | 용어집에 없는 낯선 말 | 씀 (`ai.task=transcript_terms`, 새 값) | `AI_EXPLAIN` | 모델이 쓴 한 줄, 코드가 확인 |
 
 모델 길은 새 줄이 4개 모이거나(`min_new_lines`), 새 줄이 있는데 음성 시간으로 60초가 지나면(`refresh_sec`) 한 번 부른다. 한 번에 최대 30줄, 응답에서 최대 3개 용어를 받는다.
 
 ## 3. 보드의 hints 칸과 terms 칸
 
-`AGENDA_HINTS=1`이면 보드 맨 위에 두 칸이 생긴다. **꺼져 있으면 두 칸 모두 보드에 없다**(키 자체가 없다). 켜져 있으면 카드가 없어도 빈 배열로 낸다. 프론트는 칸이 없을 때를 "기능 꺼짐"으로 읽는다.
+`TRANSCRIPT_TERMS=1`이면 보드 맨 위에 두 칸이 생긴다. **꺼져 있으면 두 칸 모두 보드에 없다**(키 자체가 없다). 켜져 있으면 카드가 없어도 빈 배열로 낸다. 프론트는 칸이 없을 때를 "기능 꺼짐"으로 읽는다.
 
 ```json
 "hints": [
@@ -106,12 +106,12 @@
 ```
 
 - `term` 2~20자, `explain` 한 줄 60자 이하, `aliases`는 선택, **`name`은 선택이고 한 줄 2~40자(v0.2)**. 이름(term, aliases)은 서로 겹치면 안 된다. 어긋나면 읽을 때 오류(`ValueError`)이고, 서버는 시작할 때 설정 오류로 멈춘다.
-- `AGENDA_HINTS_GLOSSARY_PATH`가 가리키는 파일이 없으면 시작할 때 설정 오류다(경로 오타를 빈 용어집으로 넘기지 않는다). 경로를 비우면 빈 용어집이고 모델 길만 동작한다.
+- `TRANSCRIPT_TERMS_GLOSSARY_PATH`가 가리키는 파일이 없으면 시작할 때 설정 오류다(경로 오타를 빈 용어집으로 넘기지 않는다). 경로를 비우면 빈 용어집이고 모델 길만 동작한다.
 - 이 파일에 무엇을 넣을지는 팀이 정한다. **내용은 아직 없다.** 화면 확인용 내장 용어 7개(리텐션, 온보딩, KPI, MVP, 이탈률, 우선순위, QA)가 프론트 `termGlossary.ts`에 있으니 첫 용어집의 후보다.
 
 ## 6. 사용자의 조작
 
-`POST /internal/meetings/{meetingId}/hint-actions` (`AGENDA_HINTS=1`일 때만 받는다)
+`POST /internal/meetings/{meetingId}/hint-actions` (`TRANSCRIPT_TERMS=1`일 때만 받는다)
 
 ```json
 {"meetingId": "m_1234", "action": "dismiss", "rev": 3, "hintId": "h-2"}
@@ -135,10 +135,10 @@
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
-| `AGENDA_HINTS` | 0 | `1`이면 켠다. `0`·`1`이 아니면 시작할 때 설정 오류 |
-| `AGENDA_HINTS_GLOSSARY_PATH` | 없음 | 팀 용어집 JSON 경로 (5장) |
-| `AGENDA_HINTS_REFRESH_SEC` | 60 | 새 줄이 있는데 이 시간(음성 시간)이 지나면 용어 후보를 찾음 |
-| `MAX_AGENDA_HINTS_CALLS_PER_MEETING` | 60 | 회의당 모델 호출 상한 |
+| `TRANSCRIPT_TERMS` | 0 | `1`이면 켠다. `0`·`1`이 아니면 시작할 때 설정 오류 |
+| `TRANSCRIPT_TERMS_GLOSSARY_PATH` | 없음 | 팀 용어집 JSON 경로 (5장) |
+| `TRANSCRIPT_TERMS_REFRESH_SEC` | 60 | 새 줄이 있는데 이 시간(음성 시간)이 지나면 용어 후보를 찾음 |
+| `MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING` | 60 | 회의당 모델 호출 상한 |
 
 모듈 설정 (환경변수로 바꾸지 않는 값, 제안)
 
@@ -154,8 +154,8 @@
 
 ## 8. 토큰 지표와 로그
 
-- `ai.task` 새 값 `agenda_hints`. 켜기 전에 cn 팀 집계가 알아보는지 확인해야 한다.
-- 로그와 상태 조회(`GET /internal/meetings/{id}/status`의 `agendaHints`. 꺼져 있으면 `null`)에는 전사 내용, 안건 제목, 용어, 뜻을 남기지 않는다. 개수와 예외 이름만 남긴다. 시험으로 확인했다.
+- `ai.task` 새 값 `transcript_terms`. 켜기 전에 cn 팀 집계가 알아보는지 확인해야 한다.
+- 로그와 상태 조회(`GET /internal/meetings/{id}/status`의 `transcriptTerms`. 꺼져 있으면 `null`)에는 전사 내용, 안건 제목, 용어, 뜻을 남기지 않는다. 개수와 예외 이름만 남긴다. 시험으로 확인했다.
 
 ## 9. 복구
 

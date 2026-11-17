@@ -357,7 +357,7 @@ def adapt_offtopic_action(msg):
 
 
 def adapt_hint_action(msg):
-    """용어 카드에 대한 사용자의 조작 (agenda-hints-contract.md 6장)
+    """용어 카드에 대한 사용자의 조작 (transcript-terms-contract.md 6장)
     -> {"meeting_id", "action", "rev", "hint_id"}. action 은 dismiss(카드 닫기, hintId 필요), disable(먼저 알려드려요 끄기), enable(켜기)."""
     meeting_id, raw_id = _meeting_id(msg, "hint-actions")
     action = _need(msg, "action", str, "hint-actions")

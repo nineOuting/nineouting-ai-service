@@ -4,7 +4,7 @@
 먼저 알려드려요 - 용어 카드 (기능 추가 제안 1번의 1차 범위)
 
 회의 중 낯선 용어가 처음 나오면 "이 말은 이런 뜻이에요" 카드를 만든다. 지난 회의 카드는 이 모듈에 넣지 않았다.
-**서버에는 연결하지 않았다.** server/service.py, 보드 조립, 백엔드 계약은 건드리지 않고, 모듈과 자체 시험만 있다. 형식 제안은 docs/api/agenda-hints-contract.md.
+**서버에는 연결하지 않았다.** server/service.py, 보드 조립, 백엔드 계약은 건드리지 않고, 모듈과 자체 시험만 있다. 형식 제안은 docs/api/transcript-terms-contract.md.
 
 카드를 만드는 길 두 가지
   1) 용어집(JSON)에 있는 말이 새 줄에 나오면 -> 모델 없이 카드를 만든다. origin = GLOSSARY, 뜻은 용어집 문장 그대로.
@@ -42,9 +42,9 @@ if HERE not in sys.path:
 
 from meeting_summary import call_llm, parse_llm_json, mmss, squash, build_input, build_char_stream  # noqa: E402
 
-log = logging.getLogger("ai-service.agenda-hints")
+log = logging.getLogger("ai-service.transcript-terms")
 
-TASK = "agenda_hints"                 # 토큰 사용량 지표의 ai.task 값 (새 값이라 cn 팀 집계 확인이 필요하다)
+TASK = "transcript_terms"                 # 토큰 사용량 지표의 ai.task 값 (새 값이라 cn 팀 집계 확인이 필요하다)
 MAX_STREAK = 3                        # 연속 실패가 이만큼이면 모델 호출을 멈춘다
 KIND_TERM = "TERM"
 ORIGIN_GLOSSARY = "GLOSSARY"
@@ -63,7 +63,7 @@ SYSTEM_PROMPT = """너는 회의 전사에서 참석자가 낯설어할 만한 �
 출력은 JSON만. {"terms": [{"term": "리텐션", "meaning": "앱을 다시 찾는 사용자 비율이에요.", "evidence": [[2, 2]], "confident": true}]}"""
 
 
-class HintsCfg:
+class TermsCfg:
     """용어 카드 설정. 값은 모두 제안이며 평가 뒤에 다시 정한다."""
 
     def __init__(self, **kw):
@@ -187,11 +187,11 @@ class Glossary:
 
 
 # --------------------------------------------------------------------------------------
-class AgendaHints:
+class TranscriptTerms:
     def __init__(self, classifier, glossary=None, cfg=None, llm=None):
         self.c = classifier
         self.glossary = glossary or Glossary([])
-        self.cfg = cfg or HintsCfg()
+        self.cfg = cfg or TermsCfg()
         self.llm = llm or make_llm(self.cfg)
         self.lock = threading.RLock()
         self.enabled = True
@@ -456,7 +456,7 @@ def selftest():
             self.t, self.nid = 0, 0
             self.prompts, self.replies = [], list(replies or [])
             cfg.setdefault("min_new_lines", 4)
-            self.h = AgendaHints(self.c, glossary if glossary is not None else Glossary([]), HintsCfg(**cfg), llm=self.fake)
+            self.h = TranscriptTerms(self.c, glossary if glossary is not None else Glossary([]), TermsCfg(**cfg), llm=self.fake)
 
         def fake(self, user):
             self.prompts.append(user)
@@ -708,12 +708,12 @@ def selftest():
     assert w.h.info()["cards"] == 0
 
     # 18c) echo 모드는 모델을 부르지 않고 후보도 내지 않는다
-    assert json.loads(make_llm(HintsCfg())("아무 입력")) == {"terms": []}
+    assert json.loads(make_llm(TermsCfg())("아무 입력")) == {"terms": []}
     c0 = AgendaClassifier("t", ClassifyCfg(refresh_sec=0, max_lines=30))
-    assert AgendaHints(c0).llm is echo_llm
+    assert TranscriptTerms(c0).llm is echo_llm
 
     # 19) 알 수 없는 설정은 거부한다. info 는 내용을 담지 않는다
-    raises(TypeError, lambda: HintsCfg(nope=1))
+    raises(TypeError, lambda: TermsCfg(nope=1))
     w = World(GLOSS)
     w.say("리텐션 SECRETWORD 전사")
     assert "SECRETWORD" not in json.dumps(w.h.info(), ensure_ascii=False) and "리텐션" not in json.dumps(w.h.info(), ensure_ascii=False)

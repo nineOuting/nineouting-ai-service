@@ -42,7 +42,7 @@ from agenda_opinions import AgendaOpinions, OpinionCfg  # noqa: E402
 from agenda_todos import AgendaTodos, TodoCfg  # noqa: E402
 from agenda_offtopic import AgendaOffTopic, OffTopicCfg  # noqa: E402
 from agenda_leftover import AgendaLeftover  # noqa: E402
-from agenda_hints import AgendaHints, Glossary, HintsCfg  # noqa: E402
+from transcript_terms import TranscriptTerms, Glossary, TermsCfg  # noqa: E402
 from .publisher import AGENDA_CLASSIFICATION, AGENDA_BOARD  # noqa: E402
 
 log = logging.getLogger("ai-service")
@@ -200,34 +200,34 @@ def todo_cfg_from_env(env=None, cfg=None):
     return TodoCfg(**kw)
 
 
-def hints_from_env(env=None, cfg=None):
-    """환경변수 -> 용어 카드("먼저 알려드려요") 설정. 반환: (HintsCfg, Glossary). 꺼져 있으면 (None, None).
-    AGENDA_HINTS(0 또는 1, 기본 0 = 끔. 끄면 보드에 hints·terms 칸도 없고 모델도 부르지 않는다),
-    AGENDA_HINTS_GLOSSARY_PATH(팀 용어집 JSON 경로, 없으면 모델 길만), AGENDA_HINTS_REFRESH_SEC(새 줄이 모자랄 때 기다리는 시간, 기본 60초),
-    MAX_AGENDA_HINTS_CALLS_PER_MEETING(회의당 모델 호출 상한, 기본 60). 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
+def terms_from_env(env=None, cfg=None):
+    """환경변수 -> 용어 카드("먼저 알려드려요") 설정. 반환: (TermsCfg, Glossary). 꺼져 있으면 (None, None).
+    TRANSCRIPT_TERMS(0 또는 1, 기본 0 = 끔. 끄면 보드에 hints·terms 칸도 없고 모델도 부르지 않는다),
+    TRANSCRIPT_TERMS_GLOSSARY_PATH(팀 용어집 JSON 경로, 없으면 모델 길만), TRANSCRIPT_TERMS_REFRESH_SEC(새 줄이 모자랄 때 기다리는 시간, 기본 60초),
+    MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING(회의당 모델 호출 상한, 기본 60). 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
     값이 틀리거나 용어집을 읽지 못하면 ConfigError (서버가 뜨지 않는다)."""
     env = os.environ if env is None else env
     cfg = cfg or cfg_from_env(env)
-    raw = (env.get("AGENDA_HINTS") or "0").strip()
+    raw = (env.get("TRANSCRIPT_TERMS") or "0").strip()
     if raw not in ("0", "1"):
-        raise ConfigError(f"AGENDA_HINTS 는 0 이나 1 이어야 함: {raw}")
+        raise ConfigError(f"TRANSCRIPT_TERMS 는 0 이나 1 이어야 함: {raw}")
     if raw == "0":
         return None, None
     kw = {"provider": cfg.provider, "model": cfg.model}
-    for name, key in (("refresh_sec", "AGENDA_HINTS_REFRESH_SEC"), ("max_calls", "MAX_AGENDA_HINTS_CALLS_PER_MEETING")):
+    for name, key in (("refresh_sec", "TRANSCRIPT_TERMS_REFRESH_SEC"), ("max_calls", "MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING")):
         if env.get(key):
             try:
                 kw[name] = int(env[key])
             except ValueError:
                 raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
-    path = (env.get("AGENDA_HINTS_GLOSSARY_PATH") or "").strip()
+    path = (env.get("TRANSCRIPT_TERMS_GLOSSARY_PATH") or "").strip()
     if path and not os.path.exists(path):
-        raise ConfigError("AGENDA_HINTS_GLOSSARY_PATH 의 파일이 없음")        # 경로가 틀린 것을 조용히 빈 용어집으로 넘기지 않는다
+        raise ConfigError("TRANSCRIPT_TERMS_GLOSSARY_PATH 의 파일이 없음")        # 경로가 틀린 것을 조용히 빈 용어집으로 넘기지 않는다
     try:
         glossary = Glossary.load(path)
     except ValueError as e:
         raise ConfigError(f"용어집 오류: {e}")
-    return HintsCfg(**kw), glossary
+    return TermsCfg(**kw), glossary
 
 
 def offtopic_cfg_from_env(env=None, cfg=None):
@@ -280,7 +280,7 @@ def coalesce_from_env(env=None):
 class MeetingState:
     def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None, summarize_cfg=None, summarize_llm=None,
                  status_cfg=None, status_llm=None, opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None,
-                 offtopic_cfg=None, offtopic_llm=None, hints_cfg=None, hints_llm=None, hints_glossary=None):
+                 offtopic_cfg=None, offtopic_llm=None, terms_cfg=None, terms_llm=None, terms_glossary=None):
         self.meeting_id = meeting_id
         self.id_raw = meeting_id            # 백엔드가 보낸 meetingId 의 원래 값(숫자일 수 있음). 돌려보내는 본문에 쓴다
         self.summarizer = LiveSummarizer(meeting_id, cfg, llm=llm, verbose=False)
@@ -294,8 +294,8 @@ class MeetingState:
         self.offtopic = AgendaOffTopic(self.classifier, offtopic_cfg or OffTopicCfg(provider=cfg.provider, model=cfg.model),
                                        llm=offtopic_llm)                 # 분류 결과를 읽어 해당 없음이 오래 이어지면 새 안건을 제안
         self.leftover = AgendaLeftover()    # 종료 버튼을 누르면 미결 안건 목록을 만든다 (모델을 부르지 않는다)
-        self.hints = (AgendaHints(self.classifier, hints_glossary, hints_cfg, llm=hints_llm)   # 용어 카드. AGENDA_HINTS=1 일 때만 (기본 꺼짐)
-                      if hints_cfg is not None else None)
+        self.hints = (TranscriptTerms(self.classifier, terms_glossary, terms_cfg, llm=terms_llm)   # 용어 카드. TRANSCRIPT_TERMS=1 일 때만 (기본 꺼짐)
+                      if terms_cfg is not None else None)
         self.hint_rev = 0                   # 용어 카드 조작(닫기, 끄기·켜기)의 마지막 rev. 이보다 작거나 같은 것은 오래된 요청이다
         self.cls_version = 0                # 백엔드로 보낸 안건 분류 결과의 마지막 version
         self.status = "new"                 # new -> running <-> paused -> ended
@@ -318,7 +318,7 @@ class Registry:
     def __init__(self, cfg, llm=None, publisher=None, env=None, classify_cfg=None, classify_llm=None,
                  summarize_cfg=None, summarize_llm=None, status_cfg=None, status_llm=None,
                  opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None, offtopic_cfg=None, offtopic_llm=None,
-                 parallel=None, coalesce_max=None, hints_cfg=None, hints_llm=None, hints_glossary=None):
+                 parallel=None, coalesce_max=None, terms_cfg=None, terms_llm=None, terms_glossary=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
         self.publisher = publisher
@@ -335,11 +335,11 @@ class Registry:
         self.todo_llm = todo_llm            # 시험용: 안건 할 일 추출에서 모델 호출 대신 쓸 함수
         self.offtopic_cfg = offtopic_cfg or offtopic_cfg_from_env(self.env, cfg)
         self.offtopic_llm = offtopic_llm    # 시험용: 새 안건 제목 만들기에서 모델 호출 대신 쓸 함수
-        if hints_cfg is not None:           # 시험용: 직접 넣으면 켠 것으로 본다
-            self.hints_cfg, self.hints_glossary = hints_cfg, hints_glossary or Glossary([])
+        if terms_cfg is not None:           # 시험용: 직접 넣으면 켠 것으로 본다
+            self.terms_cfg, self.terms_glossary = terms_cfg, terms_glossary or Glossary([])
         else:
-            self.hints_cfg, self.hints_glossary = hints_from_env(self.env, cfg)    # 꺼져 있으면 (None, None)
-        self.hints_llm = hints_llm          # 시험용: 용어 후보 찾기에서 모델 호출 대신 쓸 함수
+            self.terms_cfg, self.terms_glossary = terms_from_env(self.env, cfg)    # 꺼져 있으면 (None, None)
+        self.terms_llm = terms_llm          # 시험용: 용어 후보 찾기에서 모델 호출 대신 쓸 함수
         self.parallel = parallel_from_env(self.env) if parallel is None else bool(parallel)   # 안건 단계를 동시에 돌릴지
         self.coalesce_max = coalesce_from_env(self.env) if coalesce_max is None else int(coalesce_max)   # 밀린 묶음을 한 번에 처리할 최대 개수
         self.shutting_down = False
@@ -371,7 +371,7 @@ class Registry:
                                                              self.status_cfg, self.status_llm,
                                                              self.opinion_cfg, self.opinion_llm, self.todo_cfg, self.todo_llm,
                                                              self.offtopic_cfg, self.offtopic_llm,
-                                                             self.hints_cfg, self.hints_llm, self.hints_glossary)
+                                                             self.terms_cfg, self.terms_llm, self.terms_glossary)
                 if raw_id is not None:
                     m.id_raw = raw_id
             return m
@@ -557,7 +557,7 @@ class Registry:
         return {"accepted": True, "result": {"applied": "accepted", "stale": "stale", "not_active": "not_active"}[r], "applied": r == "applied"}
 
     def receive_hint_action(self, path_meeting_id, msg):
-        """용어 카드 닫기, "먼저 알려드려요" 끄기·켜기 (agenda-hints-contract.md 6장). 기능이 꺼져 있으면 무시한다.
+        """용어 카드 닫기, "먼저 알려드려요" 끄기·켜기 (transcript-terms-contract.md 6장). 기능이 꺼져 있으면 무시한다.
         rev 가 앞서 받은 것보다 크지 않으면 오래된 요청이라 stale 로 돌려준다."""
         self._require_ready()
         a = adapt_hint_action(msg)
@@ -735,7 +735,7 @@ class Registry:
                  ("agenda_todos", lambda: m.todos.process(final=final)),
                  ("agenda_offtopic", lambda: m.offtopic.process(final=final))]
         if m.hints is not None:
-            steps.append(("agenda_hints", lambda: m.hints.process(final=final)))
+            steps.append(("transcript_terms", lambda: m.hints.process(final=final)))
         if self.parallel:
             threads = [threading.Thread(target=self._step, args=(m, name, fn), name=f"meeting-{m.meeting_id}-{name}", daemon=True)
                        for name, fn in steps]
@@ -843,7 +843,7 @@ class Registry:
                 "agendaOpinions": m.opinions.info(),
                 "agendaTodos": m.todos.info(),
                 "agendaOffTopic": m.offtopic.info(),
-                "agendaHints": m.hints.info() if m.hints is not None else None,
+                "transcriptTerms": m.hints.info() if m.hints is not None else None,
                 "agendaLeftover": m.leftover.info(),
                 "agendaTodaySummary": m.agenda_summarizer.today_info(),
                 "publisher": self.publisher.info() if self.publisher else {"enabled": False},

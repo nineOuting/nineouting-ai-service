@@ -98,20 +98,19 @@ def test_제목은_줄에_실제로_있어야_하고_번호와_띄어쓰기는_�
     assert ti.check(data, lines)[0] is not None
     data["fields"][1]["title"] = "회의 안건"                       # 줄에 없음
     got, problems = ti.check(data, lines)
-    assert got is None and any("L3의 글에 없음" in p or "의 글에 없음" in p for p in problems)
+    assert got is None and any("글에 없거나" in p for p in problems)
 
 
 @pytest.mark.parametrize("mutate, expect", [
     (lambda d, r: d["fields"][0].update(ref=999), "없는 줄 번호"),
     (lambda d, r: d["fields"][2].update(type="paragraph"), "type"),
     (lambda d, r: d["fields"][4].update(columns=None), "columns"),
-    (lambda d, r: d["fields"][4].update(columns=7), "columns"),
+    (lambda d, r: d["fields"][4].update(columns=13), "columns"),
     (lambda d, r: d["fields"][4].update(columns=True), "columns"),
     (lambda d, r: d["fields"].reverse(), "순서"),
-    (lambda d, r: d["fields"][1].update(ref=d["fields"][0]["ref"], title="회의명"), "두 곳"),
-    (lambda d, r: d["fields"][1].update(ref=d["fields"][0]["ref"], title="회의명"), "순서"),
+    (lambda d, r: d["fields"][1].update(ref=d["fields"][0]["ref"], title="회의명"), "title이"),      # 같은 줄이어도 제목이 같으면 안 됨
     (lambda d, r: d.update(header=[r("특이사항")]), "header"),         # 2쪽 줄은 머리글이 될 수 없다
-    (lambda d, r: d.update(header=[r("1. 논의 내용")]), "두 곳"),       # 항목 제목 줄을 머리글로도 쓸 수 없다
+    (lambda d, r: d.update(header=[r("1. 논의 내용")]), "머리글·바닥글로 쓴 줄"),   # 항목 제목 줄을 머리글로도 쓸 수 없다
     (lambda d, r: d.update(footer=[r("1. 논의 내용")]), "footer"),
     (lambda d, r: d.update(header=[999]), "header"),
     (lambda d, r: d.update(header="나인아웃팅 회의록"), "header"),
@@ -136,13 +135,77 @@ def test_제목이_겹치거나_20개를_넘거나_JSON이_아니면_걸린다(l
     assert ti.check(None, lines)[0] is None and ti.check({"fields": "x"}, lines)[0] is None
 
 
-def test_체크박스가_없는_체크리스트는_목록으로_낮추고_경고한다(lines):
+def test_한_줄에_칸_이름이_여럿이면_같은_줄_번호를_줄에_나온_순서대로_쓴다():
+    ls = ti.number_lines([(1, ["주간 회의록", "회의명 일시", "장소 참석자", "1. 논의 내용"])])
+    r = lambda t: next(x.ref for x in ls if x.text == t)      # noqa: E731
+    field = lambda ref, title: {"ref": ref, "title": title, "type": "free", "columns": None, "descriptionRefs": []}      # noqa: E731
+    two = {"header": [], "footer": [], "fields": [field(r("회의명 일시"), "회의명"), field(r("회의명 일시"), "일시"),
+                                                   field(r("장소 참석자"), "장소"), field(r("장소 참석자"), "참석자"),
+                                                   field(r("1. 논의 내용"), "논의 내용")]}
+    got, problems = ti.check(two, ls)
+    assert problems == [] and [f["title"] for f in got.fields] == ["회의명", "일시", "장소", "참석자", "논의 내용"]
+    two["fields"][0], two["fields"][1] = two["fields"][1], two["fields"][0]        # 줄에 나온 순서와 다름
+    got, problems = ti.check(two, ls)
+    assert got is None and any("앞 항목보다 앞" in p for p in problems), problems
+
+
+def test_다른_쪽의_같은_머리글_바닥글을_골라도_첫_쪽_마지막_쪽_것으로_본다():
+    ls = ti.number_lines([(1, ["Doc 1", "1. 개요", "- 1 -"]), (2, ["Doc 1", "2. 내용", "- 2 -"])])
+    r = lambda t, nth=0: [x.ref for x in ls if x.text == t][nth]      # noqa: E731
+    field = {"ref": r("1. 개요"), "title": "개요", "type": "free", "columns": None, "descriptionRefs": []}
+    got, problems = ti.check({"header": [r("Doc 1", 1)], "footer": [r("- 1 -")], "fields": [field]}, ls)
+    assert problems == [] and got.header == "Doc 1" and got.footer == "- 2 -"       # 2쪽 머리글 → 1쪽 것, 1쪽 바닥글 → 마지막 쪽 것
+    got, problems = ti.check({"header": [r("2. 내용")], "footer": [], "fields": [field]}, ls)
+    assert got is None and any("header" in p for p in problems)                       # 같은 글이 아니면 그대로 걸린다
+
+
+def test_줄_번호를_문자열_L3나_3으로_써도_읽고_이상한_글은_거른다(lines):
+    data = good(lines)
+    for f in data["fields"]:
+        f["ref"] = f"L{f['ref']}"
+    data["header"], data["footer"] = [f"L{data['header'][0]}"], [str(data["footer"][0])]
+    data["fields"][1]["descriptionRefs"] = [f"L{data['fields'][1]['descriptionRefs'][0]}"]
+    got, problems = ti.check(data, lines)
+    assert problems == [] and [f["title"] for f in got.fields][1] == "논의 내용" and got.header == "나인아웃팅 회의록"
+    data["fields"][0]["ref"] = "행3"
+    assert ti.check(data, lines)[0] is None
+    data["fields"][0]["ref"] = True
+    assert ti.check(data, lines)[0] is None
+
+
+def test_columns와_descriptionRefs를_생략해도_된다(lines):
+    data = good(lines)
+    for f in data["fields"]:
+        f.pop("descriptionRefs"), (f.pop("columns") if f["type"] != "table" else None)
+    got, problems = ti.check({k: v for k, v in data.items() if k == "fields"}, lines)
+    assert problems == [] and got.header is None and got.footer is None and got.fields[4]["columns"] == 3
+
+
+def test_체크박스가_없는_체크리스트는_종류를_두고_경고만_한다(lines):
     data = good(lines)
     data["fields"][2]["type"] = "checklist"             # "2. 결정 사항" 안에 체크박스 글자가 없음
     got, problems = ti.check(data, lines)
-    assert problems == [] and got.fields[2]["type"] == "list"
-    assert got.fields[3]["type"] == "checklist"         # 체크박스가 있는 칸은 그대로
-    assert got.warnings == [{"code": ti.CHECKLIST_NO_BOX, "title": "결정 사항"}]
+    assert problems == [] and got.fields[2]["type"] == "checklist" and got.fields[3]["type"] == "checklist"
+    assert got.warnings == [{"code": ti.CHECKLIST_NO_BOX, "title": "결정 사항"}]       # 체크박스가 있는 칸은 경고 없음
+
+
+def test_열이_8보다_많은_표는_8로_자르고_센_값을_경고로_남긴다(lines):
+    data = good(lines)
+    data["fields"][4]["columns"] = 10
+    got, problems = ti.check(data, lines)
+    assert problems == [] and got.fields[4]["columns"] == 8
+    assert got.warnings == [{"code": ti.COLUMNS_CAPPED, "title": "할 일", "detected": 10}]
+    data["fields"][4]["columns"] = 8
+    assert ti.check(data, lines)[0].warnings == []
+
+
+def test_빈칸이_든_서식_문장은_설명에서_빼고_경고한다():
+    ls = ti.number_lines([(1, ["1. 개요", "의장은 ____ 에 개회를 선언하였다.", "2. 결정", "※ 결정된 것만 적는다"])])
+    r = lambda t: next(x.ref for x in ls if x.text == t)      # noqa: E731
+    field = lambda t, d: {"ref": r(t), "title": t[3:], "type": "free", "descriptionRefs": [r(d)]}      # noqa: E731
+    got, problems = ti.check({"fields": [field("1. 개요", "의장은 ____ 에 개회를 선언하였다."), field("2. 결정", "※ 결정된 것만 적는다")]}, ls)
+    assert problems == [] and "description" not in got.fields[0] and got.fields[1]["description"] == "※ 결정된 것만 적는다"
+    assert got.warnings == [{"code": ti.DESCRIPTION_DROPPED, "title": "개요"}]
 
 
 def test_항목이_없는_답은_통과하고_머리글_바닥글은_없을_수_있다(lines):

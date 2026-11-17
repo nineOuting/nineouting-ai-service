@@ -59,7 +59,7 @@ class Field:
     ai_fill: bool = True
     content: str = ""               # 사용자가 채우는 필드에 이미 써 둔 글. 결과에 그대로 돌려준다
     description: str = ""           # 양식 편집 화면의 필드 설명. AI 가 칸을 고를 때 이름과 함께 본다 (명세 7.2)
-    columns: int | None = None      # 표 필드의 열 개수 (명세 5.8). 없으면 AI 가 1~6개로 정한다
+    columns: int | None = None      # 표 필드의 열 개수 (명세 5.8). 없으면 AI 가 1~6개로 정한다 (받는 상한은 8)
 
 
 @dataclass(frozen=True)

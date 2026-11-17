@@ -258,10 +258,22 @@ def test_다시_배치에서_이전_글_줄이_표_필드로_가면_행이_되�
 
 # ---- 요청 검사
 
-@pytest.mark.parametrize("columns", [0, 7, "4", True, 2.5])
-def test_표의_열_개수는_1에서_6(columns):
-    with pytest.raises(InvalidInput, match=re.escape("template.fields[3].columns는 1~6 사이의 정수")):
+@pytest.mark.parametrize("columns", [0, 9, "4", True, 2.5])
+def test_표의_열_개수는_1에서_8(columns):
+    with pytest.raises(InvalidInput, match=re.escape("template.fields[3].columns는 1~8 사이의 정수")):
         validate_request(v08(load_request(), fields_with_table(columns=columns)))
+
+
+@pytest.mark.parametrize("columns", [7, 8])
+def test_열이_7개나_8개인_표도_받고_채운다(todos, columns):
+    validate_request(v08(load_request(), fields_with_table(columns=columns)))
+    names = ["안건", "할 일", "담당", "기한", "비고", "확인", "상태", "참고"][:columns]
+    fill_in = lambda cells: cells + [""] * (columns - len(cells))      # noqa: E731  조각이 없는 열은 빈 칸
+    data = {"columns": names, "rows": [{"m": row["m"], "cells": fill_in(row["cells"][:4])} for row in TODO_TABLE["rows"]]}
+    table, problems = check(data, todos, columns)
+    assert problems == [] and len(table.columns) == columns and all(len(cells) == columns for cells in table.rows.values())
+    assert any("열이" in p for p in check({**data, "columns": names[:-1]}, todos, columns)[1])      # 열이 모자라면 걸린다
+    assert any("칸 수" in p or "칸이" in p for p in check({"columns": names, "rows": [{"m": r["m"], "cells": r["cells"][:4]} for r in data["rows"]]}, todos, columns)[1])
 
 
 def test_AI가_채우는_표_필드를_받고_글_필드의_columns는_보지_않는다():

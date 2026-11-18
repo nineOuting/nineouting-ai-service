@@ -266,12 +266,33 @@ def test_글_안의_JSON_울타리와_앞뒤_말은_견딘다():
     assert ti.import_template(pdf("upload_report.pdf"), ScriptLLM(wrapped), 30).error_code is None
 
 
-@pytest.mark.parametrize("name, code", [("upload_scan.pdf", NO_TEXT), ("upload_locked.pdf", ENCRYPTED),
-                                        ("upload_plan.docx", UNSUPPORTED_FORMAT)])
-def test_읽을_수_없는_파일은_AI를_부르지_않고_코드로_알린다(name, code):
+@pytest.mark.parametrize("name, code", [("upload_scan.pdf", NO_TEXT), ("upload_locked.pdf", ENCRYPTED)])
+def test_읽을_수_없는_PDF는_AI를_부르지_않고_코드로_알린다(name, code):
     llm = ScriptLLM()
     out = ti.import_template(pdf(name), llm, 30)
     assert (out.result, out.error_code, out.attempts) == (None, code, 0) and llm.calls == []
+
+
+def _zip_with(*names):
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for n in names:
+            z.writestr(n, "<x/>")
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("label, data", [
+    ("png 이미지", b"\x89PNG\r\n\x1a\n" + b"\x00" * 64),
+    ("옛 doc·hwp(OLE)", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64),
+    ("hwpx(zip)", _zip_with("[Content_Types].xml", "Contents/section0.xml")),
+    ("pptx(zip)", _zip_with("[Content_Types].xml", "ppt/presentation.xml")),
+])
+def test_지원하지_않는_형식은_AI를_부르지_않고_unsupported_format(label, data):
+    llm = ScriptLLM()
+    out = ti.import_template(data, llm, 30)
+    assert (out.result, out.error_code, out.attempts) == (None, UNSUPPORTED_FORMAT, 0) and llm.calls == [], label
 
 
 def test_쪽이_너무_많으면_too_large(monkeypatch):
@@ -282,3 +303,125 @@ def test_쪽이_너무_많으면_too_large(monkeypatch):
 def test_지시문_파일이_읽힌다():
     p = load_prompt(None, ti.KIND)
     assert p.version == "template_import-v1" and "descriptionRefs" in p.text
+
+
+# ---- PDF 말고 워드·엑셀·글 파일 (형식은 파일 내용으로 판단)
+
+def make_docx():
+    import io
+    from docx import Document
+    d = Document()
+    d.sections[0].header.paragraphs[0].text = "나인아웃팅 | 내부 문서"
+    d.sections[0].footer.paragraphs[0].text = "- 1 -"
+    d.add_heading("주간 업무 회의록", 1)
+    d.add_paragraph("")                                           # 빈 문단은 뺀다
+    info = d.add_table(rows=2, cols=4)
+    for cell, text in zip(info.rows[0].cells, ["회의명", "", "일시", ""]):
+        cell.text = text
+    for cell, text in zip(info.rows[1].cells, ["", "", "", ""]):   # 모두 빈 행은 뺀다
+        cell.text = text
+    d.add_paragraph("1. 논의 내용")
+    d.add_paragraph("※ 안건별로 적는다")
+    d.add_paragraph("2. 할 일")
+    t = d.add_table(rows=3, cols=3)
+    for cell, text in zip(t.rows[0].cells, ["할 일", "담당자", "기한"]):
+        cell.text = text
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
+def make_xlsx(hidden=False):
+    import io
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "양식"
+    ws.append(["회의록"])
+    ws.append(["회의명", None, "일시", None])
+    ws.append([None, None, None, None])                           # 빈 행은 뺀다
+    ws.append(["1. 논의 내용"])
+    ws.append(["할 일", "담당자", "기한"])
+    if hidden:
+        memo = wb.create_sheet("메모")
+        memo.append(["숨긴 시트 글"])
+        memo.sheet_state = "hidden"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_워드는_머리글_본문_바닥글_순서로_읽고_표는_칸을_잇는다():
+    pytest.importorskip("docx")
+    texts = [x.text for x in ti.read_lines(make_docx())]
+    assert texts == ["나인아웃팅 | 내부 문서", "주간 업무 회의록", "회의명 | 일시", "1. 논의 내용", "※ 안건별로 적는다", "2. 할 일",
+                     "할 일 | 담당자 | 기한", "- 1 -"], texts
+
+
+def test_워드의_세로_병합_칸은_한_번만_읽는다():
+    pytest.importorskip("docx")
+    import io
+    from docx import Document
+    d = Document()
+    t = d.add_table(rows=2, cols=3)
+    t.cell(0, 0).merge(t.cell(1, 0)).text = "결 재"                    # 결재란처럼 두 줄에 걸친 칸
+    for j, c in enumerate(["담당", "팀장"]):
+        t.cell(0, j + 1).text = c
+    buf = io.BytesIO()
+    d.save(buf)
+    assert [x.text for x in ti.read_lines(buf.getvalue())] == ["결 재 | 담당 | 팀장"]
+
+
+def test_엑셀은_보이는_시트의_글이_있는_행만_읽는다():
+    pytest.importorskip("openpyxl")
+    texts = [x.text for x in ti.read_lines(make_xlsx(hidden=True))]
+    assert texts == ["회의록", "회의명 | 일시", "1. 논의 내용", "할 일 | 담당자 | 기한"], texts       # 숨긴 시트와 빈 행은 없음
+    import io
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.active.title = "A"
+    wb.active.append(["가"])
+    wb.create_sheet("B").append(["나"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    assert [x.text for x in ti.read_lines(buf.getvalue())] == ["A", "가", "B", "나"], "시트가 둘 이상이면 이름 줄이 앞에 들어간다"
+
+
+@pytest.mark.parametrize("label, data, expected", [
+    ("utf-8", "회의록\n\n1. 논의 내용\n할 일 | 담당자".encode("utf-8"), ["회의록", "1. 논의 내용", "할 일 | 담당자"]),
+    ("utf-8 BOM", "﻿회의록\r\n결정 사항".encode("utf-8"), ["회의록", "결정 사항"]),
+    ("cp949", "회의록\n논의 내용".encode("cp949"), ["회의록", "논의 내용"]),
+    ("마크다운 표", "# 회의록\n\n## 논의 내용\n| 할 일 | 담당자 | 기한 |\n|---|:---:|---|\n| 1 | | |\n|  |  |  |\n| a|b | c |".encode("utf-8"),
+     ["# 회의록", "## 논의 내용", "할 일 | 담당자 | 기한", "1", "a | b | c"]),
+    ("글 안의 파이프는 그대로", "A | B\n|시작만 파이프".encode("utf-8"), ["A | B", "|시작만 파이프"]),
+    ("csv", "항목,담당자,기한\n할 일,,".encode("utf-8"), ["항목,담당자,기한", "할 일,,"]),
+])
+def test_글_파일은_줄마다_읽는다(label, data, expected):
+    assert [x.text for x in ti.read_lines(data)] == expected, label
+
+
+def test_글이_없는_워드_엑셀_글_파일은_no_text():
+    pytest.importorskip("docx")
+    import io
+    from docx import Document
+    buf = io.BytesIO()
+    Document().save(buf)
+    for data in (buf.getvalue(), b"  \n\n \n", b""):
+        out = ti.import_template(data, ScriptLLM(), 30)
+        assert (out.result, out.error_code) == (None, NO_TEXT)
+
+
+def test_워드에서도_항목과_머리글_바닥글을_읽어_돌려준다():
+    pytest.importorskip("docx")
+    data = make_docx()
+    lines = ti.read_lines(data)
+    r = lambda text: next(x.ref for x in lines if x.text == text)      # noqa: E731
+    llm = ScriptLLM({"header": [r("나인아웃팅 | 내부 문서")], "footer": [r("- 1 -")], "fields": [
+        {"ref": r("1. 논의 내용"), "title": "논의 내용", "type": "free", "descriptionRefs": [r("※ 안건별로 적는다")]},
+        {"ref": r("2. 할 일"), "title": "할 일", "type": "table", "columns": 3}]})
+    out = ti.import_template(data, llm, 30)
+    assert out.error_code is None and out.attempts == 1
+    assert out.result.header == "나인아웃팅 | 내부 문서" and out.result.footer == "- 1 -"
+    assert [(f["title"], f["type"], f.get("columns")) for f in out.result.fields] == [("논의 내용", "free", None), ("할 일", "table", 3)]
+    assert out.result.fields[0]["description"] == "※ 안건별로 적는다"
+    assert "L1 (1쪽) 나인아웃팅 | 내부 문서" in llm.calls[0][1]

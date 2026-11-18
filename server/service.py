@@ -619,7 +619,8 @@ class Registry:
                             raise first
 
                     def classify_and_steps():
-                        self._step(m, "classify", lambda: self._classify(m, batches=batches))
+                        fast = (lambda: self._step(m, "transcript_terms_fast", lambda: self._terms_fast(m))) if m.terms is not None else None
+                        self._step(m, "classify", lambda: self._classify(m, batches=batches, after_receive=fast))
                         self._agenda_steps(m)
                     self._with_live(m, "batch", live, classify_and_steps)
                 elif kind == "end":
@@ -675,11 +676,14 @@ class Registry:
                 m.errors += 1
             log.error("처리 실패 meeting=%s kind=%s error=%s", m.meeting_id, name, type(e).__name__)
 
-    def _classify(self, m, batch=None, end_ms=None, final=False, flush=False, batches=None):
+    def _classify(self, m, batch=None, end_ms=None, final=False, flush=False, batches=None, after_receive=None):
         """줄 묶음을 분류기에 넘기고, 분류할 때가 되었으면 분류한 뒤 바뀐 것을 백엔드로 보낸다. flush 이면 기다리지 않고 분류한다.
-        batches: 밀린 묶음 여러 개를 순서대로 넣고 분류는 한 번만 한다."""
+        batches: 밀린 묶음 여러 개를 순서대로 넣고 분류는 한 번만 한다.
+        after_receive: 줄을 분류기에 넣은 직후, 분류(모델 호출) 전에 부를 함수. 없으면 아무것도 하지 않는다 (전사 속 용어의 용어집 길이 쓴다)."""
         items = list(batches) if batches is not None else ([batch] if batch is not None else [])
         first = self._each(m.classifier.receive, items)
+        if after_receive is not None:
+            after_receive()
         if end_ms is not None:
             m.classifier.advance(end_ms)
         m.classifier.process(final=final or flush)
@@ -758,6 +762,12 @@ class Registry:
                                                leftover=leftover)
         if board is not None:
             self.publisher.submit(m.meeting_id, board, kind=AGENDA_BOARD)
+
+    def _terms_fast(self, m):
+        """줄 묶음을 분류기에 넣은 직후: 용어집 길만 돌고(모델 없음), 새 용어가 있으면 바로 보낸다.
+        분류와 안건 단계의 모델 호출을 기다리지 않게 하려는 것이다. 모델 길의 용어는 안건 단계 뒤에 보낸다."""
+        if m.terms.scan_glossary():
+            self._publish_terms(m, False)
 
     def _publish_terms(self, m, final):
         """이 회의에서 찾은 전사 속 용어 목록을 안건과 상관없이 보낸다 (transcript-terms-contract.md).

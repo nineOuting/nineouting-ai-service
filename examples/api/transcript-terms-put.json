@@ -4,7 +4,7 @@
   "final": false,
   "terms": [
     {
-      "id": "t-1",
+      "id": "t-8cb45d027f27",
       "term": "리텐션",
       "name": "리텐션 (Retention)",
       "aliases": ["retention"],
@@ -13,7 +13,7 @@
       "firstSeq": 214
     },
     {
-      "id": "t-2",
+      "id": "t-c508f71d1916",
       "term": "코호트",
       "aliases": [],
       "text": "비슷한 조건의 사용자 묶음이에요.",

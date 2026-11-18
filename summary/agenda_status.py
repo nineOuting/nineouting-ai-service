@@ -27,7 +27,8 @@
   - 결정(decided)·확인 필요(check)·미결(undecided)의 문장은 근거 줄이 필수다. 문장은 meeting_summary.validate_items 로 확인하고,
     통과하지 못한 사항이 있으면 오류를 알려 1회 더 부른다. 그래도 통과하지 못하면 그 사항은 결정으로 내지 않고 UNDECIDED 로
     두고 고정 문구를 쓴다. 근거 없는 결정은 내지 않는다. 근거 줄 개수에는 상한이 없다 (화면은 근거 발언을 모두 보인다).
-  - 판정 시점: 줄이 새로 붙은 안건은 min_new_lines 개 이상이면 바로, 1개면 refresh_sec(음성 시간) 뒤. 줄이 빠져나갔거나 글이 바뀐
+  - 판정 시점: 줄이 새로 붙은 안건은 min_new_lines 개 이상이면 바로, 1개면 refresh_sec(음성 시간) 뒤. 단 AI가 낸 결정이 잠긴 안건은
+    새 줄이 1개여도 바로(recheck_decided, 결정을 뒤집는 재논의를 빨리 확인 필요로 알리기 위해). 줄이 빠져나갔거나 글이 바뀐
     안건, 결정할 사항의 문구·구성이 바뀐 안건, 사람이 결정 내용을 고친 안건은 기다리지 않는다. 회의가 끝나면(final) 바뀐 안건을 모두
     한 번 더 판정하고 안건 상태를 확정한다.
   - 사람이 고친 결정 내용(apply_edits): 그 사항의 결정 내용과 근거를 고정한다. 판정은 계속해서 상태만 새로 낸다.
@@ -125,6 +126,7 @@ class StatusCfg:
         self.model = None
         self.refresh_sec = 60         # 새 줄이 1개뿐일 때 기다리는 시간 (음성 시간 기준)
         self.min_new_lines = 2        # 새 줄이 이만큼이면 기다리지 않고 바로 판정
+        self.recheck_decided = True   # True 면 AI가 낸 결정이 잠긴 안건은 새 줄이 1개여도 기다리지 않고 바로 판정한다 (결정을 뒤집는 재논의를 빨리 "확인 필요"로 알린다)
         self.max_calls = 300          # 회의당 모델 호출 상한 (비용을 추정한 뒤 정한다)
         self.max_lines = 200          # 한 번에 모델에 주는 줄 수 (넘으면 가장 최근 줄)
         self.backchannel_gap_sec = 10  # 맞장구를 앞 줄의 안건에 붙이는 최대 간격 (앞 줄의 끝부터, 음성 시간)
@@ -454,7 +456,8 @@ class AgendaStatusJudge:
             if st["dirty"]:
                 trigger = True
             elif new_ids:
-                if final or len(new_ids) >= cfg.min_new_lines:
+                locked = cfg.recheck_decided and any(r.get("locked") for r in st["pts"].values())
+                if final or locked or len(new_ids) >= cfg.min_new_lines:
                     trigger = True
                 else:
                     if st["wait_since"] is None:
@@ -805,6 +808,26 @@ def selftest():
     assert j.process() == 1 and stat(j)["points"][0]["needsCheck"] is True and stat(j)["status"] == DECIDED, "판정 없음은 그대로 둔다"
     feed(c, [ln(7, 16000, "배포는 목요일로 가요"), ln(8, 17000, "배포 목요일 좋아요")], 18000)
     assert j.process() == 1 and stat(j)["points"][0]["needsCheck"] is True and stat(j)["status"] == DECIDED, "다시 결정으로 나와도 켜진 표시는 유지된다 (사용자 조치로만 꺼진다)"
+
+    # 10b) 결정이 잠긴 안건은 새 줄이 1개여도 기다리지 않는다 (재논의를 빨리 알림). recheck_decided 를 끄면 예전처럼 기다린다
+    for recheck in (True, False):
+        answers = [answer("decided", "배포는 목요일", [(1, 2)]), answer("undecided", "배포를 다시 생각해 보자는 말이 나왔어요", [(3, 3)])]
+        c, j = fresh(llm=lambda u: answers.pop(0), recheck_decided=recheck)
+        feed(c, [ln(1, 0, "배포는 목요일로"), ln(2, 4000, "배포 동의해요")], 5000)
+        j.process()
+        assert stat(j)["status"] == DECIDED and stat(j)["points"][0]["needsCheck"] is False
+        feed(c, [ln(3, 8000, "배포 다시 생각해봐요")], 9000)                   # 새 줄 1개
+        calls = j.process()
+        if recheck:
+            assert calls == 1 and stat(j)["points"][0]["needsCheck"] is True, "잠긴 결정 뒤 1줄이 와도 바로 판정해 확인 필요를 켠다"
+        else:
+            assert calls == 0 and stat(j)["points"][0]["needsCheck"] is False, "끄면 1줄은 기다린다"
+    # 결정이 아닌 안건(미결)은 1줄이면 여전히 기다린다
+    c, j = fresh(llm=lambda u: answer("undecided", "아직 논의 중", [(1, 2)]))
+    feed(c, [ln(1, 0, "배포 일정 얘기"), ln(2, 4000, "배포 날짜 후보")], 5000)
+    j.process()
+    feed(c, [ln(3, 8000, "배포 더 얘기해요")], 9000)
+    assert j.process() == 0, "미결 안건은 1줄이면 기다린다"
 
     # 11) 현재 안건이 바뀌면 이전 안건의 논의 중이 미결로 바뀐다 (모델 없이)
     c, j = fresh(llm=lambda u: answer("none"))

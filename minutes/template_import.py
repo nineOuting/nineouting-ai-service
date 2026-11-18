@@ -1,7 +1,10 @@
 """회의록 양식 가져오기 (REQ-195, SCRUM-289). 사용자가 올린 양식 PDF 에서 항목을 읽어 `template.fields` 모양으로 만든다.
 
-  1. 파일 읽기      PDF 만 (docx 등은 아직 정하지 않음). 쪽마다 글을 꺼내 줄마다 번호(L1, L2, ...)를 단다.
-                    머리글·바닥글은 지우지 않는다 (양식의 header·footer 로 쓰기 위해). 글이 없으면(스캔 PDF) no_text
+  1. 파일 읽기      PDF, 워드(docx), 엑셀(xlsx), 글 파일(txt·md·csv). 형식은 확장자가 아니라 내용으로 판단한다 (rag/filetype.py).
+                    글을 꺼내 줄마다 번호(L1, L2, ...)를 단다. 머리글·바닥글은 지우지 않는다 (양식의 header·footer 로 쓰기 위해).
+                    PDF 는 쪽마다 꺼내고, 워드·엑셀·글 파일은 한 쪽으로 본다. 워드의 머리글·바닥글은 맨 앞과 맨 뒤 줄로 넣는다.
+                    표는 칸을 " | "로 이어 한 줄로 쓴다 (워드·엑셀은 칸 경계를 알 수 있다). 글이 없으면(스캔 PDF 등) no_text.
+                    옛 doc·xls, hwp·hwpx, pptx, 이미지는 unsupported_format
   2. AI 에게 묻기   줄 번호가 붙은 글을 주고 항목 제목의 줄 번호(ref), 기록 방식, 표의 열 개수, 설명 줄, 머리글·바닥글 줄을 받는다
   3. 코드 검사      제목이 그 줄에 실제로 있는지(한 줄에 "회의명 일시"처럼 칸 이름이 여럿이면 줄에 나온 순서대로 같은 줄 번호),
                     줄 번호가 있는지, 순서·중복·개수(1~20), 기록 방식, 표의 열 개수(1~8),
@@ -15,11 +18,12 @@
 `aiFill` 은 모두 true 로 둔다 (가져온 항목을 AI 가 채울지는 아직 정하지 않았다. docs/api/template-import-contract.md).
 양식 글은 로그와 오류 글에 남기지 않는다 (개수·줄 번호·코드만).
 """
+import io
 import re
 from dataclasses import dataclass, field
 
 from rag.errors import ENCRYPTED, NO_TEXT, TOO_LARGE, UNSUPPORTED_FORMAT, IngestError
-from rag.filetype import PDF, detect
+from rag.filetype import DOCX, PDF, TEXT, XLSX, decode_text, detect
 from rag.loaders.text import normalize
 from .placement import Outcome, Prompt, ask, load_prompt
 
@@ -71,10 +75,21 @@ class ImportOutcome:
 
 
 def read_lines(data: bytes) -> list[Line]:
-    """PDF 바이트 -> 줄 목록. 읽을 수 없으면 IngestError (unsupported_format, encrypted, too_large, no_text)."""
+    """파일 바이트 -> 줄 목록. 읽을 수 없으면 IngestError (unsupported_format, encrypted, too_large, no_text).
+    PDF, 워드(docx), 엑셀(xlsx), 글 파일(txt·md·csv)을 읽는다. 형식은 파일 내용으로 판단한다."""
     kind = detect(data)
-    if kind != PDF:
-        raise IngestError(UNSUPPORTED_FORMAT, f"{kind} (양식 가져오기는 PDF 만)")
+    if kind == PDF:
+        return number_lines(_pdf_pages(data))
+    if kind == DOCX:
+        return number_lines([(1, _docx_lines(data))])
+    if kind == XLSX:
+        return number_lines([(1, _xlsx_lines(data))])
+    if kind == TEXT:
+        return number_lines([(1, _text_lines(data))])
+    raise IngestError(UNSUPPORTED_FORMAT, kind)
+
+
+def _pdf_pages(data: bytes) -> list[tuple[int, list[str]]]:
     import pypdfium2 as pdfium
 
     try:
@@ -97,7 +112,97 @@ def read_lines(data: bytes) -> list[Line]:
                 pages.append((i + 1, text.split("\n")))
     finally:
         doc.close()
-    return number_lines(pages)
+    return pages
+
+
+def _cells_line(cells) -> str:
+    """표의 한 행 -> 한 줄. 빈 칸은 빼고 " | "로 잇는다."""
+    return " | ".join(c for c in (normalize(str(c)).replace("\n", " ") for c in cells if c is not None) if c)
+
+
+def _docx_lines(data: bytes) -> list[str]:
+    """워드 -> 줄 목록: 머리글, 본문(문단과 표를 문서 순서대로), 바닥글. 글상자·도형·각주 안의 글은 읽지 못한다."""
+    from docx import Document
+    from docx.table import Table
+
+    try:
+        doc = Document(io.BytesIO(data))
+        blocks = list(doc.iter_inner_content())
+        header = [p.text for sec in doc.sections for p in sec.header.paragraphs]
+        footer = [p.text for sec in doc.sections for p in sec.footer.paragraphs]
+    except Exception:                                    # 깨진 zip, 빠진 부분, XML 오류 등. 내용은 오류에 남기지 않는다
+        raise IngestError(UNSUPPORTED_FORMAT, "열 수 없는 워드 파일") from None
+    out = []
+
+    def add(text):
+        text = normalize(text).replace("\n", " ")
+        if text and (not out or out[-1] != text):       # 구역마다 되풀이되는 머리글·바닥글은 한 번만
+            out.append(text)
+    for t in header:
+        add(t)
+    for block in blocks:
+        if isinstance(block, Table):
+            seen = []                                    # 가로·세로로 병합된 칸은 표 전체에서 한 번만 (결재란 "결 재" 같은 칸).
+            for row in block.rows:                       # 요소를 들고 있어야 같은 칸인지 `is`로 안정적으로 비교된다 (id() 는 요소가 버려지면 재사용된다)
+                cells = []
+                for cell in row.cells:
+                    if not any(cell._tc is t for t in seen):
+                        seen.append(cell._tc)
+                        cells.append(cell.text)
+                add(_cells_line(cells))
+        else:
+            add(block.text)
+    for t in footer:
+        add(t)
+    return out
+
+
+def _xlsx_lines(data: bytes) -> list[str]:
+    """엑셀 -> 줄 목록: 보이는 시트마다 글이 있는 행을 " | "로 이은 한 줄. 시트가 둘 이상이면 시트 이름 줄을 앞에 둔다."""
+    from openpyxl import load_workbook
+    from rag.loaders.xlsx import MAX_CELLS
+
+    try:
+        wb = load_workbook(io.BytesIO(data), data_only=True)
+    except Exception:                                    # 깨진 zip, 빠진 부분, XML 오류 등
+        raise IngestError(UNSUPPORTED_FORMAT, "열 수 없는 엑셀 파일") from None
+    try:
+        cells = sum(ws.max_row * ws.max_column for ws in wb.worksheets)
+        if cells > MAX_CELLS:
+            raise IngestError(TOO_LARGE, f"칸 {cells}개, 상한 {MAX_CELLS}개")
+        sheets = [ws for ws in wb.worksheets if ws.sheet_state == "visible"]
+        out = []
+        for ws in sheets:
+            if len(sheets) > 1:
+                out.append(normalize(ws.title))
+            for row in ws.iter_rows(values_only=True):
+                line = _cells_line(row)
+                if line:
+                    out.append(line)
+        return out
+    finally:
+        wb.close()
+
+
+_MD_SEPARATOR = re.compile(r"^:?-{3,}:?$")
+
+
+def _text_lines(data: bytes) -> list[str]:
+    """글 파일(txt·md·csv) -> 줄 목록. 마크다운의 #(제목)과 csv 의 쉼표는 그대로 둔다.
+    마크다운 표("| 가 | 나 |")는 워드·엑셀 표와 같은 모양("가 | 나")으로 정리한다: 양 끝의 | 와 구분 줄(|---|---|)을 빼고,
+    빈 칸은 뺀다. 그대로 두면 모델이 열 개수를 하나 더 세는 일이 반복됐다 (6열을 7열로)."""
+    text = decode_text(data) or ""
+    out = []
+    for line in text.split("\n"):
+        line = normalize(line)
+        if line.startswith("|") and line.endswith("|") and len(line) > 1:
+            cells = [c.strip() for c in line[1:-1].split("|")]
+            if all(_MD_SEPARATOR.match(c) for c in cells if c) and any(cells):
+                continue                                 # |---|---| 구분 줄
+            line = " | ".join(c for c in cells if c)
+        if line:
+            out.append(line)
+    return out
 
 
 def number_lines(pages: list[tuple[int, list[str]]]) -> list[Line]:

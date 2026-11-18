@@ -24,7 +24,9 @@
 
 호출 상한: 회의당 max_calls. 연속 3번 실패하거나 상한에 닿으면 모델 호출만 멈춘다 (용어집 길은 계속 된다).
 줄은 한 번만 본다: 한 번 본 줄이 나중에 고쳐져도 다시 보지 않는다.
-스레드: 일꾼 스레드(process)와 요청 스레드(terms, info)가 함께 쓴다. 상태 변경은 락 안에서, 모델 호출은 락 밖에서 한다.
+줄은 용어 전용 저장소(TermsFeed)에서 읽는다. 서버는 줄 묶음을 받자마자 이 저장소에 넣고 용어 전용 일꾼이 처리하므로,
+안건 분류·안건 단계의 모델 호출이나 그쪽 대기열이 밀린 것을 기다리지 않는다. 안건 제목만 분류기에서 읽는다.
+스레드: 용어 일꾼 스레드(process)와 요청 스레드(terms, info)가 함께 쓴다. 상태 변경은 락 안에서, 모델 호출은 락 밖에서 한다.
 로그 규칙: 전사 내용, 안건 제목, 용어, 뜻을 남기지 않는다. 개수와 예외 이름만 남긴다.
 LLM_PROVIDER=echo 이면 모델을 부르지 않는다 (비용 0).
 """
@@ -40,7 +42,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from meeting_summary import call_llm, parse_llm_json, mmss, squash, build_input, build_char_stream  # noqa: E402
+from meeting_summary import call_llm, parse_llm_json, mmss, squash, build_input, build_char_stream, TranscriptStore  # noqa: E402
 
 log = logging.getLogger("ai-service.transcript-terms")
 
@@ -191,6 +193,38 @@ class Glossary:
 
 
 # --------------------------------------------------------------------------------------
+class TermsFeed:
+    """용어 전용 줄 저장소. 안건 분류기와 같은 모양(lock, store, now_ms, agendas, meeting_id)이라 TranscriptTerms 가 그대로 읽는다.
+    서버는 줄 묶음을 받자마자 여기에 넣는다. 안건 쪽 대기열과 따로라서, 안건 처리가 밀려도 용어 찾기는 기다리지 않는다.
+    안건 제목은 따로 갖지 않고 분류기(있으면)에서 읽는다. 분류기 락은 이 저장소 락 안에서 잠깐만 잡는다(분류기는 이 락을 잡지 않는다)."""
+
+    def __init__(self, meeting_id, classifier=None):
+        self.meeting_id = meeting_id
+        self.lock = threading.RLock()
+        self.store = TranscriptStore(meeting_id)
+        self.now_ms = 0
+        self._classifier = classifier
+
+    @property
+    def agendas(self):
+        c = self._classifier
+        if c is None:
+            return []
+        with c.lock:
+            return list(c.agendas)
+
+    def receive(self, batch):
+        """어댑터를 거친 줄 묶음({"lines", "edits", "sent_ms"})을 받는다. 묶음은 바꾸지 않는다(저장소가 줄을 복사해 둔다)."""
+        with self.lock:
+            self.store.apply_batch(batch)
+            if "sent_ms" in batch:
+                self.now_ms = max(self.now_ms, batch["sent_ms"])
+
+    def advance(self, at_ms):
+        with self.lock:
+            self.now_ms = max(self.now_ms, at_ms)
+
+
 class TranscriptTerms:
     def __init__(self, classifier, glossary=None, cfg=None, llm=None):
         self.c = classifier
@@ -213,7 +247,7 @@ class TranscriptTerms:
 
     # ---------------- 입력 ----------------
     def _view(self):
-        """분류기의 지금 상태를 복사해 온다 (분류기 락은 여기서만 잠깐 잡는다)."""
+        """줄 저장소(TermsFeed 또는 분류기)의 지금 상태를 복사해 온다 (저장소 락은 여기서만 잠깐 잡는다)."""
         c = self.c
         with c.lock:
             kept, _dropped, _text = build_input([dict(ln) for ln in c.store.snapshot()])
@@ -222,7 +256,7 @@ class TranscriptTerms:
         return {"kept": kept, "titles": titles, "now_ms": now_ms}
 
     def scan_glossary(self):
-        """용어집 길만 돈다 (모델 없음, 빠름). 서버는 줄 묶음을 분류기에 넣은 직후, 모델을 부르는 단계들보다 먼저 부른다.
+        """용어집 길만 돈다 (모델 없음, 빠름). 서버의 용어 일꾼은 줄 묶음을 받으면 이것을 먼저 돌려 보낸 뒤 모델 길을 돈다(모델 응답을 기다리지 않게).
         반환: 목록에 새로 넣은 용어 수."""
         view = self._view()
         with self.lock:
@@ -782,7 +816,33 @@ def selftest():
     w.h.process(final=True)
     assert w.h.scan_glossary() == 0
 
-    print("전사 속 용어 자체 시험 통과 (용어집 파일 형식, 용어집 길, 별칭, 영문 경계, 긴 이름 우선, STT 불확실·낮은 확신도·맞장구, 줄 한 번만 보기, 모델 호출 시점, 후보 코드 확인과 경계값, 상한, JSON 재시도, 연속 실패, 호출 상한, 목록 상한·다시 더하지 않음, 안건 없는 회의, 종료, 로그에 내용 없음, 동시 접근, 목록 모양과 이름·별칭, 해시 id, 용어집 먼저 찾기)")
+    # 25) 용어 전용 줄 저장소(TermsFeed): 분류기 없이도 동작하고, 안건 제목은 분류기에서 읽는다. 받은 묶음은 바꾸지 않는다
+    c = AgendaClassifier("t", ClassifyCfg(refresh_sec=0, max_lines=30))
+    feed = TermsFeed("t", c)
+    seen_prompts = []
+
+    def feed_llm(user):
+        seen_prompts.append(user)
+        return json.dumps({"terms": [{"term": "코호트", "meaning": "비슷한 조건의 사용자 묶음이에요.", "evidence": [[1, 1]], "confident": True}]},
+                          ensure_ascii=False)
+    h = TranscriptTerms(feed, GLOSS, TermsCfg(min_new_lines=1), llm=feed_llm)
+    row = {"id": 1, "start_ms": 0, "end_ms": 1000, "arrival_ms": 1000, "type": "final", "kind": None, "low_confidence": False,
+           "text": "코호트로 리텐션을 봐요", "text_marked": "코호트로 리텐션을 봐요", "manual": False}
+    batch = {"lines": [row], "edits": [], "sent_ms": 1000}
+    before = json.dumps(batch, sort_keys=True)
+    feed.receive(batch)
+    assert json.dumps(batch, sort_keys=True) == before, "받은 묶음을 바꾸면 안 됨 (분류기와 같은 묶음을 나눠 쓴다)"
+    assert c.store.snapshot() == [], "분류기 저장소와 따로여야 함"
+    assert h.scan_glossary() == 1 and h.process() == 1 and [t["term"] for t in h.terms()] == ["리텐션", "코호트"], h.terms()
+    assert "배포 일정" not in seen_prompts[0]
+    c.set_agendas(1, A)
+    assert feed.agendas and feed.agendas[0]["title"] == "배포 일정", "안건 제목은 분류기에서 읽는다"
+    feed.receive({"lines": [dict(row, id=2, text="새 줄", text_marked="새 줄")], "edits": [], "sent_ms": 5000})
+    h.process()
+    assert "배포 일정" in seen_prompts[-1], "안건이 생기면 모델 입력에 안건 제목이 들어가야 함"
+    assert TermsFeed("t").agendas == [], "분류기가 없으면 안건 없음"
+
+    print("전사 속 용어 자체 시험 통과 (용어집 파일 형식, 용어집 길, 별칭, 영문 경계, 긴 이름 우선, STT 불확실·낮은 확신도·맞장구, 줄 한 번만 보기, 모델 호출 시점, 후보 코드 확인과 경계값, 상한, JSON 재시도, 연속 실패, 호출 상한, 목록 상한·다시 더하지 않음, 안건 없는 회의, 종료, 로그에 내용 없음, 동시 접근, 목록 모양과 이름·별칭, 해시 id, 용어집 먼저 찾기, 용어 전용 줄 저장소)")
 
 
 if __name__ == "__main__":

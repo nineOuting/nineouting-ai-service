@@ -42,7 +42,7 @@ from agenda_opinions import AgendaOpinions, OpinionCfg  # noqa: E402
 from agenda_todos import AgendaTodos, TodoCfg  # noqa: E402
 from agenda_offtopic import AgendaOffTopic, OffTopicCfg  # noqa: E402
 from agenda_leftover import AgendaLeftover  # noqa: E402
-from transcript_terms import TranscriptTerms, Glossary, TermsCfg  # noqa: E402
+from transcript_terms import TranscriptTerms, TermsFeed, Glossary, TermsCfg  # noqa: E402
 from .publisher import AGENDA_CLASSIFICATION, AGENDA_BOARD, TRANSCRIPT_TERMS  # noqa: E402
 
 log = logging.getLogger("ai-service")
@@ -300,8 +300,12 @@ class MeetingState:
         self.offtopic = AgendaOffTopic(self.classifier, offtopic_cfg or OffTopicCfg(provider=cfg.provider, model=cfg.model),
                                        llm=offtopic_llm)                 # 분류 결과를 읽어 해당 없음이 오래 이어지면 새 안건을 제안
         self.leftover = AgendaLeftover()    # 종료 버튼을 누르면 미결 안건 목록을 만든다 (모델을 부르지 않는다)
-        self.terms = (TranscriptTerms(self.classifier, terms_glossary, terms_cfg, llm=terms_llm)   # 전사 속 용어. TRANSCRIPT_TERMS=1 일 때만 (기본 꺼짐)
+        # 전사 속 용어. TRANSCRIPT_TERMS=1 일 때만 (기본 꺼짐). 안건 쪽과 따로 줄 저장소·대기열·일꾼을 둔다(안건 처리가 밀려도 기다리지 않게)
+        self.terms_feed = TermsFeed(meeting_id, self.classifier) if terms_cfg is not None else None
+        self.terms = (TranscriptTerms(self.terms_feed, terms_glossary, terms_cfg, llm=terms_llm)
                       if terms_cfg is not None else None)
+        self.terms_queue = queue.Queue()
+        self.terms_worker = None
         self.terms_sig = None               # 마지막으로 보낸 용어 목록 (같으면 다시 보내지 않는다)
         self.terms_version = 0              # 마지막으로 보낸 용어 목록의 version
         self.cls_version = 0                # 백엔드로 보낸 안건 분류 결과의 마지막 version
@@ -414,6 +418,9 @@ class Registry:
             a["sent_ms"] = max((l["end_ms"] for l in a["lines"]), default=0)
             m.queue.put(("batch", a))
             self._ensure_worker(m)
+            if m.terms is not None:                              # 용어는 안건 쪽 대기열과 따로 바로 처리한다
+                m.terms_queue.put(("batch", a))
+                self._ensure_terms_worker(m)
             log.info("묶음 수신 meeting=%s batch=%s lines=%s edits=%s", m.meeting_id, n, len(a["lines"]), len(a["edits"]))
         return {"accepted": True, "result": "accepted", "batch": n}
 
@@ -438,6 +445,9 @@ class Registry:
                 m.status = "ended"
                 m.queue.put(("end", ev))
                 self._ensure_worker(m)
+                if m.terms is not None:
+                    m.terms_queue.put(("end", ev))
+                    self._ensure_terms_worker(m)
             if warning:
                 m.warnings += 1
                 log.warning("알림 순서가 이상함 meeting=%s event=%s: %s", m.meeting_id, name, warning)
@@ -625,8 +635,7 @@ class Registry:
                             raise first
 
                     def classify_and_steps():
-                        fast = (lambda: self._step(m, "transcript_terms_fast", lambda: self._terms_fast(m))) if m.terms is not None else None
-                        self._step(m, "classify", lambda: self._classify(m, batches=batches, after_receive=fast))
+                        self._step(m, "classify", lambda: self._classify(m, batches=batches))
                         self._agenda_steps(m)
                     self._with_live(m, "batch", live, classify_and_steps)
                 elif kind == "end":
@@ -682,14 +691,11 @@ class Registry:
                 m.errors += 1
             log.error("처리 실패 meeting=%s kind=%s error=%s", m.meeting_id, name, type(e).__name__)
 
-    def _classify(self, m, batch=None, end_ms=None, final=False, flush=False, batches=None, after_receive=None):
+    def _classify(self, m, batch=None, end_ms=None, final=False, flush=False, batches=None):
         """줄 묶음을 분류기에 넘기고, 분류할 때가 되었으면 분류한 뒤 바뀐 것을 백엔드로 보낸다. flush 이면 기다리지 않고 분류한다.
-        batches: 밀린 묶음 여러 개를 순서대로 넣고 분류는 한 번만 한다.
-        after_receive: 줄을 분류기에 넣은 직후, 분류(모델 호출) 전에 부를 함수. 없으면 아무것도 하지 않는다 (전사 속 용어의 용어집 길이 쓴다)."""
+        batches: 밀린 묶음 여러 개를 순서대로 넣고 분류는 한 번만 한다."""
         items = list(batches) if batches is not None else ([batch] if batch is not None else [])
         first = self._each(m.classifier.receive, items)
-        if after_receive is not None:
-            after_receive()
         if end_ms is not None:
             m.classifier.advance(end_ms)
         m.classifier.process(final=final or flush)
@@ -719,8 +725,6 @@ class Registry:
                  ("agenda_opinions", lambda: m.opinions.process(final=final)),
                  ("agenda_todos", lambda: m.todos.process(final=final)),
                  ("agenda_offtopic", lambda: m.offtopic.process(final=final))]
-        if m.terms is not None:
-            steps.append(("transcript_terms", lambda: m.terms.process(final=final)))
         if self.parallel:
             threads = [threading.Thread(target=self._step, args=(m, name, fn), name=f"meeting-{m.meeting_id}-{name}", daemon=True)
                        for name, fn in steps]
@@ -733,8 +737,6 @@ class Registry:
                 self._step(m, name, fn)
         self._step(m, "agenda_leftover", lambda: m.leftover.process(final=final))
         self._step(m, "agenda_board", lambda: self._publish_board(m))
-        if m.terms is not None:
-            self._step(m, "transcript_terms_publish", lambda: self._publish_terms(m, final))
 
     @staticmethod
     def _safe(m, name, fn):
@@ -769,9 +771,54 @@ class Registry:
         if board is not None:
             self.publisher.submit(m.meeting_id, board, kind=AGENDA_BOARD)
 
+    # ---------------- 전사 속 용어 (안건 쪽과 따로 도는 일꾼) ----------------
+    def _ensure_terms_worker(self, m):
+        if m.terms_worker is None or not m.terms_worker.is_alive():
+            m.terms_worker = threading.Thread(target=self._run_terms, args=(m,), name=f"meeting-{m.meeting_id}-terms", daemon=True)
+            m.terms_worker.start()
+
+    def _run_terms(self, m):
+        """용어 전용 일꾼. 안건 분류·안건 단계와 대기열이 따로라서, 그쪽 모델 호출이나 밀린 묶음을 기다리지 않는다.
+        밀린 줄 묶음은 모두 넣은 뒤 한 번에 처리한다. 순서: 용어집 길(모델 없음) -> 보내기 -> 모델 길 -> 보내기.
+        회의 끝(end)을 만나면 마지막 줄까지 용어집 길로만 보고 final 로 한 번 보낸다."""
+        while True:
+            items = [m.terms_queue.get()]
+            while items[-1][0] == "batch":
+                try:
+                    items.append(m.terms_queue.get_nowait())
+                except queue.Empty:
+                    break
+            try:
+                batches = [p for k, p in items if k == "batch"]
+                end = next((p for k, p in items if k == "end"), None)
+                if batches:
+                    self._step(m, "transcript_terms_receive", lambda: self._raise_first(self._each(m.terms_feed.receive, batches)))
+                    self._step(m, "transcript_terms_fast", lambda: self._terms_fast(m))
+                if end is not None:
+                    m.terms_feed.advance(end["at_ms"])
+                    self._step(m, "transcript_terms", lambda: m.terms.process(final=True))
+                    self._step(m, "transcript_terms_publish", lambda: self._publish_terms(m, True))
+                elif batches:
+                    self._step(m, "transcript_terms", lambda: self._terms_rounds(m))
+                    self._step(m, "transcript_terms_publish", lambda: self._publish_terms(m, False))
+            finally:
+                for _ in items:
+                    m.terms_queue.task_done()
+
+    @staticmethod
+    def _raise_first(err):
+        """_each 가 돌려준 첫 실패를 다시 올린다 (한 묶음이 실패해도 나머지는 넣고, 실패는 오류로 센다)."""
+        if err:
+            raise err
+
+    @staticmethod
+    def _terms_rounds(m):
+        """모델 길을 돌린다. 밀린 줄이 한 번에 주는 줄 수보다 많으면 남은 줄이 기준에 모자랄 때까지 이어서 부른다."""
+        while m.terms.process():
+            pass
+
     def _terms_fast(self, m):
-        """줄 묶음을 분류기에 넣은 직후: 용어집 길만 돌고(모델 없음), 새 용어가 있으면 바로 보낸다.
-        분류와 안건 단계의 모델 호출을 기다리지 않게 하려는 것이다. 모델 길의 용어는 안건 단계 뒤에 보낸다."""
+        """용어집 길만 돌고(모델 없음), 새 용어가 있으면 바로 보낸다. 모델 길 응답을 기다리지 않게 하려는 것이다."""
         if m.terms.scan_glossary():
             self._publish_terms(m, False)
 
@@ -817,6 +864,7 @@ class Registry:
 
         def waiter():
             m.queue.join()
+            m.terms_queue.join()
             done.set()
         threading.Thread(target=waiter, daemon=True).start()
         return done.wait(timeout)

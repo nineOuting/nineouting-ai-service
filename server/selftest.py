@@ -2236,9 +2236,11 @@ def test_transcript_terms_flow(cap):
     assert reg.wait_idle(path) and pub.wait_idle()
     assert boards() == [], "안건이 없으면 안건 보드는 지금처럼 나가지 않는다"
     got = terms_sent()
-    assert len(got) == 2 and all(u == "http://backend/internal/meetings/61/transcript-terms" for u, _ in got), got
-    assert [t["term"] for t in got[0][1]["terms"]] == ["리텐션"], "용어집 용어가 모델 길보다 먼저 한 번 나간다"
-    p = got[1][1]
+    # 용어집 길을 보낸 뒤 모델 길을 보낸다. 모델이 빨라 앞의 것이 아직 안 나갔으면 새 목록 하나로 합쳐질 수 있다(명세 3장). 순서는 7번에서 본다
+    n1 = len(got)
+    assert n1 in (1, 2) and all(u == "http://backend/internal/meetings/61/transcript-terms" for u, _ in got), got
+    assert n1 == 1 or [t["term"] for t in got[0][1]["terms"]] == ["리텐션"], got
+    p = got[-1][1]
     assert p["meetingId"] == mid and isinstance(p["version"], int) and p["final"] is False and p["terms"] == expect, p
     st = reg.status(path)["transcriptTerms"]
     assert st["terms"] == 2 and st["fromGlossary"] == 1 and st["fromAi"] == 1 and st["calls"] == 1, st
@@ -2246,17 +2248,17 @@ def test_transcript_terms_flow(cap):
     # 2) 목록이 같으면 다시 보내지 않고, 바뀌면 version 이 커진다
     reg.receive_batch(path, {"meetingId": mid, "batch": 2, "lines": [line(4, "리텐션 얘기를 또 해요")], "edits": []})
     assert reg.wait_idle(path) and pub.wait_idle()
-    assert len(terms_sent()) == 2, "같은 목록을 다시 보냄"
+    assert len(terms_sent()) == n1, "같은 목록을 다시 보냄"
     reg.receive_batch(path, {"meetingId": mid, "batch": 3, "lines": [line(5, "KPI 도 정해야죠")], "edits": []})
     assert reg.wait_idle(path) and pub.wait_idle()
     got = terms_sent()
-    assert len(got) == 3 and got[2][1]["version"] > got[1][1]["version"] and [t["term"] for t in got[2][1]["terms"]] == ["리텐션", "코호트", "KPI"]
+    assert len(got) == n1 + 1 and got[-1][1]["version"] > got[-2][1]["version"] and [t["term"] for t in got[-1][1]["terms"]] == ["리텐션", "코호트", "KPI"]
 
     # 3) 회의가 끝나면 바뀐 것이 없어도 final 로 한 번 보낸다. 로그와 상태에 용어·뜻이 남지 않는다
     reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": 30000})
     assert reg.wait_idle(path) and pub.wait_idle()
     got = terms_sent()
-    assert len(got) == 4 and got[3][1]["final"] is True and got[3][1]["terms"] == got[2][1]["terms"] and got[3][1]["version"] > got[2][1]["version"]
+    assert len(got) == n1 + 2 and got[-1][1]["final"] is True and got[-1][1]["terms"] == got[-2][1]["terms"] and got[-1][1]["version"] > got[-2][1]["version"]
     st = reg.status(path)
     assert st["errors"] == 0 and st["transcriptTerms"]["halted"] is None, st
     dump = json.dumps(st, ensure_ascii=False) + "\n".join(cap.rows)
@@ -2297,7 +2299,8 @@ def test_transcript_terms_flow(cap):
     assert st["errors"] >= 1 and st["fromGlossary"] == 1 and reg.status(path)["agendaClassification"]["errors"] == 0, st
 
 
-    # 7) 용어집 용어는 분류·안건 단계의 모델 호출을 기다리지 않고 바로 나간다 (분류 모델이 멈춰 있어도 먼저 나감)
+    # 7) 용어는 분류 모델 호출을 기다리지 않는다. 분류 모델이 멈춰 있어도 용어집 용어가 먼저, 이어서 모델 길 용어도 나간다
+    #    (용어는 안건 쪽과 따로 줄 저장소·대기열·일꾼을 쓴다. 안건 제목을 읽을 때 분류기 락에 막히지 않아야 한다)
     from agenda_classifier import make_llm as classify_make_llm
     echo_classify = classify_make_llm(ClassifyCfg())
     gate = threading.Event()
@@ -2305,25 +2308,70 @@ def test_transcript_terms_flow(cap):
     def slow_classify(user):
         assert gate.wait(10), "시험이 분류 모델을 풀어 주지 않음"
         return echo_classify(user)
+
+    def wait_for(cond, sec=5):
+        deadline = time.time() + sec
+        while time.time() < deadline and not cond():
+            time.sleep(0.02)
+        return cond()
+    terms_gate = threading.Event()
+
+    def slow_terms(user):
+        assert terms_gate.wait(10), "시험이 용어 모델을 풀어 주지 않음"
+        return fake_llm(user)
     sent = []
     pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0, terms_interval=0)
     reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=ClassifyCfg(refresh_sec=0), classify_llm=slow_classify,
-                   terms_cfg=TermsCfg(min_new_lines=1), terms_llm=fake_llm, terms_glossary=glossary)
+                   terms_cfg=TermsCfg(min_new_lines=1), terms_llm=slow_terms, terms_glossary=glossary)
     mid, path = 65, "65"
+    term_puts = lambda: [p for u, p in sent if "/transcript-terms" in u]   # noqa: E731
     reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
     reg.receive_agendas(path, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
     reg.receive_batch(path, {"meetingId": mid, "batch": 1, "lines": lines, "edits": []})
-    deadline = time.time() + 5
-    while time.time() < deadline and not any("/transcript-terms" in u for u, _ in sent):
-        time.sleep(0.02)
-    got = [p for u, p in sent if "/transcript-terms" in u]
-    assert got and [t["term"] for t in got[0]["terms"]] == ["리텐션"], ("분류 모델을 기다리는 동안 용어집 용어가 나가야 함", sent)
+    assert wait_for(lambda: term_puts()), ("분류·용어 모델이 멈춰 있어도 용어집 용어는 먼저 나가야 함", sent)
+    assert [t["term"] for t in term_puts()[0]["terms"]] == ["리텐션"], term_puts()
+    terms_gate.set()                                             # 용어 모델만 푼다. 분류 모델은 아직 멈춰 있다
+    assert wait_for(lambda: [t["term"] for t in term_puts()[-1]["terms"]] == ["리텐션", "코호트"]), \
+        ("분류 모델을 기다리지 않고 모델 길 용어도 나가야 함", term_puts())
     assert not any(u.endswith("/agenda-classification") for u, _ in sent), "분류가 끝나기 전이어야 함"
     gate.set()
     assert reg.wait_idle(path) and pub.wait_idle()
     assert any(u.endswith("/agenda-classification") for u, _ in sent)
-    assert [t["term"] for t in [p for u, p in sent if "/transcript-terms" in u][-1]["terms"]] == ["리텐션", "코호트"], "모델 길 용어는 안건 단계 뒤에 더해진다"
     assert reg.status(path)["errors"] == 0
+
+    # 8) 안건 쪽(분류 모델)이 멈춰 줄 묶음이 안건 대기열에 밀려도 용어는 계속 나가고,
+    #    회의가 끝나면 안건 쪽을 기다리지 않고 용어 final 이 나간다
+    gate2 = threading.Event()
+    classify_hits = []
+
+    def stuck_classify(user):
+        classify_hits.append(1)
+        assert gate2.wait(10), "시험이 분류 모델을 풀어 주지 않음"
+        return echo_classify(user)
+    sent = []
+    pub = Publisher("http://backend", sender=lambda url, p: (sent.append((url, p)) or (True, False, 200)), board_interval=0, terms_interval=0)
+    reg = Registry(cfg_from_env({}), publisher=pub, classify_cfg=ClassifyCfg(refresh_sec=0), classify_llm=stuck_classify,
+                   terms_cfg=TermsCfg(min_new_lines=1), terms_llm=fake_llm, terms_glossary=glossary)
+    mid, path = 66, "66"
+    reg.receive_event(path, {"meetingId": mid, "event": "start", "atMs": 0})
+    reg.receive_agendas(path, dict(load("agendas-with-attendees-put.json"), meetingId=mid))
+    reg.receive_batch(path, {"meetingId": mid, "batch": 1, "lines": [line(1, "첫 안건부터 볼게요")], "edits": []})
+    reg.receive_batch(path, {"meetingId": mid, "batch": 2, "lines": [line(2, "코호트로 나눠서 볼까요")], "edits": []})
+    reg.receive_batch(path, {"meetingId": mid, "batch": 3, "lines": [line(3, "KPI 도 정해야죠")], "edits": []})
+    # 밀린 묶음은 한꺼번에 넣고 용어집 길부터 돌므로 목록 순서는 찾은 순서다(KPI 가 먼저일 수 있다)
+    assert wait_for(lambda: term_puts() and sorted(t["term"] for t in term_puts()[-1]["terms"]) == ["KPI", "코호트"]), \
+        ("안건 쪽이 멈춰 묶음이 밀려도 용어는 나가야 함", term_puts())
+    reg.receive_event(path, {"meetingId": mid, "event": "end", "atMs": 30000})
+    assert wait_for(lambda: term_puts() and term_puts()[-1]["final"] is True), "안건 쪽을 기다리지 않고 용어 final 이 나가야 함"
+    assert classify_hits and reg.meetings[path].queue.unfinished_tasks >= 3, \
+        ("시험 조건: 분류 모델이 멈춰 있고 안건 대기열에 묶음·종료가 남아 있어야 함", len(classify_hits), reg.meetings[path].queue.unfinished_tasks)
+    assert not any(u.endswith("/agenda-classification") for u, _ in sent), "안건 쪽은 아직 끝나지 않았어야 함"
+    gate2.set()
+    assert reg.wait_idle(path) and pub.wait_idle()
+    assert any(u.endswith("/agenda-classification") for u, _ in sent)
+    finals = [p for p in term_puts() if p["final"]]
+    assert len(finals) == 1 and term_puts()[-1]["final"] is True, "용어 final 은 한 번, 마지막에"
+    assert reg.status(path)["errors"] == 0 and reg.status(path)["transcriptTerms"]["calls"] >= 1
 
 def main():
     cap = Capture()

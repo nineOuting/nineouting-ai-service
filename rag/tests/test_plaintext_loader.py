@@ -116,6 +116,16 @@ def test_짧은_문단은_GROUP_CHARS_까지_잇고_넘으면_새_조각():
     assert out[0].content == para + "\n" + para
 
 
+def test_csv는_표로_읽지_않고_줄_그대로_줄_번호_위치():
+    """csv 도 글자로 된 파일이라 텍스트로 받는다. 열 이름을 붙이지 않고 원문 줄 그대로 (정한 범위)."""
+    rows = ["항목,금액,장소", '케이터링,6750000,"서울, 강남"', "대관,3000000,"]
+    data = "\r\n".join(rows).encode("cp949")                   # 엑셀이 내보내는 한글 csv (CP949, 윈도우 줄바꿈)
+    assert detect(data) == TEXT
+    (p,) = load_text(data).pieces
+    assert p.content == "\n".join(rows)
+    assert p.location == {"type": "line", "lines": [1, 3], "label": "1~3줄"} and p.kind == "line"
+
+
 def test_긴_문단은_줄_단위로_끊고_한_줄이_길면_그_줄만():
     line = "나" * 99                                       # 줄 4개가 399자
     out = pieces("\n".join([line] * 9) + "\n\n" + "다" * 1000 + "\n\n짧은 끝")

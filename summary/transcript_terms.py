@@ -28,6 +28,7 @@
 로그 규칙: 전사 내용, 안건 제목, 용어, 뜻을 남기지 않는다. 개수와 예외 이름만 남긴다.
 LLM_PROVIDER=echo 이면 모델을 부르지 않는다 (비용 0).
 """
+import hashlib
 import json
 import logging
 import os
@@ -79,6 +80,12 @@ class TermsCfg:
             if not hasattr(self, k):
                 raise TypeError(f"알 수 없는 설정: {k}")
             setattr(self, k, v)
+
+
+def term_id(key):
+    """용어 id: 비교용 키(_norm, 용어집 용어는 대표 표기)의 해시 앞 12자리. 같은 용어면 회의가 달라도, 서버가 다시 시작해도 같다.
+    로그에 찍혀도 용어 글자가 바로 보이지 않게 하려는 것이다 (같은 방식으로 해시해 맞춰 보면 알아낼 수 있으므로 암호는 아니다)."""
+    return "t-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
 def echo_llm(user):
@@ -192,12 +199,12 @@ class TranscriptTerms:
         self.llm = llm or make_llm(self.cfg)
         self.lock = threading.RLock()
         self.ended = False
-        self.seen = set()             # 이미 본 줄 id
+        self.seen = set()             # 모델 길에서 이미 본 줄 id
+        self.gl_seen = set()          # 용어집 길에서 이미 본 줄 id (용어집 찾기는 모델 길보다 먼저 따로 돌 수 있다)
         self.pending = []             # 용어 후보를 아직 찾지 않은 줄
         self.pending_since = 0        # pending 이 비어 있다가 채워진 음성 시간(ms)
         self.items = []               # 찾은 용어 전부 (순서대로): {"id","key","term","name","aliases","text","origin","first_seq"}
         self.known = set()            # 목록에 넣은 적 있는 용어 키 (목록에서 빠진 것도 포함)
-        self.serial = 0
         self.calls = 0
         self.errors = 0
         self.err_streak = 0
@@ -214,17 +221,35 @@ class TranscriptTerms:
             now_ms = c.now_ms
         return {"kept": kept, "titles": titles, "now_ms": now_ms}
 
+    def scan_glossary(self):
+        """용어집 길만 돈다 (모델 없음, 빠름). 서버는 줄 묶음을 분류기에 넣은 직후, 모델을 부르는 단계들보다 먼저 부른다.
+        반환: 목록에 새로 넣은 용어 수."""
+        view = self._view()
+        with self.lock:
+            if self.ended:
+                return 0
+            return self._glossary_new(view)
+
+    def _glossary_new(self, view):
+        """락 안에서 부른다. 용어집 길에서 아직 보지 않은 줄을 보고, 새로 넣은 용어 수를 돌려준다."""
+        new = [ln for ln in view["kept"] if ln["id"] not in self.gl_seen]
+        for ln in new:
+            self.gl_seen.add(ln["id"])
+        before = len(self.items)
+        self._scan_glossary(new)
+        return len(self.items) - before
+
     def process(self, final=False):
-        """새 줄에서 용어를 찾는다. 용어집 길은 항상, 모델 길은 시점이 되면. 반환: 모델을 부른 횟수.
+        """새 줄에서 용어를 찾는다. 용어집 길은 항상(scan_glossary 가 먼저 봤으면 건너뜀), 모델 길은 시점이 되면. 반환: 모델을 부른 횟수.
         final(회의 끝)이면 마지막 줄까지 용어집 길만 보고 모델은 부르지 않는다. 그 뒤로는 아무것도 하지 않는다."""
         view = self._view()
         with self.lock:
             if self.ended:
                 return 0
+            self._glossary_new(view)
             new = [ln for ln in view["kept"] if ln["id"] not in self.seen]
             for ln in new:
                 self.seen.add(ln["id"])
-            self._scan_glossary(new)
             if final:
                 self.ended = True
                 self.pending = []
@@ -384,8 +409,7 @@ class TranscriptTerms:
         if key in self.known:
             return
         self.known.add(key)
-        self.serial += 1
-        self.items.append({"id": f"t-{self.serial}", "key": key, "term": term, "text": text, "origin": origin,
+        self.items.append({"id": term_id(key), "key": key, "term": term, "text": text, "origin": origin,
                            "first_seq": min(evidence), "name": name, "aliases": list(aliases)})
         log.info("용어 추가 meeting=%s origin=%s", self.c.meeting_id, origin)
 
@@ -476,7 +500,7 @@ def selftest():
     w = World(GLOSS)
     assert w.say("이번 분기 리텐션이 떨어졌어요") == 0 and w.prompts == []
     b = w.h.terms()
-    assert b == [{"id": "t-1", "term": "리텐션", "aliases": ["retention"], "text": "앱을 다시 찾는 사용자 비율이에요.",
+    assert b == [{"id": term_id("리텐션"), "term": "리텐션", "aliases": ["retention"], "text": "앱을 다시 찾는 사용자 비율이에요.",
                   "origin": "GLOSSARY", "firstSeq": 1}], b
     w.say("리텐션 얘기 다시 하면", "retention 도 같이 보죠")
     assert len(w.h.terms()) == 1 and w.h.info()["fromGlossary"] == 1
@@ -517,7 +541,7 @@ def selftest():
     assert w.say("첫 줄", "코호트 분석을 해야", "셋째") == 0 and w.prompts == [] and w.h.info()["pending"] == 3
     assert w.say("넷째") == 1 and len(w.prompts) == 1 and w.h.info()["pending"] == 0
     b = w.h.terms()
-    assert b == [{"id": "t-1", "term": "코호트", "aliases": [], "text": "비슷한 조건의 사용자 묶음이에요.", "origin": "AI_EXPLAIN", "firstSeq": 2}], b
+    assert b == [{"id": term_id("코호트"), "term": "코호트", "aliases": [], "text": "비슷한 조건의 사용자 묶음이에요.", "origin": "AI_EXPLAIN", "firstSeq": 2}], b
     pr = w.prompts[0]
     assert "[이미 안내한 용어]\n(없음)" in pr and "- 배포 일정" in pr and "[2] 00:04 코호트 분석을 해야" in pr, pr
 
@@ -626,7 +650,7 @@ def selftest():
     w.say("가나"); w.say("다라"); w.say("마바")
     assert terms(w) == ["가나", "다라", "마바"]
     w.say("사아")
-    assert terms(w) == ["다라", "마바", "사아"] and [x["id"] for x in w.h.terms()] == ["t-2", "t-3", "t-4"]
+    assert terms(w) == ["다라", "마바", "사아"] and [x["id"] for x in w.h.terms()] == [term_id("다라"), term_id("마바"), term_id("사아")]
     w.say("가나 다시")                                                # 빠진 용어는 다시 더하지 않는다
     assert terms(w) == ["다라", "마바", "사아"] and w.h.info()["terms"] == 4 and w.h.info()["listed"] == 3
 
@@ -716,7 +740,7 @@ def selftest():
     w.say("KPI 먼저 봐요")
     w.say("코호트로 나눠 볼까요")
     t = w.h.terms()
-    assert [(x["id"], x["term"], x["origin"]) for x in t] == [("t-1", "리텐션", "GLOSSARY"), ("t-2", "KPI", "GLOSSARY"), ("t-3", "코호트", "AI_EXPLAIN")], t
+    assert [(x["id"], x["term"], x["origin"]) for x in t] == [(term_id("리텐션"), "리텐션", "GLOSSARY"), (term_id("kpi"), "KPI", "GLOSSARY"), (term_id("코호트"), "코호트", "AI_EXPLAIN")], t
     assert t[0]["name"] == "리텐션 (Retention)" and t[0]["aliases"] == ["retention"] and "name" not in t[1] and t[1]["aliases"] == [] and t[2]["aliases"] == []
     assert all(isinstance(x["firstSeq"], int) and x["text"] for x in t) and t[0]["firstSeq"] < t[1]["firstSeq"] < t[2]["firstSeq"]
     t[0]["aliases"].append("바뀜")
@@ -736,7 +760,29 @@ def selftest():
             pass
     assert Glossary([{"term": "리텐션", "name": "  리텐션 (Retention)  ", "explain": "뜻이에요."}]).entries[0]["name"] == "리텐션 (Retention)"
 
-    print("전사 속 용어 자체 시험 통과 (용어집 파일 형식, 용어집 길, 별칭, 영문 경계, 긴 이름 우선, STT 불확실·낮은 확신도·맞장구, 줄 한 번만 보기, 모델 호출 시점, 후보 코드 확인과 경계값, 상한, JSON 재시도, 연속 실패, 호출 상한, 목록 상한·다시 더하지 않음, 안건 없는 회의, 종료, 로그에 내용 없음, 동시 접근, 목록 모양과 이름·별칭)")
+    # 23) id: 비교용 키의 해시. 모양은 t- + 16진수 12자리. 같은 용어면 회의가 달라도 같고, 별칭·대소문자·공백이 달라도 대표 표기의 id
+    assert re.fullmatch(r"t-[0-9a-f]{12}", term_id("리텐션")) and term_id("리텐션") != term_id("kpi")
+    w1, w2 = World(GLOSS), World(GLOSS)
+    w1.say("리텐션 얘기")
+    w2.say("retention 얘기")                                           # 다른 회의, 별칭으로 처음 나옴
+    assert w1.h.terms()[0]["id"] == w2.h.terms()[0]["id"] == term_id("리텐션") and w2.h.terms()[0]["term"] == "리텐션"
+    w3 = World(replies=[one(term="Cohort ", evidence=[[2, 2]])])
+    w3.say("첫 줄", "그 cohort 분석", "셋째", "넷째")
+    assert w3.h.terms()[0]["id"] == term_id("cohort")
+    assert "리텐션" not in json.dumps([x["id"] for x in w1.h.terms()], ensure_ascii=False), "id 에 용어 글자가 그대로 보이면 안 됨"
+
+    # 24) scan_glossary 가 먼저 돌아도: 용어집 용어는 바로 들어가고, 모델 길은 그 줄을 빠뜨리지 않는다
+    w = World(GLOSS, replies=[reply])
+    w.c.receive({"lines": [{"id": i, "start_ms": i * 4000, "end_ms": i * 4000 + 1000, "arrival_ms": i * 4000 + 1000, "type": "final", "kind": None,
+                            "low_confidence": False, "text": tx, "text_marked": tx, "manual": False}
+                           for i, tx in ((1, "리텐션 얘기"), (2, "코호트 분석을 해야"), (3, "셋째"), (4, "넷째"))], "edits": [], "sent_ms": 20000})
+    assert w.h.scan_glossary() == 1 and terms(w) == ["리텐션"] and w.prompts == [], "용어집 찾기는 모델을 부르지 않는다"
+    assert w.h.scan_glossary() == 0, "같은 줄을 두 번 보지 않는다"
+    assert w.h.process() == 1 and terms(w) == ["리텐션", "코호트"] and "[2] 00:08 코호트 분석을 해야" in w.prompts[0], w.prompts
+    w.h.process(final=True)
+    assert w.h.scan_glossary() == 0
+
+    print("전사 속 용어 자체 시험 통과 (용어집 파일 형식, 용어집 길, 별칭, 영문 경계, 긴 이름 우선, STT 불확실·낮은 확신도·맞장구, 줄 한 번만 보기, 모델 호출 시점, 후보 코드 확인과 경계값, 상한, JSON 재시도, 연속 실패, 호출 상한, 목록 상한·다시 더하지 않음, 안건 없는 회의, 종료, 로그에 내용 없음, 동시 접근, 목록 모양과 이름·별칭, 해시 id, 용어집 먼저 찾기)")
 
 
 if __name__ == "__main__":

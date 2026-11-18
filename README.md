@@ -159,7 +159,7 @@ flowchart LR
 | `TRANSCRIPT_TERMS` | `1`이면 전사 속 용어를 켬: 용어 목록을 따로 보내고 용어 후보를 찾는 모델도 부름. `0`이나 비우면 끔(목록을 보내지 않고 모델도 안 부름). `0`·`1`이 아니면 시작할 때 설정 오류. 실제 회의로 용어 후보를 평가하기 전에는 `0` | `0` |
 | `TRANSCRIPT_TERMS_GLOSSARY_PATH` | 팀 용어집 JSON 경로. 용어집에 있는 말은 모델 없이 목록에 넣고 `name`(화면에 보일 이름)·`aliases`(같은 뜻의 다른 표기)도 낸다. 경로가 있는데 파일이 없거나 형식이 틀리면 시작할 때 설정 오류. 비우면 모델 길만. `TRANSCRIPT_TERMS=1`일 때만 읽음 | 없음 |
 | `TRANSCRIPT_TERMS_REFRESH_SEC` | 새 줄이 4개 안 모였어도 이만큼(음성 시간 초) 지나면 용어 후보를 찾음 | 60 |
-| `MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING` | 회의당 용어 후보 찾기 호출 상한 (넘으면 모델 길만 멈추고 용어집 길은 계속) | 60 |
+| `MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING` | 회의당 용어 후보 찾기 호출 상한 (넘으면 모델 길만 멈추고 용어집 길은 계속) | 150 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 토큰 지표를 OTLP(HTTP)로도 보낼 주소 | 없음 |
 | `LOG_LEVEL` | 로그 수준 | `INFO` |
 | `GEMINI_API_KEY` | `LLM_PROVIDER=gemini`일 때 필요. 없으면 `503` | 없음 |

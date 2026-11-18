@@ -10,7 +10,7 @@
                   "gold": [{"doc": "prep", "starts": "베타 참여자는 총 100명"}]}, ...]}
   gold 는 찾아와야 할 조각 (그 문서의 조각 중 글이 starts 로 시작하는 것). gold 가 빈 질문은 검색 지표에서 뺀다.
 
-업로드 문서(pdf·docx·xlsx)는 정답을 위치로 적는다. 한 문서를 여러 형식으로 두면 --format 으로 고른다:
+업로드 문서(pdf·docx·xlsx·md)는 정답을 위치로 적는다. 한 문서를 여러 형식으로 두면 --format 으로 고른다:
   {"docs": {"plan": {"pdf": "a.pdf", "docx": "a.docx", "xlsx": "a.xlsx"}, "report": {"file": "b.pdf"}},
    "questions": [{"id": 1, "q": "케이터링 예산은?", "type": "표 속 사실",
                   "gold": [{"doc": "plan", "answer": "6,750,000원", "pdf": {"page": 4},
@@ -40,10 +40,11 @@ from .config import CHUNK_TOKENS
 from .loaders.docx import load_docx
 from .loaders.minutes import load_minutes
 from .loaders.pdf import load_pdf
+from .loaders.plaintext import load_text
 from .loaders.xlsx import load_xlsx
 
-FORMATS = ("pdf", "docx", "xlsx")
-_LOADERS = {".pdf": load_pdf, ".docx": load_docx, ".xlsx": load_xlsx}
+FORMATS = ("pdf", "docx", "xlsx", "md")
+_LOADERS = {".pdf": load_pdf, ".docx": load_docx, ".xlsx": load_xlsx, ".md": load_text, ".txt": load_text}
 
 
 def doc_file(d, fmt):

@@ -25,11 +25,12 @@ from .chunking import split_pieces
 from .config import CHUNK_TOKENS, MAX_DOC_TOKENS
 from .download import UPLOAD_OFF, UploadSettings, fetch, settings_from_env
 from .errors import INTERNAL_ERROR, TOO_LARGE, UNSUPPORTED_FORMAT, IngestError
-from .filetype import DOCX, PDF, XLSX, detect
+from .filetype import DOCX, PDF, TEXT, XLSX, detect
 from .jobs import KEEP_DAYS, claim, cleanup_finished, finish, retry_later
 from .loaders.docx import load_docx
 from .loaders.minutes import load_minutes
 from .loaders.pdf import load_pdf
+from .loaders.plaintext import load_text
 from .loaders.xlsx import load_xlsx
 from .store import StaleJob, is_current, mark_failed, mark_processing, store
 
@@ -101,7 +102,7 @@ class Worker:
         elif source == "upload":
             data = fetch(job.payload.get("fileUrl"), self.upload)
             kind = detect(data)
-            loaders = {PDF: load_pdf, DOCX: load_docx, XLSX: load_xlsx}
+            loaders = {PDF: load_pdf, DOCX: load_docx, XLSX: load_xlsx, TEXT: load_text}
             if kind not in loaders:
                 raise IngestError(UNSUPPORTED_FORMAT, f"{UPLOAD_NOT_READY} ({kind})")
             pieces = loaders[kind](data).pieces

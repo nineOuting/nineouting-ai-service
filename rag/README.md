@@ -121,12 +121,14 @@ cd <저장소 루트> && set -a && . ./.env && set +a
 - 명세에 없어서 AI 쪽이 정한 것 (확인 필요): 입력 오류 400 `{"error": "INVALID_INPUT"}`, 같은 `sourceType`+`docId` 가 다른 워크스페이스로 오면 409 `CONFLICT`, DB 를 쓸 수 없으면 503 `NOT_READY`, 넣기 응답 코드 202
 - `sourceType=upload` 는 허용 저장소(`RAG_UPLOAD_ALLOWED_HOSTS`)가 설정됐을 때만 받는다. 없으면 400. `fileUrl` 의 호스트가 허용 저장소가 아니어도 400
   - 작업자가 파일을 메모리로 받아(디스크에 쓰지 않음) 안쪽 모양으로 형식을 알아낸다. 확장자는 믿지 않는다
-  - 실패: 서명 만료 `url_expired`, 그 밖에 받지 못함 `download_failed` (둘 다 다시 시도하지 않음. 백엔드가 다시 호출), 크기·푼 크기 초과와 조각 토큰 합계 초과(`RAG_MAX_DOC_TOKENS`) `too_large`, 암호 `encrypted`, pdf·docx·xlsx 가 아님(사용자가 묶은 zip, 옛 doc·xls, hwp 포함) `unsupported_format`
+  - 실패: 서명 만료 `url_expired`, 그 밖에 받지 못함 `download_failed` (둘 다 다시 시도하지 않음. 백엔드가 다시 호출), 크기·푼 크기 초과와 조각 토큰 합계 초과(`RAG_MAX_DOC_TOKENS`) `too_large`, 암호 `encrypted`, pdf·docx·xlsx·텍스트가 아님(사용자가 묶은 zip, 옛 doc·xls, hwp·hwpx, 이미지 포함) `unsupported_format`
+  - 받는 형식과 크기 기준(공유용): pdf·docx·xlsx·텍스트(txt·md, csv 는 일반 글로). pptx·hwpx 는 추후, 옛 오피스·옛 hwp·이미지는 받지 않음 (2026-11-18 결정, SCRUM-309)
   - PDF: 쪽마다 머리글·바닥글(여러 쪽의 위·아래 두 줄 안에 되풀이되는 줄)을 지우고, 쪽 안에서 번호 제목(`1.`, `3.2`)마다 조각 재료 하나. 검색 맥락은 제목 경로, 쪽 첫 부분은 앞 쪽 제목을 이어받음. 번호 없는 제목은 나누지 못함. 근거 위치 `{type: "page", page, label: "3쪽"}`. 글 없는 쪽은 건너뛰고, 모든 쪽에 글이 없으면(스캔 PDF 등) `no_text`, 1,000쪽 넘으면 `too_large`. PDFium(`pypdfium2`)으로 읽는다. pypdf 는 글자 폭 정보가 어긋난 PDF 에서 글자마다 띄어 꺼내서 쓰지 않는다
   - 워드: 제목 하나 아래의 글이 조각 재료 하나. 근거 위치 `{type: "section", heading, label}`(가장 가까운 제목, 첫 제목 전 글은 label "문서 처음"), 검색 맥락은 제목 경로("2. 예산 계획 > 2.1 마케팅"). 표는 행마다 "머리 행 이름: 값 | …" 한 줄. 머리글·바닥글은 본문과 따로 저장돼 읽지 않는다. 글상자·각주·자동 번호는 읽지 못한다
   - 엑셀: 시트마다 처음으로 글이 있는 행을 머리 행으로 보고, 그 아래 행 하나가 조각 재료 하나. 행은 "열 이름: 값 | …" 한 줄. 근거 위치 `{type: "sheet", sheet, rows: [시작, 끝], label: "1분기 시트 12행"}`(행 번호는 엑셀 화면 그대로), 검색 맥락은 시트 이름. 병합 칸은 범위 전체에 채우고, 숫자는 쉼표·백분율·날짜 서식을 따름. 수식은 저장된 계산 결과만(없으면 빠짐). 숨긴 시트는 읽지 않음. 칸 20만 개 넘으면 `too_large`. 차트·그림·칸 메모는 읽지 못하고, 한 시트에 표가 여럿이면 첫 행만 머리 행으로 봄
+  - 텍스트(SCRUM-309): PDF·워드·엑셀이 아니고 글자로 읽히는 파일. 0바이트가 있거나 제어 문자가 1% 넘으면 글이 아님. 인코딩은 BOM 이 있는 UTF-16, UTF-8, CP949 순서. 마크다운 제목(`#`)이 하나라도 있으면 워드와 같은 규칙으로 제목마다 조각 재료 하나(근거 위치 `section`, 검색 맥락은 제목 경로). 없으면 빈 줄로 나뉜 문단을 400자(약 230 토큰, 청크 상한 256 안)까지 이어 붙이고 근거 위치는 원본 줄 번호 `{type: "line", lines: [시작, 끝], label: "12~18줄"}`. 표(`|---|` 구분 줄)는 "열 이름: 값 | …" 한 줄, 링크·그림은 글만, 코드 블록 울타리 줄은 뺌. 그 밖의 마크다운 표시는 그대로. 50만 자 넘으면 `too_large` (한국어 1자 ≈ 0.57 토큰, 측정). 밑줄식 제목·참조식 링크·HTML 은 읽지 못함
   - 머리글·바닥글·쪽 번호 빼기 같은 정제는 아직 없다 (SCRUM-110)
-  - 시험 샘플(합성): `rag/tests/fixtures/upload_*.pdf` (짧은 보고서, 상세 운영계획서 `upload_plan.pdf`, 글 없는 PDF, 암호 PDF), 만드는 스크립트 `make_upload_samples.py` (fpdf2, Noto Sans CJK KR, 운영계획서 내용은 `plan_content.py`)
+  - 시험 샘플(합성): `rag/tests/fixtures/upload_*.pdf` (짧은 보고서, 상세 운영계획서 `upload_plan.pdf`, 글 없는 PDF, 암호 PDF), 만드는 스크립트 `make_upload_samples.py` (fpdf2, Noto Sans CJK KR, 운영계획서 내용은 `plan_content.py`). 텍스트 샘플 `upload_plan.md`(워드와 같은 내용)·`upload_notes.txt`·`upload_notes_cp949.txt` 는 `--text` 로 따로 만든다
   - `fileUrl` 에는 접근 서명이 들어 있어 로그·오류 글에 남기지 않는다
 - `minutes` 형식 (회의록 초안 명세 `docs/api/minutes-draft-contract.md` 4장)
   - 확정 회의록 `formatVersion: "1.0"`: `meetingId`, `meetingStartAt`, `savedAt`(선택), `header`·`footer`(선택), `sections[{title, content}]`. `content` 의 줄 하나가 조각 하나이고 줄 앞 `- `·`* `·`• ` 는 뗀다. 들여 쓴 목록은 하위 줄에 위 줄들을 `: ` 로 붙여 조각 하나로 넣고 하위 줄이 있는 위 줄은 따로 넣지 않는다 (초안이 안건 등으로 묶은 필드). 빈 줄과 "해당 내용 없음" 은 넣지 않는다. `content` 안의 마크다운 표(`|` 로 시작하고 둘째 줄이 `|---|`)는 행마다 조각 하나로, 워드 표처럼 "머리 행 이름: 값 | …" (빈 칸은 뺌, 칸 안의 `\|` 는 구분이 아님). 칸 이름을 맥락으로 붙여 검색하고, 근거 위치는 `{type: "section", heading, label}` (칸 이름. 워드 문서의 제목 위치와 같은 모양). 머리글·바닥글은 글이 있으면 각각 조각 하나이고 heading 은 "머리글"·"바닥글"
@@ -247,10 +249,10 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 ```bash
 .venv/bin/python -m rag.eval_search data/eval/questions_v1.json                    # Top-5, Top-10
 .venv/bin/python -m rag.eval_search data/eval/questions_v1.json --k 5 10 20 --detail --out data/eval/results/x.json
-.venv/bin/python -m rag.eval_search rag/tests/fixtures/eval_plan.json --format pdf --k 1 3 5   # 업로드 문서 (합성), pdf·docx·xlsx
+.venv/bin/python -m rag.eval_search rag/tests/fixtures/eval_plan.json --format pdf --k 1 3 5   # 업로드 문서 (합성), pdf·docx·xlsx·md
 ```
 
-- 업로드 문서 질문 파일 `eval_plan.json` 은 합성 운영계획서(pdf·docx·xlsx 같은 내용) 질문 40개다. 정답은 위치(쪽, 제목, 시트·행)로 적는다
+- 업로드 문서 질문 파일 `eval_plan.json` 은 합성 운영계획서(pdf·docx·xlsx·md 같은 내용) 질문 40개다. 정답은 위치(쪽, 제목, 시트·행)로 적는다
 
 - 청크는 실제 작업자와 같은 함수(로더 → 나누기 → 임베딩)로 만들고, 서버 검색과 같은 모델·기준(코사인)으로 순위를 낸다. DB 를 쓰지 않는다
 - 질문 파일 형식은 `rag/eval_search.py` 맨 위 설명. `gold` 가 빈 질문(답할 수 없음)은 검색 지표에서 뺀다

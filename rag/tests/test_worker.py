@@ -194,6 +194,19 @@ def test_워드는_받아서_제목마다_저장하고_ready(conn, fake_embedder
     assert labels == ["문서 처음", "1. 회의실 예약 규칙", "1.1 예약 시간", "2. 정리 규칙"]
 
 
+def test_텍스트는_받아서_줄_번호_위치로_저장하고_ready(conn, fake_embedder, storage):
+    """SCRUM-309. 파일 이름(.txt)은 보지 않는다: 확장자 없는 주소로 보내도 내용으로 텍스트를 알아낸다"""
+    backend = FakeBackend()
+    storage.files["/ws/1/notes"] = (Path(__file__).parent / "fixtures" / "upload_notes_cp949.txt").read_bytes()
+    submit(conn, request(source="upload", version="sha256:txt", file_url=storage.url("/ws/1/notes")))
+    make_worker(conn, fake_embedder, backend, upload=storage.settings()).process_one()
+    assert backend.bodies[0]["status"] == "ready"
+    locations = [r[0] for r in conn.execute("SELECT location FROM rag_chunks WHERE doc_id = 1 ORDER BY chunk_index")]
+    # 메모 한 조각(309자). 가짜 임베더는 글자 하나를 토큰 하나로 세서 청크 상한(256)을 넘어 둘로 나뉜다 (실제 모델은 약 180 토큰)
+    assert len(locations) == backend.bodies[0]["chunkCount"] == 2
+    assert all(loc == {"type": "line", "lines": [1, 10], "label": "1~10줄"} for loc in locations)
+
+
 @pytest.mark.parametrize("path, code", [("/expired", "url_expired"), ("/error", "download_failed"),
                                         ("/ws/1/old.doc", "unsupported_format"), ("/ws/1/locked.docx", "encrypted")])
 def test_업로드_실패는_다시_시도하지_않고_바로_알린다(conn, fake_embedder, storage, path, code):

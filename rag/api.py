@@ -9,7 +9,7 @@
                                             (명세 docs/api/rag-chat-contract.md)
 
 업로드 문서(sourceType=upload)는 허용 저장소(RAG_UPLOAD_ALLOWED_HOSTS)가 설정됐을 때만 받는다. 없으면 400.
-파일 받기·형식 확인까지 하고, 형식별 읽기(SCRUM-107~109)가 생기기 전까지는 unsupported_format 으로 끝난다.
+읽는 형식은 pdf·docx·xlsx 와 텍스트(txt·md 등 글자로 읽히는 파일, SCRUM-309). 그 밖은 unsupported_format.
 회의록은 확정 회의록 형식(formatVersion "1.0")과 임시 형식(schema_version "0.1")을 받는다. 둘 다 아니면 400.
 저장된 것보다 낮은 회의록 버전은 처리하지 않고 status "ignored" 로 답한다 (콜백 없음). 회의록 초안 명세 4.3.
 명세에 없어서 AI 쪽이 정한 것: 입력 오류 400 INVALID_INPUT, 다른 워크스페이스로 온 같은 docId 409 CONFLICT,
@@ -89,7 +89,7 @@ INGEST_SCHEMA = {
         "minutes": {"type": "object", "description": "확정 회의록 (formatVersion \"1.0\": meetingId, meetingStartAt, "
                     "confirmedAt, sections[{title, content}]). 칸의 줄 하나가 검색 조각 하나. "
                     "임시 형식 summary.json (schema_version \"0.1\")도 전환 기간에는 받는다"},
-        "fileUrl": {"type": "string", "description": "업로드 문서의 S3 서명 주소. 허용한 저장소의 주소만. pdf·docx·xlsx (형식별 읽기는 준비 중)"},
+        "fileUrl": {"type": "string", "description": "업로드 문서의 S3 서명 주소. 허용한 저장소의 주소만. pdf·docx·xlsx·텍스트(txt·md 등). 형식은 파일 내용으로 판단한다"},
         "callbackUrl": {"type": "string", "description": "처리가 끝나면 AI 서버가 POST 할 백엔드 주소. 허용한 호스트만"},
     },
 }

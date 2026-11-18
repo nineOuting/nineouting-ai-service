@@ -2152,7 +2152,7 @@ def test_terms_config():
     assert terms_from_env({}) == (None, None) and terms_from_env({"TRANSCRIPT_TERMS": "0"}) == (None, None)
     assert terms_from_env({"TRANSCRIPT_TERMS": " 0 ", "TRANSCRIPT_TERMS_GLOSSARY_PATH": "/없는/경로"}) == (None, None), "꺼져 있으면 용어집은 보지 않는다"
     cfg, g = terms_from_env({"TRANSCRIPT_TERMS": "1", "LLM_PROVIDER": "gemini", "LLM_MODEL": "m"})
-    assert (cfg.provider, cfg.model, cfg.refresh_sec, cfg.max_calls, len(g)) == ("gemini", "m", 60, 60, 0)
+    assert (cfg.provider, cfg.model, cfg.refresh_sec, cfg.max_calls, len(g)) == ("gemini", "m", 60, 150, 0)
     with tempfile.TemporaryDirectory() as d:
         ok = os.path.join(d, "g.json")
         json.dump({"terms": [{"term": "리텐션", "name": "리텐션 (Retention)", "aliases": ["retention"], "explain": "다시 찾는 비율이에요."}]},

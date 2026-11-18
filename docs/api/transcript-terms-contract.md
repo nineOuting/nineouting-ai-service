@@ -148,7 +148,7 @@ AI 서버는 용어의 글자만 준다. 화면이 전사 각 줄에서 `term`�
 | `TRANSCRIPT_TERMS` | 0 | `1`이면 켠다. `0`·`1`이 아니면 시작할 때 설정 오류 |
 | `TRANSCRIPT_TERMS_GLOSSARY_PATH` | 없음 | 팀 용어집 JSON 경로 (6장) |
 | `TRANSCRIPT_TERMS_REFRESH_SEC` | 60 | 새 줄이 있는데 이 시간(음성 시간)이 지나면 용어 후보를 찾음 |
-| `MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING` | 60 | 회의당 모델 호출 상한 |
+| `MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING` | 150 | 회의당 모델 호출 상한 |
 | `TRANSCRIPT_TERMS_PATH` | `/internal/meetings/{meeting_id}/transcript-terms` | 보낼 경로 (`BACKEND_BASE_URL`과 같은 주소로) |
 
 모듈 설정 (환경변수로 바꾸지 않는 값, 제안)

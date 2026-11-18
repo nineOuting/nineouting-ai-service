@@ -19,6 +19,10 @@
   upload_empty.xlsx   글이 없는 엑셀
   upload_scan.pdf     도형만 있고 글자는 없는 1쪽 (스캔한 PDF 대신)
   upload_locked.pdf   upload_report.pdf 에 암호를 건 것
+  upload_plan.md      upload_plan.docx 와 같은 내용의 마크다운 (워드·마크다운 검색 결과 비교용). 표는 | 표
+  upload_notes.txt    제목 없는 메모 5문단 (UTF-8, 윈도우 줄바꿈). 문단 묶기·줄 번호 시험용
+  upload_notes_cp949.txt  같은 메모를 CP949(옛 한글 윈도우)로 저장한 것
+텍스트 샘플만 다시 만들기 (글꼴·PDF 도구 불필요): .venv/bin/python rag/tests/fixtures/make_upload_samples.py --text
 """
 import re
 import sys
@@ -240,6 +244,47 @@ def make_edge_xlsx(path):
     wb.save(str(path))
 
 
+def make_plan_md(path):
+    """upload_plan.docx 와 같은 내용의 마크다운. 제목 수준도 워드와 같게 둔다 (문서 제목 #, 큰 제목 ##, 작은 제목 ###)."""
+    marks = {"title": "#", "h1": "##", "h2": "###"}
+    out = []
+    for kind, *args in PLAN:
+        if kind in marks:
+            out.append(f"{marks[kind]} {args[0]}")
+        elif kind == "p":
+            out.append(args[0])
+        elif kind == "list":
+            out.append("\n".join(f"- {item}" for item in args[0]))
+        elif kind == "table":
+            rows = args[1]
+            lines = ["| " + " | ".join(rows[0]) + " |", "|" + "---|" * len(rows[0])]
+            out.append("\n".join(lines + ["| " + " | ".join(row) + " |" for row in rows[1:]]))
+    path.write_text("\n\n".join(out) + "\n", encoding="utf-8")
+
+
+NOTES = [
+    "11월 정기 점검 메모 (합성 자료)",
+    "회의실 프로젝터 3대 중 2번 회의실 프로젝터가 켜지지 않는다. 시설팀에 수리를 요청했고 금요일까지 고친다고 했다.\n"
+    "그 전까지는 이동식 모니터를 대신 쓴다.",
+    "사무용품 주문은 매달 25일에 모아서 한다. 이번 달은 복사 용지 20상자와 화이트보드 마커 30개를 주문한다.",
+    "보안 점검 결과 출입 카드를 반납하지 않은 퇴사자가 2명 있었다. 인사팀이 다음 주 수요일까지 카드를 회수한다.",
+    "택배 보관함은 1층 안내 데스크 옆으로 옮긴다. 옮기는 날은 11월 27일이고, 그날은 오후 2시부터 4시까지 택배를 받을 수 없다.",
+]
+
+
+def make_notes_txt(path, encoding):
+    """제목 없는 메모. 빈 줄로 문단을 나누고 윈도우 줄바꿈(\\r\\n)으로 저장한다."""
+    path.write_bytes(("\n\n".join(NOTES) + "\n").replace("\n", "\r\n").encode(encoding))
+
+
+def make_text_samples():
+    make_plan_md(HERE / "upload_plan.md")
+    make_notes_txt(HERE / "upload_notes.txt", "utf-8")
+    make_notes_txt(HERE / "upload_notes_cp949.txt", "cp949")
+    for name in ("upload_plan.md", "upload_notes.txt", "upload_notes_cp949.txt"):
+        print(f"{name}: {(HERE / name).stat().st_size:,} 바이트")
+
+
 def make_empty_xlsx(path):
     wb = Workbook()
     wb.active.title = "시트1"
@@ -264,6 +309,8 @@ def make_locked(src, path):
 
 
 def main():
+    if sys.argv[1:] == ["--text"]:
+        return make_text_samples()
     font = Path(sys.argv[1]) if len(sys.argv) > 1 else next((p for p in FONT_CANDIDATES if p.exists()), None)
     if font is None or not font.exists():
         sys.exit("한글 글꼴이 없음. Noto Sans CJK KR 등의 경로를 인자로 준다")
@@ -277,6 +324,7 @@ def main():
     make_empty_xlsx(HERE / "upload_empty.xlsx")
     make_scan(HERE / "upload_scan.pdf")
     make_locked(HERE / "upload_report.pdf", HERE / "upload_locked.pdf")
+    make_text_samples()
     for name in ("upload_report.pdf", "upload_plan.pdf", "upload_scan.pdf", "upload_locked.pdf",
                  "upload_plan.docx", "upload_edge.docx", "upload_empty.docx",
                  "upload_plan.xlsx", "upload_edge.xlsx", "upload_empty.xlsx"):

@@ -69,7 +69,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PLAN = json.loads((ROOT / "rag/tests/fixtures/eval_plan.json").read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("fmt", ["pdf", "docx", "xlsx"])
+@pytest.mark.parametrize("fmt", ["pdf", "docx", "xlsx", "md"])
 def test_운영계획서_질문의_정답_위치가_샘플에_있음(fmt, monkeypatch):
     """샘플을 다시 만들거나 로더를 바꿔 위치가 달라지면 여기서 걸린다. 모델 없이 글자 수로 나눈다."""
     monkeypatch.chdir(ROOT)
@@ -82,4 +82,4 @@ def test_운영계획서_질문의_정답_위치가_샘플에_있음(fmt, monkey
             # 14번 엑셀은 문단 대신 합계 행이 정답이라 answer 글귀가 없다
             assert g["answer"].replace(" ", "") in texts or (q["id"] == 14 and fmt == "xlsx"), (q["id"], g)
         scored += bool(gold)
-    assert scored == {"pdf": 35, "docx": 35, "xlsx": 22}[fmt]
+    assert scored == {"pdf": 35, "docx": 35, "xlsx": 22, "md": 35}[fmt]

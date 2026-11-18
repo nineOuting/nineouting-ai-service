@@ -202,7 +202,7 @@ class Index:
         for i in order[:DOC_TOP_K]:
             key, chunk = self.chunks[i]
             d = self.case["docs"][key]
-            source = "minutes" if d["file"].endswith(".json") else "upload"        # 회의록은 json, 첨부 자료는 pdf·docx·xlsx
+            source = "minutes" if d["file"].endswith(".json") else "upload"        # 회의록은 json, 첨부 자료는 pdf·docx·xlsx·md·txt
             out.append(Evidence(source, d["docId"], d["title"], chunk.content, chunk.location, d.get("when", "")))
         return out
 

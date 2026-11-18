@@ -3,7 +3,7 @@ import pytest
 
 from rag.download import UPLOAD_OFF, FileUrlNotAllowed, check_file_url, fetch, settings_from_env
 from rag.errors import DOWNLOAD_FAILED, ENCRYPTED, TOO_LARGE, UNSUPPORTED_FORMAT, URL_EXPIRED, IngestError
-from rag.filetype import DOCX, PDF, XLSX, detect
+from rag.filetype import DOCX, PDF, TEXT, XLSX, detect
 from upload_fakes import office_bytes, ole_bytes, pdf_bytes, plain_zip, zip_bomb
 
 
@@ -98,6 +98,8 @@ def test_형식을_파일_안쪽으로_알아낸다():
     assert detect(b"\xef\xbb\xbf  " + pdf_bytes()) == PDF                # 앞에 몇 바이트가 붙어도
     assert detect(office_bytes("docx")) == DOCX
     assert detect(office_bytes("xlsx")) == XLSX
+    assert detect("회의 메모 텍스트".encode()) == TEXT                    # 글자로 읽히면 텍스트 (SCRUM-309)
+    assert detect(b"") == TEXT                                           # 빈 파일은 텍스트 로더가 no_text 로 알린다
 
 
 @pytest.mark.parametrize("data, code", [
@@ -106,9 +108,8 @@ def test_형식을_파일_안쪽으로_알아낸다():
     (ole_bytes(encrypted=False), UNSUPPORTED_FORMAT),  # 옛 doc·xls, hwp
     (plain_zip(), UNSUPPORTED_FORMAT),               # 사용자가 묶은 zip
     (b"PK\x03\x04 broken zip", UNSUPPORTED_FORMAT),
-    (b"\x89PNG\r\n\x1a\n", UNSUPPORTED_FORMAT),
-    ("회의 메모 텍스트".encode(), UNSUPPORTED_FORMAT),
-    (b"", UNSUPPORTED_FORMAT),
+    (b"\x89PNG\r\n\x1a\n", UNSUPPORTED_FORMAT),           # 0바이트가 없어도 CP949 로 읽은 글에 제어 문자가 많음
+    (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR", UNSUPPORTED_FORMAT),
     (zip_bomb("docx"), TOO_LARGE),                   # 압축 폭탄: 푼 크기가 파일 크기의 100배를 넘음
 ])
 def test_받지_않는_파일은_이유를_나눈다(data, code):

@@ -78,11 +78,21 @@ class TranscriptStore:
         self.rev = {}
         self.deleted = set()
         self.pending = {}                 # 아직 안 온 줄에 대한 수정 (줄이 오면 적용)
+        self.conflicts = 0                # 이미 받은 줄 번호로 다른 내용의 줄이 다시 와서 새 줄을 무시한 횟수
 
     def apply_batch(self, batch):
+        before = self.conflicts
         for ln in batch.get("lines", []):
             i = ln["id"]
             if i in self.deleted:
+                continue
+            old = self.lines.get(i)
+            if old is not None:
+                # 줄은 번호마다 한 번만 온다. 같은 번호가 다시 오면 이미 받은 줄을 지키고 새 줄은 버린다 (덮어쓰면 앞서 낸 요약·분류의
+                # 근거 번호가 다른 말을 가리킨다). 같은 내용을 다시 받은 것(재전송)이나 사람이 고친 줄은 조용히 넘어간다.
+                # 내용이 다르면(STT가 줄 번호를 1부터 다시 센 경우 등) 세어 두었다가 알린다.
+                if old["start_ms"] != ln["start_ms"] or (self.rev.get(i, 0) == 0 and old["text"] != ln["text"]):
+                    self.conflicts += 1
                 continue
             self.lines[i] = dict(ln)
             self.rev.setdefault(i, 0)
@@ -110,6 +120,9 @@ class TranscriptStore:
                 self.lines[i]["text"] = e["text"]
                 self.lines[i]["text_marked"] = e.get("text_marked", e["text"])
                 self.lines[i]["low_confidence"] = False
+        if self.conflicts > before:
+            logging.getLogger("ai-service").warning("이미 받은 줄 번호로 다른 내용의 줄이 다시 와서 새 줄을 무시함 meeting=%s 이번=%s 누적=%s",
+                                                    self.meeting_id, self.conflicts - before, self.conflicts)
 
     def snapshot(self):
         return sorted(self.lines.values(), key=lambda l: (l["start_ms"], l["end_ms"], l["id"]))
@@ -1059,6 +1072,20 @@ def selftest():
                                            {"id": 12, "rev": 1, "text": "옛날", "text_marked": "옛날"}]})
     l12 = [l for l in st.snapshot() if l["id"] == 12][0]
     assert l12["text"] == "고침" and l12["low_confidence"] is False
+    # 1b) 같은 줄 번호가 다시 오면 이미 받은 줄을 지킨다. 같은 내용(재전송)이나 사람이 고친 줄은 조용히, 내용이 다르면 세어 둔다
+    assert st.conflicts == 0
+    st.apply_batch({"lines": [{"id": 12, "start_ms": 10600, "end_ms": 19400, "type": "final", "kind": None, "low_confidence": True,
+                               "text": "a", "text_marked": "⟨a⟩"}], "edits": []})
+    assert st.conflicts == 0 and [l for l in st.snapshot() if l["id"] == 12][0]["text"] == "고침", "같은 내용 재전송은 조용히, 사람이 고친 글은 그대로"
+    st.apply_batch({"lines": [{"id": 12, "start_ms": 90000, "end_ms": 91000, "type": "final", "kind": None, "low_confidence": False,
+                               "text": "다른 말", "text_marked": "다른 말"}], "edits": []})
+    l12 = [l for l in st.snapshot() if l["id"] == 12][0]
+    assert st.conflicts == 1 and l12["text"] == "고침" and l12["start_ms"] == 10600, "번호를 다시 쓴 새 줄은 버리고 세어 둔다"
+    st2 = TranscriptStore("t2")
+    ln1 = {"id": 1, "start_ms": 0, "end_ms": 1000, "type": "final", "kind": None, "low_confidence": False, "text": "처음 말", "text_marked": "처음 말"}
+    st2.apply_batch({"lines": [ln1], "edits": []})
+    st2.apply_batch({"lines": [dict(ln1, text="바뀐 말")], "edits": []})
+    assert st2.conflicts == 1 and st2.snapshot()[0]["text"] == "처음 말", "고친 적 없는 줄은 글이 달라도 새 줄을 버린다"
     st.apply_batch({"lines": [], "edits": [{"id": 13, "rev": 1, "deleted": True}]})
     assert [l["id"] for l in st.snapshot()] == [12]
     # 1-2) 줄보다 수정이 먼저 오면 보관했다가, 줄이 올 때 적용 (높은 rev만)

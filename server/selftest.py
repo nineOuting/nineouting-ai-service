@@ -98,6 +98,118 @@ def test_flow(cap):
     assert not any(t in blob for t in TEXTS), "상태나 로그에 전사 내용이 새어 나감"
 
 
+def test_meeting_cleanup():
+    """끝난 회의는 retain_sec 이 지나면 정리한다: 일꾼 스레드가 쉬고, 상태가 사라지고, 같은 회의로 뭐가 와도 되살아나지 않는다"""
+    from .service import ConfigError, retain_from_env
+    assert retain_from_env({}) == 3600 and retain_from_env({"MEETING_RETAIN_SEC": ""}) == 3600
+    assert retain_from_env({"MEETING_RETAIN_SEC": " 120 "}) == 120 and retain_from_env({"MEETING_RETAIN_SEC": "0"}) == 0
+    for bad in ("-1", "abc", "1.5"):
+        try:
+            retain_from_env({"MEETING_RETAIN_SEC": bad})
+        except ConfigError as e:
+            assert "MEETING_RETAIN_SEC" in str(e)
+        else:
+            raise AssertionError(f"잘못된 값 {bad} 은 설정 오류여야 함")
+
+    def ev(mid, name):
+        return dict(load(f"meeting-event-{name}.json"), meetingId=mid)
+
+    def wait_worker_rest(m):
+        for _ in range(100):
+            if m.worker is None:
+                return True
+            time.sleep(0.03)
+        return False
+
+    now = [1000.0]
+    pub = Publisher("http://backend", sender=lambda url, p: (True, False, 200))
+    reg = Registry(cfg_from_env({}), publisher=pub, retain_sec=100, clock=lambda: now[0])
+    mid, other = "m_end", "m_live"
+    assert reg.receive_event(mid, ev(mid, "start"))["result"] == "accepted"
+    assert reg.receive_event(other, ev(other, "start"))["result"] == "accepted"
+    feed_empty(reg, mid, 2)
+    assert reg.receive_event(mid, ev(mid, "end"))["result"] == "accepted"
+    assert reg.wait_idle(mid) and pub.wait_idle()
+    m = reg.meetings[mid]
+    assert wait_worker_rest(m), "종료 처리를 마친 회의의 일꾼 스레드가 쉬지 않음"
+    assert m.ended_at == 1000.0 and reg.status(mid)["status"] == "ended"
+    now[0] = 1099.0
+    reg.receive_batch(other, empty_batch(other, 1))                   # 다른 회의가 와도 정리 시간을 훑는다
+    assert mid in reg.meetings, "retain_sec 전에는 남아 있다"
+    now[0] = 1101.0
+    assert reg.receive_batch(other, empty_batch(other, 2))["result"] == "accepted"
+    assert mid not in reg.meetings and reg.status(mid) is None, "retain_sec 이 지나면 정리"
+    assert other in reg.meetings, "진행 중인 회의는 정리하지 않는다"
+    # 정리한 회의로 뭐가 와도 되살아나지 않는다
+    late = reg.receive_batch(mid, empty_batch(mid, 3))
+    assert late["accepted"] is False and late["result"] == "ignored" and late["reason"] == "ended", late
+    assert reg.receive_event(mid, ev(mid, "start"))["result"] == "ignored"
+    assert reg.receive_event(mid, ev(mid, "end"))["result"] == "ignored"
+    assert reg.receive_agendas(mid, dict(load("agendas-put.json"), meetingId=mid))["result"] == "ignored"
+    assert reg.receive_end_request(mid, dict(load("end-request-post.json"), meetingId=mid))["result"] == "ignored"
+    assert mid not in reg.meetings, "정리한 회의가 되살아남"
+    # retain_sec=0 이면 정리하지 않는다 (예전 동작)
+    now2 = [0.0]
+    reg0 = Registry(cfg_from_env({}), publisher=pub, retain_sec=0, clock=lambda: now2[0])
+    reg0.receive_event(mid, ev(mid, "start"))
+    feed_empty(reg0, mid, 1)
+    reg0.receive_event(mid, ev(mid, "end"))
+    assert reg0.wait_idle(mid)
+    now2[0] = 10 ** 9
+    reg0.receive_event(other, ev(other, "start"))
+    assert mid in reg0.meetings and reg0.status(mid)["status"] == "ended"
+    # 정리한 회의 번호는 상한(EVICTED_MAX)까지만 기억한다
+    import server.service as svc
+    keep = svc.EVICTED_MAX
+    svc.EVICTED_MAX = 3
+    try:
+        r3 = Registry(cfg_from_env({}), publisher=pub, retain_sec=1, clock=lambda: now2[0])
+        for i in range(6):
+            mm = f"e{i}"
+            r3.receive_event(mm, ev(mm, "start"))
+            r3.receive_event(mm, ev(mm, "end"))
+            assert r3.wait_idle(mm)
+            for _ in range(100):
+                if r3.meetings[mm].ended_at is not None:
+                    break
+                time.sleep(0.03)
+            now2[0] += 5
+            r3.receive_event("x", ev("x", "start"))
+        assert len(r3.evicted) <= 3, r3.evicted
+    finally:
+        svc.EVICTED_MAX = keep
+
+
+def test_duplicate_seq(cap):
+    """같은 줄 번호로 다른 내용의 줄이 다시 오면 이미 받은 줄을 지키고, 세어 두었다가 상태로 알린다 (내용은 로그에 남기지 않는다)"""
+    pub = Publisher("http://backend", sender=lambda url, p: (True, False, 200))
+    reg = Registry(cfg_from_env({}), publisher=pub)
+    mid = "m_dup"
+    reg.receive_event(mid, dict(load("meeting-event-start.json"), meetingId=mid))
+
+    def ln(seq, start, text):
+        return {"seq": seq, "startMs": start, "endMs": start + 3000, "text": text, "lowConfidence": False}
+
+    def batch(n, lines):
+        return {"meetingId": mid, "batch": n, "lines": lines, "edits": []}
+    assert reg.receive_batch(mid, batch(1, [ln(1, 0, "처음 한 말"), ln(2, 4000, "두 번째 말")]))["result"] == "accepted"
+    assert reg.wait_idle(mid)
+    assert reg.status(mid)["duplicateSeq"] == 0
+    # 재전송(같은 내용)은 세지 않는다
+    assert reg.receive_batch(mid, batch(2, [ln(2, 4000, "두 번째 말")]))["result"] == "accepted"
+    assert reg.wait_idle(mid) and reg.status(mid)["duplicateSeq"] == 0
+    # 줄 번호를 1부터 다시 센 새 말: 이미 받은 줄을 지키고 센다
+    assert reg.receive_batch(mid, batch(3, [ln(1, 90000, "새로 시작한 말"), ln(3, 94000, "번호가 새로운 줄")]))["result"] == "accepted"
+    assert reg.wait_idle(mid)
+    s = reg.status(mid)
+    assert s["duplicateSeq"] == 1 and s["errors"] == 0, s
+    store = reg.meetings[mid].classifier.store
+    assert store.lines[1]["text"] == "처음 한 말" and store.lines[3]["text"] == "번호가 새로운 줄", "이미 받은 줄은 그대로, 새 번호의 줄은 들어감"
+    blob = json.dumps(s, ensure_ascii=False) + "\n".join(cap.rows)
+    assert "새로 시작한 말" not in blob and "처음 한 말" not in blob, "전사 내용이 상태나 로그에 남음"
+    assert any("줄 번호로 다른 내용" in r for r in cap.rows), "경고 로그가 없음"
+
+
 def test_live_publish(cap):
     """회의 중 요약이 바뀔 때마다 보내고, version은 늘어나며, 종료에서 final (A7)"""
     sent = []
@@ -2380,6 +2492,8 @@ def main():
     logging.getLogger("ai-service.publisher").setLevel(logging.DEBUG)
     test_config()
     test_flow(cap)
+    test_meeting_cleanup()
+    test_duplicate_seq(cap)
     test_live_publish(cap)
     test_agenda_flow(cap)
     test_agenda_rejects_and_not_ready()

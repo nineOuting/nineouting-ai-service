@@ -283,6 +283,36 @@ def coalesce_from_env(env=None):
     return n
 
 
+DEFAULT_RETAIN_SEC = 3600
+EVICTED_MAX = 10000                  # 정리한 회의 번호를 기억하는 최대 개수
+
+
+def retain_from_env(env=None):
+    """환경변수 MEETING_RETAIN_SEC -> 끝난 회의의 상태를 메모리에 남겨 두는 시간(초). 기본 3600(1시간). 0이면 정리하지 않는다(예전 동작).
+    끝난 회의는 이 시간이 지나면 상태와 일꾼 스레드를 정리한다. 정리 뒤에 같은 회의로 뭔가 오면 끝난 회의로 보고 무시한다."""
+    env = os.environ if env is None else env
+    v = (env.get("MEETING_RETAIN_SEC") or "").strip()
+    if not v:
+        return DEFAULT_RETAIN_SEC
+    try:
+        n = int(v)
+    except ValueError:
+        raise ConfigError(f"MEETING_RETAIN_SEC 는 0 이상의 정수여야 함: {v}")
+    if n < 0:
+        raise ConfigError(f"MEETING_RETAIN_SEC 는 0 이상의 정수여야 함: {v}")
+    return n
+
+
+class EndedMeeting:
+    """정리한 회의 대신 돌려주는 자리표시. 끝난 회의로만 응답하고 상태는 갖지 않는다 (같은 회의가 되살아나지 않게)."""
+    status = "ended"
+    evicted = True
+
+    def __init__(self, meeting_id):
+        self.meeting_id = meeting_id
+        self.lock = threading.Lock()
+
+
 class MeetingState:
     def __init__(self, meeting_id, cfg, llm=None, classify_cfg=None, classify_llm=None, summarize_cfg=None, summarize_llm=None,
                  status_cfg=None, status_llm=None, opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None,
@@ -310,6 +340,7 @@ class MeetingState:
         self.terms_version = 0              # 마지막으로 보낸 용어 목록의 version
         self.cls_version = 0                # 백엔드로 보낸 안건 분류 결과의 마지막 version
         self.status = "new"                 # new -> running <-> paused -> ended
+        self.ended_at = None                # 종료 처리를 마친 시각 (Registry 의 시계). 이 시각에서 retain_sec 이 지나면 정리한다
         self.lock = threading.Lock()
         self.queue = queue.Queue()
         self.worker = None
@@ -329,7 +360,8 @@ class Registry:
     def __init__(self, cfg, llm=None, publisher=None, env=None, classify_cfg=None, classify_llm=None,
                  summarize_cfg=None, summarize_llm=None, status_cfg=None, status_llm=None,
                  opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None, offtopic_cfg=None, offtopic_llm=None,
-                 parallel=None, coalesce_max=None, terms_cfg=None, terms_llm=None, terms_glossary=None):
+                 parallel=None, coalesce_max=None, terms_cfg=None, terms_llm=None, terms_glossary=None,
+                 retain_sec=None, clock=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
         self.publisher = publisher
@@ -355,6 +387,9 @@ class Registry:
         self.coalesce_max = coalesce_from_env(self.env) if coalesce_max is None else int(coalesce_max)   # 밀린 묶음을 한 번에 처리할 최대 개수
         self.shutting_down = False
         self.meetings = {}
+        self.retain_sec = retain_from_env(self.env) if retain_sec is None else int(retain_sec)   # 끝난 회의를 남겨 두는 시간 (0 이면 정리 안 함)
+        self.clock = clock or time.monotonic
+        self.evicted = {}                   # 정리한 회의 번호 -> 정리한 시각. 번호만 남긴다 (상한 EVICTED_MAX 개)
         self.lock = threading.Lock()
 
     # ---------------- 준비 상태 ----------------
@@ -373,8 +408,23 @@ class Registry:
             raise NotReady(why)
 
     # ---------------- 받기 ----------------
+    def _sweep(self):
+        """끝난 지 retain_sec 이 지난 회의를 정리한다. 락 안에서 부른다. 받는 요청마다 한 번 훑는다 (따로 타이머를 두지 않는다)."""
+        if not self.retain_sec or not self.meetings:
+            return
+        now = self.clock()
+        for mid in [k for k, v in self.meetings.items() if v.ended_at is not None and now - v.ended_at >= self.retain_sec]:
+            del self.meetings[mid]
+            self.evicted[mid] = now
+            log.info("끝난 회의 상태를 정리함 meeting=%s", mid)
+        while len(self.evicted) > EVICTED_MAX:
+            self.evicted.pop(next(iter(self.evicted)))      # 가장 오래된 번호부터 잊는다
+
     def _get(self, meeting_id, raw_id=None):
         with self.lock:
+            self._sweep()
+            if meeting_id in self.evicted:
+                return EndedMeeting(meeting_id)
             m = self.meetings.get(meeting_id)
             if m is None:
                 m = self.meetings[meeting_id] = MeetingState(meeting_id, self.cfg, self.llm, self.classify_cfg, self.classify_llm,
@@ -430,6 +480,8 @@ class Registry:
         self._check_same_id(path_meeting_id, ev["meeting_id"])
         m = self._get(ev["meeting_id"], ev.get("meeting_id_raw"))
         name, at_ms = ev["event"], ev["at_ms"]
+        if getattr(m, "evicted", False):                       # 끝나고 정리한 회의: 상태를 되살리지 않는다
+            return {"accepted": False, "result": "ignored", "reason": "ended", "event": name}
         with m.lock:
             if (name, at_ms) in m.seen_events:
                 log.info("중복 알림 무시 meeting=%s event=%s", m.meeting_id, name)
@@ -655,6 +707,12 @@ class Registry:
             finally:
                 for _ in range(len(batches) if kind == "batch" else 1):
                     m.queue.task_done()                              # 가져온 일감 수만큼 (다음으로 넘긴 carry 는 그때 센다)
+            if kind == "end":
+                m.ended_at = self.clock()                            # 종료 처리를 마친 때부터 정리 시간을 센다
+                with m.lock:
+                    if carry is None and m.queue.empty():
+                        m.worker = None                              # 끝난 회의의 일꾼은 쉬러 간다 (뒤늦게 일감이 오면 _ensure_worker 가 다시 띄운다)
+                        return
 
     @staticmethod
     def _each(fn, items):
@@ -888,6 +946,7 @@ class Registry:
                 "llmCalls": m.summarizer.calls,
                 "provider": self.cfg.provider,
                 "summaryVersion": m.version,
+                "duplicateSeq": m.classifier.store.conflicts,
                 "agendaClassification": {**m.classifier.info(), "version": m.cls_version},
                 "agendaSummary": m.agenda_summarizer.info(),
                 "agendaStatus": m.status_judge.info(),

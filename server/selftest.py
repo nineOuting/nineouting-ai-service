@@ -645,6 +645,20 @@ def test_agenda_summary_flow(cap):
     assert off.status("y")["publisher"]["enabled"] is False and off.status("y")["agendaSummary"]["errors"] == 0
 
 
+def test_status_recheck_config():
+    from .service import ConfigError, status_cfg_from_env
+    assert status_cfg_from_env({}).recheck_decided is True and status_cfg_from_env({"AGENDA_STATUS_RECHECK_DECIDED": ""}).recheck_decided is True
+    assert status_cfg_from_env({"AGENDA_STATUS_RECHECK_DECIDED": "1"}).recheck_decided is True
+    assert status_cfg_from_env({"AGENDA_STATUS_RECHECK_DECIDED": " 0 "}).recheck_decided is False
+    for bad in ("2", "true", "off"):
+        try:
+            status_cfg_from_env({"AGENDA_STATUS_RECHECK_DECIDED": bad})
+        except ConfigError as e:
+            assert "AGENDA_STATUS_RECHECK_DECIDED" in str(e)
+        else:
+            raise AssertionError(f"잘못된 값 {bad} 은 설정 오류여야 함")
+
+
 def test_summary_config():
     from .service import summarize_cfg_from_env, opinion_cfg_from_env, todo_cfg_from_env
     d = summarize_cfg_from_env({})
@@ -2322,6 +2336,7 @@ def main():
     test_agenda_flow(cap)
     test_agenda_rejects_and_not_ready()
     test_agenda_worker_isolated()
+    test_status_recheck_config()
     test_summary_config()
     test_agenda_summary_flow(cap)
     test_agenda_summary_end()

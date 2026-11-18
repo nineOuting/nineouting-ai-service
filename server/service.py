@@ -138,7 +138,8 @@ def summarize_cfg_from_env(env=None, cfg=None):
 
 def status_cfg_from_env(env=None, cfg=None):
     """환경변수 -> 안건 상태 판정 설정. 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
-    AGENDA_STATUS_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), MAX_AGENDA_STATUS_CALLS_PER_MEETING(회의당 호출 상한, 기본 300)
+    AGENDA_STATUS_REFRESH_SEC(새 줄이 1개일 때 기다리는 시간, 기본 60초), MAX_AGENDA_STATUS_CALLS_PER_MEETING(회의당 호출 상한, 기본 300),
+    AGENDA_STATUS_RECHECK_DECIDED(0 또는 1, 기본 1: AI가 낸 결정이 잠긴 안건은 새 줄이 1개여도 바로 다시 판정한다. 0이면 예전처럼 기다린다)
     """
     env = os.environ if env is None else env
     cfg = cfg or cfg_from_env(env)
@@ -149,6 +150,11 @@ def status_cfg_from_env(env=None, cfg=None):
                 kw[name] = int(env[key])
             except ValueError:
                 raise ConfigError(f"{key} 는 정수여야 함: {env[key]}")
+    recheck = (env.get("AGENDA_STATUS_RECHECK_DECIDED") or "").strip()
+    if recheck:
+        if recheck not in ("0", "1"):
+            raise ConfigError(f"AGENDA_STATUS_RECHECK_DECIDED 는 0 또는 1 이어야 함: {recheck}")
+        kw["recheck_decided"] = recheck == "1"
     return StatusCfg(**kw)
 
 

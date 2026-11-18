@@ -254,6 +254,7 @@ POST /internal/meetings/{meetingId}/status-edits
 | 환경변수 | 설명 | 기본값 |
 |---|---|---|
 | `AGENDA_STATUS_REFRESH_SEC` | 새 줄이 1개뿐일 때 판정을 기다리는 시간(음성 시간 초) | 60 |
+| `AGENDA_STATUS_RECHECK_DECIDED` | `1`이면 AI가 낸 결정이 잠긴 안건은 새 줄이 1개여도 기다리지 않고 바로 판정한다 (재논의를 빨리 `needsCheck`로 알림). `0`이면 위 대기를 그대로 적용 | 1 |
 | `MAX_AGENDA_STATUS_CALLS_PER_MEETING` | 회의당 상태 판정 호출 상한 (비용을 추정한 뒤 다시 정함) | 300 |
 
 모델은 요약과 같은 `LLM_PROVIDER`, `LLM_MODEL`을 쓴다. `LLM_PROVIDER=echo`이면 모델을 부르지 않는다. 새 환경변수는 없다.

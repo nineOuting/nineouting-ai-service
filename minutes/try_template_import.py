@@ -1,9 +1,9 @@
 """회의록 양식 가져오기를 손으로 시험하는 도구 (SCRUM-289). 서버는 띄우지 않는다.
 
-  .venv/bin/python -m minutes.try_template_import 양식.pdf                 파일에서 꺼낸 줄만 본다 (모델 호출 없음, 비용 0)
-  .venv/bin/python -m minutes.try_template_import 양식.pdf --real          실제 AI 로 항목을 읽는다 (호출 1번 이상, 요금이 나간다)
-  .venv/bin/python -m minutes.try_template_import 양식.pdf --real --json   결과 JSON 전체도 출력
-  .venv/bin/python -m minutes.try_template_import 양식.pdf --real --show-io  AI 에게 준 글과 원래 답도 출력
+  .venv/bin/python -m minutes.try_template_import 양식파일                 파일에서 꺼낸 줄만 본다 (PDF, docx, xlsx, txt·md·csv) (모델 호출 없음, 비용 0)
+  .venv/bin/python -m minutes.try_template_import 양식파일 --real          실제 AI 로 항목을 읽는다 (호출 1번 이상, 요금이 나간다)
+  .venv/bin/python -m minutes.try_template_import 양식파일 --real --json   결과 JSON 전체도 출력
+  .venv/bin/python -m minutes.try_template_import 양식파일 --real --show-io  AI 에게 준 글과 원래 답도 출력
 
 먼저 줄 보기(모델 없음)로 PDF 에서 글이 어떻게 나오는지 확인한 뒤 --real 을 쓴다. 표 칸이 줄마다 쪼개져 나오는지,
 머리글·바닥글이 줄 위·아래에 있는지가 항목 읽기의 품질을 정한다.
@@ -56,7 +56,7 @@ def show_result(res):
 
 def main():
     p = argparse.ArgumentParser(description="회의록 양식 가져오기 손 시험")
-    p.add_argument("file", type=Path, help="양식 PDF")
+    p.add_argument("file", type=Path, help="양식 파일 (PDF, docx, xlsx, txt·md·csv)")
     p.add_argument("--real", action="store_true", help="실제 AI 로 항목을 읽는다 (요금이 나감)")
     p.add_argument("--fake", action="store_true", help="모델 없이 AI 흐름만 (첫 줄을 항목으로 답하는 가짜)")
     p.add_argument("--json", action="store_true", help="결과 JSON 전체도 출력")

@@ -210,7 +210,7 @@ def terms_from_env(env=None, cfg=None):
     """환경변수 -> 전사 속 용어 설정. 반환: (TermsCfg, Glossary). 꺼져 있으면 (None, None).
     TRANSCRIPT_TERMS(0 또는 1, 기본 0 = 끔. 끄면 용어 목록을 보내지 않고 모델도 부르지 않는다),
     TRANSCRIPT_TERMS_GLOSSARY_PATH(팀 용어집 JSON 경로, 없으면 모델 길만), TRANSCRIPT_TERMS_REFRESH_SEC(새 줄이 모자랄 때 기다리는 시간, 기본 60초),
-    MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING(회의당 모델 호출 상한, 기본 150). 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
+    MAX_TRANSCRIPT_TERMS_CALLS_PER_MEETING(회의당 모델 호출 상한, 기본 400). 모델은 요약과 같은 LLM_PROVIDER, LLM_MODEL 을 쓴다.
     값이 틀리거나 용어집을 읽지 못하면 ConfigError (서버가 뜨지 않는다)."""
     env = os.environ if env is None else env
     cfg = cfg or cfg_from_env(env)

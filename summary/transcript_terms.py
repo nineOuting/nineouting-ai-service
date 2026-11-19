@@ -70,10 +70,10 @@ class TermsCfg:
     def __init__(self, **kw):
         self.provider = "echo"
         self.model = None
-        self.min_new_lines = 4            # 새 줄이 이만큼 모이면 용어 후보를 찾는다 (의견·할 일과 같은 기준)
+        self.min_new_lines = 1            # 새 줄이 이만큼 모이면 용어 후보를 찾는다. 1 = 새 줄이 든 묶음마다 (처음 칠해지기까지 중앙 8초, 평가 v1 11장)
         self.refresh_sec = 60             # 새 줄이 있는데 이 시간(음성 시간)이 지났으면 모자라도 찾는다
         self.max_lines = 30               # 모델 한 번에 주는 줄 수
-        self.max_calls = 150              # 회의당 호출 상한 (회의 최대 1시간, 1시간 약 87~119번 추정에 여유)
+        self.max_calls = 400              # 회의당 호출 상한 (회의 최대 1시간 = 10초 묶음 최대 360개에 여유)
         self.max_per_call = 3             # 한 번의 응답에서 받는 용어 수
         self.max_terms = 200              # 목록에 담는 용어 수 상한 (넘으면 가장 오래된 것부터 뺀다)
         self.term_max_chars = 20

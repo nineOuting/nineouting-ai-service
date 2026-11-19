@@ -25,6 +25,8 @@
       --out data/eval/terms/r1.json --grading-out data/eval/terms/r1_grading.md
 """
 import argparse
+import statistics
+import time
 import json
 import os
 import sys
@@ -67,18 +69,32 @@ def load_dotenv(path):
 
 
 class Recorder:
-    """모델 호출을 감싸 호출 수, 입력 글자 수를 센다. dry-run 이면 모델 대신 빈 답을 준다."""
+    """모델 호출을 감싸 호출 수, 입력 글자 수, 응답 시간, 모델이 한 번에 낸 용어 수(코드가 자르기 전)를 센다.
+    dry-run 이면 모델 대신 빈 답을 준다."""
 
     def __init__(self, real_llm, dry):
         self.real, self.dry = real_llm, dry
         self.calls, self.input_chars = 0, 0
+        self.raw_counts = []      # 호출마다 모델이 낸 용어 수 (JSON 을 읽지 못하면 넣지 않는다)
+        self.seconds = []         # 호출마다 걸린 시간
 
     def __call__(self, user):
         self.calls += 1
         self.input_chars += len(user)
         if self.dry:
             return json.dumps({"terms": []})
-        return self.real(user)
+        t0 = time.monotonic()
+        try:
+            out = self.real(user)
+        finally:
+            self.seconds.append(time.monotonic() - t0)
+        try:
+            d = json.loads(out) if isinstance(out, str) else out
+            if isinstance(d, dict) and isinstance(d.get("terms"), list):
+                self.raw_counts.append(len(d["terms"]))
+        except (ValueError, TypeError):
+            pass
+        return out
 
 
 def ensure_fixtures(names):
@@ -110,7 +126,10 @@ def run_script(name, cfg, dry):
     h.process(final=True)
     sys_chars = len(__import__("transcript_terms").SYSTEM_PROMPT)
     return {"terms": h.terms(), "info": h.info(), "calls": rec.calls, "input_chars": rec.input_chars + rec.calls * sys_chars,
-            "audio_sec": max(ln["end_ms"] for ln in lines) / 1000, "lines": len(lines)}
+            "audio_sec": max(ln["end_ms"] for ln in lines) / 1000, "lines": len(lines),
+            "raw_max": max(rec.raw_counts, default=0), "raw_over_cap": sum(1 for n in rec.raw_counts if n > cfg.max_per_call),
+            "raw_at_least_3": sum(1 for n in rec.raw_counts if n >= 3),
+            "call_sec_median": round(statistics.median(rec.seconds), 2) if rec.seconds else None}
 
 
 def score(found, ans):
@@ -149,7 +168,13 @@ def main():
     ap.add_argument("--paid-ok", action="store_true", help="유료 호출 허용 (기준과 비용을 확인한 뒤에만)")
     ap.add_argument("--out", help="결과 JSON (숫자만). 유료 실행은 이미 있으면 거부")
     ap.add_argument("--grading-out", help="사람 채점표 (찾은 용어와 뜻, 합성 대본)")
+    ap.add_argument("--min-new-lines", type=int, help="모델을 부르는 새 줄 수 (기본: 모듈 기본값)")
+    ap.add_argument("--max-per-call", type=int, help="한 번의 응답에서 받는 용어 수 (기본: 모듈 기본값)")
+    ap.add_argument("--effort", help="생각 양. LLM_REASONING_EFFORT_TRANSCRIPT_TERMS 로 넘긴다 (예: low). 없으면 모델 기본값")
     a = ap.parse_args()
+    if a.effort:
+        os.environ["LLM_REASONING_EFFORT_TRANSCRIPT_TERMS"] = a.effort
+    cfg_kw = {k: v for k, v in (("min_new_lines", a.min_new_lines), ("max_per_call", a.max_per_call)) if v is not None}
 
     paid = a.provider != "echo" and not a.dry_run
     if paid and not a.paid_ok:
@@ -173,12 +198,14 @@ def main():
     for name in a.scripts.split(","):
         for run in range(1, a.runs + 1):
             before = dict(tokens)
-            cfg = TermsCfg(provider=a.provider if not a.dry_run else "echo", model=a.model)
+            cfg = TermsCfg(provider=a.provider if not a.dry_run else "echo", model=a.model, **cfg_kw)
             r = run_script(name, cfg, a.dry_run)
             s, got = score(r["terms"], answers[name])
             row = {"script": name, "run": run, **s, "calls": r["calls"], "errors": r["info"]["errors"], "rejected": r["info"]["rejected"],
                    "halted": r["info"]["halted"], "input_chars": r["input_chars"], "audio_sec": r["audio_sec"], "lines": r["lines"],
-                   "tokens_in": tokens["in"] - before["in"], "tokens_out": tokens["out"] - before["out"]}
+                   "tokens_in": tokens["in"] - before["in"], "tokens_out": tokens["out"] - before["out"],
+                   "raw_max": r["raw_max"], "raw_over_cap": r["raw_over_cap"], "raw_at_least_3": r["raw_at_least_3"],
+                   "call_sec_median": r["call_sec_median"]}
             results.append(row)
             print(f"{name} #{run}: 찾음 {s['found']} (must {s['must_found']}/{s['must_total']}, may {s['may_found']}, 오경보 {s['false_alarm']}, "
                   f"기타 {s['other']}, 오인식 설명 {s['misheard_explained']}) 맞는 비율 {s['precision']} 재현율 {s['recall']} | "
@@ -192,7 +219,8 @@ def main():
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         with open(a.out, "w", encoding="utf-8") as f:
-            json.dump({"provider": a.provider, "model": a.model, "dry_run": a.dry_run, "criteria": CRITERIA, "summary": summary,
+            json.dump({"provider": a.provider, "model": a.model, "dry_run": a.dry_run, "criteria": CRITERIA,
+                       "settings": {**cfg_kw, "effort": a.effort}, "summary": summary,
                        "runs": results}, f, ensure_ascii=False, indent=2)
     if a.grading_out:
         os.makedirs(os.path.dirname(os.path.abspath(a.grading_out)), exist_ok=True)
@@ -220,6 +248,12 @@ def summarize(results, paid):
             "other_avg": round(sum(r["other"] for r in rs) / n, 2),
             "misheard_explained": sum(r["misheard_explained"] for r in rs),
             "calls_avg": round(sum(r["calls"] for r in rs) / n, 2),
+            "raw_max": max(r["raw_max"] for r in rs),
+            "raw_over_cap": sum(r["raw_over_cap"] for r in rs),
+            "raw_at_least_3": sum(r["raw_at_least_3"] for r in rs),
+            "call_sec_median_avg": (round(sum(r["call_sec_median"] for r in rs if r["call_sec_median"] is not None)
+                                          / max(1, sum(1 for r in rs if r["call_sec_median"] is not None)), 2)
+                                    if any(r["call_sec_median"] is not None for r in rs) else None),
             "audio_min": round(rs[0]["audio_sec"] / 60, 2),
             "input_chars_avg": round(sum(r["input_chars"] for r in rs) / n),
             **({"tokens_in_avg": round(sum(r["tokens_in"] for r in rs) / n), "tokens_out_avg": round(sum(r["tokens_out"] for r in rs) / n)}

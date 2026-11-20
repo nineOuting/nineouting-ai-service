@@ -118,3 +118,11 @@ def test_문서를_임베딩하는_동안에도_질문이_끼어든다(embedder)
         waits.append(time.monotonic() - t)
         time.sleep(0.2)
     assert len(waits) >= 2                       # 문서가 끝나기 전에 질문이 여러 번 답을 받음
+
+
+def test_묶음마다_진행률을_알리고_잠금은_푼_채로_부름(embedder):
+    """문서 넣기 진행률 (SCRUM-339). 알림을 받는 동안 질문 임베딩이 기다리지 않게 잠금 밖에서 부른다"""
+    texts = [f"{i}번째 조각" for i in range(35)]                                  # 묶음 16개씩 → 3번
+    calls = []
+    embedder.embed_passages(texts, on_progress=lambda done, total: calls.append((done, total, embedder._lock.locked())))
+    assert calls == [(16, 35, False), (32, 35, False), (35, 35, False)]

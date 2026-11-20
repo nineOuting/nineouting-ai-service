@@ -42,13 +42,13 @@ class HookEmbedder:
     def passage_tokens(self, text):
         return self.inner.passage_tokens(text)
 
-    def embed_passages(self, texts):
+    def embed_passages(self, texts, on_progress=None):
         if self.on_embed:
             self.on_embed()
         if self.fail_times > 0:
             self.fail_times -= 1
             raise RuntimeError("일시 실패 흉내")
-        return self.inner.embed_passages(texts)
+        return self.inner.embed_passages(texts, on_progress=on_progress)
 
 
 def request(doc_id=1, version="v1", ws=WS, source="minutes", minutes=None, request_id="req-1", cb=CB,
@@ -394,3 +394,48 @@ def test_연결이_끊기면_다시_접속해_대기_작업을_처리(conn, fake
         w.close()
     assert backend.bodies[0]["status"] == "ready"
     assert chunk_count(conn, 1) == MINUTES_PIECES
+
+
+# ---- 진행률 (SCRUM-339) ----
+
+class WatchingEmbedder:
+    """묶음이 끝날 때마다(작업자가 진행률을 적은 뒤) 다른 연결로 상태 조회의 progress 를 본다."""
+
+    def __init__(self, inner, other_conn):
+        self.inner, self.other_conn, self.seen = inner, other_conn, []
+        self.model_id, self.dim, self.max_tokens = inner.model_id, inner.dim, inner.max_tokens
+
+    def passage_tokens(self, text):
+        return self.inner.passage_tokens(text)
+
+    def embed_passages(self, texts, on_progress=None):
+        self.seen.append(get_status(self.other_conn, "minutes", 1)["progress"])     # 나누기 직후 (0, 전체)
+
+        def watch(done, total):
+            on_progress(done, total)
+            self.seen.append(get_status(self.other_conn, "minutes", 1)["progress"])
+        return self.inner.embed_passages(texts, on_progress=watch)
+
+
+def test_처리하는_동안_진행률이_오르고_끝나면_100(conn, other_conn, fake_embedder):
+    fake_embedder.batch_size = 1                                     # 시험 회의록 4항목 → 묶음 4번
+    emb = WatchingEmbedder(fake_embedder, other_conn)
+    submit(conn, request())
+    assert get_status(conn, "minutes", 1)["progress"] == 0
+    make_worker(conn, emb, FakeBackend()).process_one()
+    assert emb.seen == [0, 25, 50, 75, 99]                           # 저장 전에는 99 에서 멈춤
+    assert get_status(conn, "minutes", 1)["progress"] == 100
+
+
+def test_진행률을_적지_못해도_문서는_ready_이고_경고는_한_번(conn, fake_embedder, monkeypatch, caplog):
+    def broken(*args):
+        raise RuntimeError("진행률 기록 실패 흉내")
+    monkeypatch.setattr("rag.worker.set_progress", broken)
+    fake_embedder.batch_size = 1
+    backend = FakeBackend()
+    submit(conn, request())
+    with caplog.at_level("WARNING", logger="rag.worker"):
+        make_worker(conn, fake_embedder, backend).process_one()
+    assert get_status(conn, "minutes", 1)["status"] == "ready"
+    assert backend.bodies[0]["status"] == "ready"
+    assert sum("진행률 기록 실패" in r.getMessage() for r in caplog.records) == 1

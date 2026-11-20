@@ -6,6 +6,10 @@
 작업 하나의 흐름
   꺼내기 → (처리 전 확인) → 로더 → 나누기 → 임베딩 → store() → 콜백 → 끝내기(payload 비움)
 
+진행률 (SCRUM-339)
+  나누기가 끝나면 (0, 전체 조각 수), 임베딩 묶음마다 (끝난 수, 전체 수)를 문서 행에 적는다. 상태 조회가 이것으로 progress 를 낸다.
+  적기가 실패해도 작업은 계속한다 (진행률은 보조 정보라 이것 때문에 넣기가 실패하면 안 된다). 경고는 작업마다 한 번만
+
 실패 처리
   영구 실패   IngestError (no_text, 형식 오류, 업로드 받기 실패·만료, 업로드 로더 미구현 등) → 재시도 없이 failed 콜백.
              download_failed·url_expired 는 RAG 명세대로 백엔드가 다시 호출한다
@@ -32,7 +36,7 @@ from .loaders.minutes import load_minutes
 from .loaders.pdf import load_pdf
 from .loaders.plaintext import load_text
 from .loaders.xlsx import load_xlsx
-from .store import StaleJob, is_current, mark_failed, mark_processing, store
+from .store import StaleJob, is_current, mark_failed, mark_processing, set_progress, store
 
 log = logging.getLogger("rag.worker")
 
@@ -112,8 +116,25 @@ class Worker:
         tokens = sum(c.token_count for c in chunks)
         if tokens > self.max_doc_tokens:              # 임베딩 시간은 토큰 수에 비례한다. 오래 돌다 실패하지 않게 먼저 막는다
             raise IngestError(TOO_LARGE, f"조각 토큰 {tokens}개, 상한 {self.max_doc_tokens}개")
-        vectors = self.embedder.embed_passages([c.embed_text for c in chunks])
+        progress = self._progress_writer(job)
+        progress(0, len(chunks))
+        vectors = self.embedder.embed_passages([c.embed_text for c in chunks], on_progress=progress)
         return chunks, vectors
+
+    def _progress_writer(self, job):
+        """임베딩 진행을 문서 행에 적는 함수. 실패하면 경고 한 번만 남기고 넘어간다."""
+        warned = False
+
+        def write(done, total):
+            nonlocal warned
+            try:
+                set_progress(self.conn, job.source_type, job.doc_id, job.doc_version, done, total)
+            except Exception as e:
+                if not warned:
+                    warned = True
+                    log.warning("진행률 기록 실패, 작업은 계속 job=%s doc=%s/%s error=%s",
+                                job.id, job.source_type, job.doc_id, type(e).__name__)
+        return write
 
     def _fail(self, job, code, detail, tag):
         last_error = f"{code}: {detail}" if detail else code

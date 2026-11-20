@@ -17,12 +17,19 @@ class FakeEmbedder:
     model_id = "fake@0"
     dim = EMBED_DIM
     max_tokens = MAX_TOKENS
+    batch_size = 16              # E5Embedder 처럼 묶음마다 on_progress 를 부른다
 
     def passage_tokens(self, text):
         return len(text)
 
-    def embed_passages(self, texts):
-        return [self._vec(t) for t in texts]
+    def embed_passages(self, texts, on_progress=None):
+        texts = list(texts)
+        vecs = []
+        for start in range(0, len(texts), self.batch_size):
+            vecs += [self._vec(t) for t in texts[start:start + self.batch_size]]
+            if on_progress is not None:
+                on_progress(len(vecs), len(texts))
+        return vecs
 
     def embed_query(self, text):
         return self._vec(text)

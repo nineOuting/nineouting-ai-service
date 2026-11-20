@@ -79,7 +79,8 @@ def register(conn, doc: DocumentMeta) -> RegisterResult:
         if doc.source_type == "minutes" and older_version(doc.doc_version, version):
             return RegisterResult(status, False, ignored=True)
         conn.execute("UPDATE rag_documents SET doc_version = %s, title = %s, meeting_started_at = %s, "
-                     "received_at = now(), status = 'queued', error_code = NULL, updated_at = now() "
+                     "received_at = now(), status = 'queued', error_code = NULL, embed_done = 0, embed_total = 0, "
+                     "updated_at = now() "
                      "WHERE source_type = %s AND doc_id = %s",
                      (doc.doc_version, doc.title, doc.meeting_started_at, doc.source_type, doc.doc_id))
         return RegisterResult("queued", True)
@@ -124,13 +125,32 @@ def mark_failed(conn, source_type: str, doc_id: int, doc_version: str, error_cod
     return cur.rowcount == 1
 
 
+def progress_of(status: str, done: int, total: int) -> int:
+    """상태 조회의 progress (0~100, SCRUM-339). ready 일 때만 100 이다. 처리 중에는 임베딩이 끝난 조각 비율이고
+    저장이 끝나기 전에는 99 를 넘지 않는다. 대기 중·나누기 전·실패는 0."""
+    if status == "ready":
+        return 100
+    if status == "processing" and total > 0:
+        return min(99, done * 100 // total)
+    return 0
+
+
 def get_status(conn, source_type: str, doc_id: int) -> dict | None:
     """상태 조회 API 의 응답 모양. 문서가 없으면 None."""
-    row = conn.execute("SELECT doc_version, status, error_code, chunk_count FROM rag_documents "
+    row = conn.execute("SELECT doc_version, status, error_code, chunk_count, embed_done, embed_total FROM rag_documents "
                        "WHERE source_type = %s AND doc_id = %s", (source_type, doc_id)).fetchone()
     if row is None:
         return None
-    return {"sourceType": source_type, "docId": doc_id, "docVersion": row[0], "status": row[1], "errorCode": row[2], "chunkCount": row[3]}
+    return {"sourceType": source_type, "docId": doc_id, "docVersion": row[0], "status": row[1], "errorCode": row[2],
+            "chunkCount": row[3], "progress": progress_of(row[1], row[4], row[5])}
+
+
+def set_progress(conn, source_type: str, doc_id: int, doc_version: str, done: int, total: int) -> bool:
+    """작업자가 임베딩 진행을 적는다. 그 버전을 처리 중일 때만 쓴다 (그 사이 지워졌거나 새 버전이 오면 쓰지 않음)."""
+    cur = conn.execute("UPDATE rag_documents SET embed_done = %s, embed_total = %s "
+                       "WHERE source_type = %s AND doc_id = %s AND doc_version = %s AND status = 'processing'",
+                       (done, total, source_type, doc_id, doc_version))
+    return cur.rowcount == 1
 
 
 def mark_processing(conn, source_type: str, doc_id: int, doc_version: str) -> bool:

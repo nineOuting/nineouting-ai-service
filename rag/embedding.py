@@ -7,7 +7,7 @@ e5 계열은 질문 앞에 "query: ", 조각 앞에 "passage: " 를 붙인다 (�
 import hashlib
 import threading
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 
 from .config import EMBED_DIM, MAX_TOKENS, MODEL_NAME, MODEL_REVISION, MODEL_SHA256
 
@@ -18,7 +18,8 @@ class Embedder(Protocol):
     max_tokens: int
 
     def passage_tokens(self, text: str) -> int: ...
-    def embed_passages(self, texts: Sequence[str]) -> list[list[float]]: ...
+    def embed_passages(self, texts: Sequence[str],
+                       on_progress: Callable[[int, int], None] | None = None) -> list[list[float]]: ...
     def embed_query(self, text: str) -> list[float]: ...
 
 
@@ -54,13 +55,14 @@ class E5Embedder:
     def passage_tokens(self, text):
         return self._count(self.PASSAGE + text)
 
-    def embed_passages(self, texts):
+    def embed_passages(self, texts, on_progress=None):
+        """on_progress(끝난 수, 전체 수): 묶음 하나가 끝날 때마다 부른다 (문서 넣기 진행률, SCRUM-339)."""
         inputs = [self.PASSAGE + t for t in texts]
         for i, t in enumerate(inputs):
             if self._count(t) > self.max_tokens:
                 # 모델은 넘치는 뒤쪽을 말없이 자른다. 나누기 단계가 막았어야 하므로 오류로 본다
                 raise ValueError(f"{i}번째 조각이 {self.max_tokens}토큰을 넘음")
-        return self._encode(inputs)
+        return self._encode(inputs, on_progress)
 
     def embed_query(self, text):
         # 질문이 상한을 넘으면 모델이 뒤를 자른다. 질문은 짧다고 본다
@@ -70,7 +72,7 @@ class E5Embedder:
         with self._lock:
             return len(self._tokenizer(text, add_special_tokens=True, truncation=False)["input_ids"])
 
-    def _encode(self, inputs):
+    def _encode(self, inputs, on_progress=None):
         # 묶음(batch_size)마다 잠금을 풀어, 큰 문서를 임베딩하는 동안 들어온 질문이 묶음 하나만 기다리게 한다.
         # 한 번에 잡으면 질문이 문서 전체를 기다린다 (SCRUM-110: 198쪽 PDF 를 넣는 동안 질문 15.4초)
         # 길이가 비슷한 글끼리 묶어야 채움(padding)이 적어 빠르다. 모델에 통째로 넘길 때는 모델이 길이순으로
@@ -87,6 +89,9 @@ class E5Embedder:
                 raise RuntimeError(f"벡터 차원 {part.shape[1]} 이 {self.dim} 이 아님")
             for i, v in zip(idx, part.tolist()):
                 vecs[i] = v
+            if on_progress is not None:
+                # 잠금 밖에서 부른다. 진행률을 DB 에 쓰는 동안 질문 임베딩이 기다리지 않게
+                on_progress(min(start + self.batch_size, len(order)), len(order))
         return vecs
 
 

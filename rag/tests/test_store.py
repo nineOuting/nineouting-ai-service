@@ -9,7 +9,8 @@ from _helpers import OTHER_WS, WS, chunk_rows, chunks_of, doc, put
 from rag.migrate import migrate
 from rag.search import search
 from rag.store import (RegisterResult, StaleJob, WorkspaceMismatch, delete_document, delete_workspace,
-                       get_status, mark_failed, older_version, register, store)
+                       get_status, mark_failed, mark_processing, older_version, progress_of, register, set_progress,
+                       store)
 
 QUEUED_NEW = RegisterResult("queued", True)
 
@@ -135,7 +136,7 @@ def test_0003_마이그레이션은_들어_있는_데이터를_옮김(conn):
 def test_새_문서는_queued(conn):
     assert register(conn, doc()) == QUEUED_NEW
     assert get_status(conn, "minutes", 1) == {"sourceType": "minutes", "docId": 1, "docVersion": "v1", "status": "queued",
-                                   "errorCode": None, "chunkCount": 0}
+                                   "errorCode": None, "chunkCount": 0, "progress": 0}
 
 
 def test_처리_전에_같은_버전이_또_오면_작업을_또_넣지_않음(conn):
@@ -325,3 +326,43 @@ def test_낮은_회의록_버전은_무시하고_상태를_바꾸지_않음(conn
 def test_업로드_문서는_버전을_비교하지_않음(conn):
     register(conn, replace(doc(version="5"), source_type="upload"))
     assert register(conn, replace(doc(version="4"), source_type="upload")) == QUEUED_NEW
+
+
+# ---- 진행률 (SCRUM-339) ----
+
+@pytest.mark.parametrize("status, done, total, progress", [
+    ("queued", 0, 0, 0), ("processing", 0, 0, 0), ("processing", 0, 35, 0), ("processing", 16, 35, 45),
+    ("processing", 35, 35, 99), ("ready", 0, 0, 100), ("ready", 3, 35, 100), ("failed", 16, 35, 0),
+])
+def test_진행률_계산(status, done, total, progress):
+    assert progress_of(status, done, total) == progress
+
+
+def test_진행률은_그_버전을_처리_중일_때만_적힘(conn):
+    register(conn, doc(1, "v1"))
+    assert not set_progress(conn, "minutes", 1, "v1", 16, 35)        # 아직 대기 중
+    mark_processing(conn, "minutes", 1, "v1")
+    assert set_progress(conn, "minutes", 1, "v1", 16, 35)
+    assert not set_progress(conn, "minutes", 1, "v0", 35, 35)        # 옛 버전 작업은 쓰지 않음
+    assert not set_progress(conn, "upload", 1, "v1", 35, 35)         # 종류가 다르면 다른 문서
+    assert get_status(conn, "minutes", 1)["progress"] == 45
+
+
+def test_새_버전을_접수하면_진행률이_0부터(conn):
+    register(conn, doc(1, "v1"))
+    mark_processing(conn, "minutes", 1, "v1")
+    set_progress(conn, "minutes", 1, "v1", 30, 35)
+    register(conn, doc(1, "v2"))
+    assert get_status(conn, "minutes", 1)["progress"] == 0
+    assert conn.execute("SELECT embed_done, embed_total FROM rag_documents").fetchone() == (0, 0)
+
+
+def test_처리_중에는_99를_넘지_않고_저장해야_100(conn, fake_embedder):
+    register(conn, doc(1, "v1"))
+    mark_processing(conn, "minutes", 1, "v1")
+    set_progress(conn, "minutes", 1, "v1", 2, 2)
+    assert get_status(conn, "minutes", 1)["progress"] == 99
+    cs = chunks_of("가", "나")
+    store(conn, "minutes", 1, "v1", cs, fake_embedder.embed_passages([c.embed_text for c in cs]), fake_embedder.model_id)
+    assert get_status(conn, "minutes", 1)["progress"] == 100
+    assert not set_progress(conn, "minutes", 1, "v1", 1, 2)          # 끝난 뒤에는 쓰지 않음

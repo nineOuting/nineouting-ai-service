@@ -93,7 +93,8 @@ INGEST_SCHEMA = {
         "callbackUrl": {"type": "string", "description": "처리가 끝나면 AI 서버가 POST 할 백엔드 주소. 허용한 호스트만"},
     },
 }
-STATUS_EXAMPLE = {"sourceType": "minutes", "docId": 200, "docVersion": "2", "status": "ready", "errorCode": None, "chunkCount": 4}
+STATUS_EXAMPLE = {"sourceType": "minutes", "docId": 200, "docVersion": "2", "status": "ready", "errorCode": None, "chunkCount": 4,
+                  "progress": 100}
 ANSWER_EXAMPLE = {"workspaceId": 1, "docs": [{"sourceType": "minutes", "docId": 200},
                                              {"sourceType": "upload", "docId": 200}],
                   "query": "1분기 예산은 얼마로 하기로 했어?", "topK": 5}
@@ -496,7 +497,9 @@ def make_router(pool, allowed_callback_hosts=None, request_id_header=REQUEST_ID_
 
     @router.get(
         "/documents/{source_type}/{doc_id}", summary="상태 조회",
-        description="status: accepted(접수됨) / processing(처리 중) / ready(검색 가능) / failed(실패, errorCode 참고)",
+        description="status: accepted(접수됨) / processing(처리 중) / ready(검색 가능) / failed(실패, errorCode 참고). "
+                    "progress: 0~100 (SCRUM-339). 처리 중에는 임베딩이 끝난 조각 비율이고 99 를 넘지 않는다. ready 일 때만 100, "
+                    "접수됨·실패는 0",
         responses={200: {"description": "문서 상태", "content": {"application/json": {"example": STATUS_EXAMPLE}}},
                    400: ERR_400,
                    404: _error_doc("넣은 적 없는 문서", "NOT_FOUND", "넣은 적 없는 문서"),

@@ -10,7 +10,7 @@ RAG 파이프라인 (문서 넣기·검색·답변). 작업 규칙은 `AGENTS.md
 | 저장(pgvector, 버전 교체), 검색(workspaceId + 문서 짝 docs) | 구현. 문서는 `sourceType`+`docId` 짝으로 구분 (SCRUM-227, 챗봇 명세 v0.2 9장) |
 | 대기열·작업자, 완료 콜백 | 구현 |
 | 내부 API (문서 넣기·상태·삭제) | 구현. 회의록(`sourceType=minutes`)만 받음 |
-| 배포 이미지 (`ghcr.io/nineouting/nineouting-ai-service`) | 구현. 아래 "이미지·배포" |
+| 배포 이미지 (DEV ECR `nineouting-dev-ai-service`) | 구현. 아래 "이미지·배포" |
 | 답변 API (검색 → LLM → 근거 번호 검사) | 구현. LLM 은 설정으로 고름: 가짜(기본, 답 앞에 `[시험용 답변]`) / Gemini(시험) / OpenAI(운영, SDK 는 모델을 정할 때 추가) |
 | 업로드 문서(PDF·워드·엑셀) | 받기·형식 확인(SCRUM-106), PDF 읽기(SCRUM-107, PDFium), 워드 읽기(SCRUM-108), 엑셀 읽기(SCRUM-109) 구현. 정제·크기 상한은 SCRUM-110 |
 | 회의 중 챗봇 (`POST /internal/rag/chat`) | 이어지는 질문 + 회의록·첨부 자료로 답하기 (SCRUM-223), 진행 중 회의(안건 보드·최근 전사 줄, SCRUM-224), 일반 지식과 오늘 날짜(`[일반]`, SCRUM-225) 구현. 명세 `docs/api/rag-chat-contract.md` |
@@ -301,12 +301,12 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 
 ## 이미지·배포
 
-공용 `Dockerfile` 이미지에 RAG 가 함께 들어간다. GitHub Actions(`.github/workflows/image.yml`)가 PR 에서는 빌드·크기 측정·모델 확인만 하고, `develop` 에 합쳐지면 `ghcr.io/nineouting/nineouting-ai-service:develop` 과 `:<커밋 SHA>` 로 올린다.
+공용 `Dockerfile` 이미지에 RAG 가 함께 들어간다. GitHub Actions(`.github/workflows/image.yml`)가 빌드·크기 측정·모델·공용 코드·회의록 초안 검증을 수행한다. 검증된 AMD64 이미지를 DEV ECR에 직접 게시하고, 검증 digest로 infra PR을 생성한다. 자세한 인증·실행 조건은 [DEV-ECR.md](../docs/DEV-ECR.md)를 따른다.
 
 - torch 는 CPU 전용, 임베딩 모델은 빌드 때 `/models` 에 받아 sha256 을 확인하고 실행 중에는 내려받지 않는다(`HF_HUB_OFFLINE=1`)
 - root 가 아닌 사용자(uid 10001)로 실행
-- `linux/arm64`(CN팀 노드)와 `linux/amd64`(테스트용)를 각자의 빌드 서버에서 만들어 하나의 태그로 묶는다. 받는 쪽 CPU 에 맞는 이미지가 자동으로 받아진다 (`docker pull --platform linux/amd64 …` 로 고를 수 있음)
-- GHCR 의 옛 이미지는 자동으로 지우지 않는다. 묶음 안쪽 플랫폼 이미지가 "태그 없는 버전"으로 보여, 태그 없는 버전을 지우면 묶음이 깨진다
+- AMD64·ARM64는 각각 빌드·검증하며, 현재 DEV ECR에는 `linux/amd64` 이미지를 게시한다.
+- ECR 로그인 후 CI의 `image-result.txt`에 기록된 `image.uri`(repository@digest)로 받는다. 기존 저장소 패키지 삭제는 수행하지 않는다.
 
 처음 배포할 때 (운영 DB)
 1. 관리자가 `CREATE EXTENSION vector` (앱 계정은 관리자 권한이 없음)

@@ -1,52 +1,6 @@
-# ai-service 이미지를 만들어 GHCR(ghcr.io/nineouting/nineouting-ai-service)에 올림. STT 레포의 image.yml 을 바탕으로 함
-# 같은 조직 레포라 따로 받을 자격증명이 없고, 아래 permissions와 기본 GITHUB_TOKEN이면 됨.
-#
-# 플랫폼: linux/amd64(테스트용)와 linux/arm64(CN팀 노드)를 각자의 빌드 서버에서 만들고, 하나의 태그로 묶음.
-#         받는 쪽은 자기 CPU에 맞는 이미지를 자동으로 받음 (일부러 고르려면 docker pull --platform linux/amd64 ...)
-# 태그: develop 푸시 -> develop + 커밋 SHA (STT·백엔드 서비스 레포와 같은 모양)
-#       릴리스 git 태그(v<major>.<minor>.<patch>, 예: v0.1.0) 푸시 -> 같은 이름 + 커밋 SHA (develop 은 옮기지 않음)
-# 끌어 쓰기: docker pull ghcr.io/nineouting/nineouting-ai-service:develop
-#            docker pull ghcr.io/nineouting/nineouting-ai-service:v0.1.0
-#
-# 옛 이미지 정리(delete-package-versions)는 두지 않음: 묶음 안쪽 플랫폼 이미지가 GHCR에서 "태그 없는 버전"으로 보여
-# 태그 없는 버전을 지우면 develop 이미지가 깨짐. 공개 패키지라 저장 공간 비용은 없음
+# Build and verify locally, then publish directly to DEV ECR.
 name: image
-
-on:
-  push:
-    branches: [develop]
-    # 릴리스 태그: git tag v0.1.0 && git push origin v0.1.0 (태그 푸시에는 아래 paths 조건이 적용되지 않음)
-    tags: ['v[0-9]+.[0-9]+.[0-9]+']
-    paths:
-      - 'summary/**'
-      - 'server/**'
-      - 'rag/**'
-      - 'minutes/**'
-      - 'shared/**'
-      - 'requirements.txt'
-      - 'Dockerfile'
-      - '.dockerignore'
-      - '.github/workflows/image.yml'
-      - '.github/scripts/publish-dev-ecr.sh'
-  pull_request:
-    paths:
-      - 'summary/**'
-      - 'server/**'
-      - 'rag/**'
-      - 'minutes/**'
-      - 'shared/**'
-      - 'requirements.txt'
-      - 'Dockerfile'
-      - '.dockerignore'
-      - '.github/workflows/image.yml'
-      - '.github/scripts/publish-dev-ecr.sh'
-  workflow_dispatch:
-
-env:
-  IMAGE: ghcr.io/nineouting/nineouting-ai-service   # GHCR 주소는 소문자만 받음 (조직 이름은 nineOuting)
-
 jobs:
-  # 플랫폼마다 그 CPU의 빌드 서버에서 만듦 (에뮬레이터보다 빠름)
   build:
     strategy:
       fail-fast: false
@@ -61,63 +15,26 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
-
+      - name: Test ECR publish failure paths (offline)
+        run: python3 .github/scripts/test_publish_dev_ecr.py
       - uses: docker/setup-buildx-action@v3
-
-      # pull_request에서는 만들어만 보고 올리지 않음 (고치는 중에 이미지가 쌓이지 않게)
-      - name: GHCR 로그인
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # pull_request: 올리지 않고 이 빌드 서버의 docker 에 넣어(load) 아래에서 크기를 재고 모델을 확인함
-      - name: 만들기 (PR)
-        if: github.event_name == 'pull_request'
+      - name: Build local image
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: ${{ matrix.platform }}
           load: true
-          tags: ${{ env.IMAGE }}:pr-${{ matrix.pair }}
+          tags: nineouting-verified:local
           cache-from: type=gha,scope=${{ matrix.pair }}
           cache-to: type=gha,scope=${{ matrix.pair }},mode=max
-
-      # develop: 태그 없이 digest 로만 올리고, 아래 merge 에서 두 플랫폼을 하나의 태그로 묶음
-      - name: 만들어서 올리기 (digest)
-        id: push
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: ${{ matrix.platform }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.pair }}
-          cache-to: type=gha,scope=${{ matrix.pair }},mode=max
-
       - name: 확인할 이미지
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "REF=${IMAGE}:pr-${{ matrix.pair }}" >> "$GITHUB_ENV"
-          else
-            echo "REF=${IMAGE}@${{ steps.push.outputs.digest }}" >> "$GITHUB_ENV"
-            docker pull "${IMAGE}@${{ steps.push.outputs.digest }}"
-          fi
-
+        run: echo "REF=nineouting-verified:local" >> "$GITHUB_ENV"
       - name: 이미지 크기
         run: |
           size=$(docker image inspect "$REF" --format '{{.Size}}')
           echo "${{ matrix.platform }} 이미지 크기(압축 풀린 상태): $((size / 1000000)) MB (${size} bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      # 네트워크 없이, root 가 아닌 사용자로 이미지 안의 모델을 불러올 수 있는지 확인
       - name: 모델 확인
         run: |
           docker run --rm --network none "$REF" python -c "
@@ -127,17 +44,12 @@ jobs:
           E5Embedder()
           print('모델 확인 uid=%d arch=%s' % (os.getuid(), platform.machine()))
           "
-
-      # 공용 코드(shared/)와 그 의존성(openai)이 이미지에 들어갔는지 확인. 서버가 시작할 때 처음 불러오는 것들이라
-      # 여기서 보지 않으면 빌드는 통과하고 서버를 띄운 뒤에야 RAG 답변·회의록 초안이 503 으로 드러난다
       - name: 공용 코드 확인
         run: |
           docker run --rm --network none "$REF" python -c "
           import openai, shared.llm, shared.callback, rag.runtime
           print('공용 코드 확인 openai', openai.__version__)
           "
-
-      # 회의록 초안 코드와 마이그레이션 파일이 이미지에 들어갔는지 확인 (DB 에는 붙지 않음)
       - name: 회의록 초안 확인
         run: |
           docker run --rm --network none "$REF" python -c "
@@ -147,92 +59,24 @@ jobs:
           assert files, '마이그레이션 파일 없음'
           print('회의록 초안 확인', files)
           "
-
-      - name: digest 넘기기
-        if: github.event_name != 'pull_request'
-        run: |
-          mkdir -p "${{ runner.temp }}/digests"
-          digest="${{ steps.push.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"
-
+      - name: Save exact built image
+        if: matrix.platform == 'linux/amd64' && (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch'))
+        run: docker save nineouting-verified:local | gzip > verified-image.tar.gz
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'pull_request'
+        if: matrix.platform == 'linux/amd64' && (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch'))
         with:
-          name: digests-${{ matrix.pair }}
-          path: ${{ runner.temp }}/digests/*
-          if-no-files-found: error
+          name: verified-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: verified-image.tar.gz
           retention-days: 1
-
-  # 두 플랫폼 이미지를 하나의 태그(develop 또는 릴리스 태그, 커밋 SHA)로 묶음
-  merge:
-    outputs:
-      image_digest: ${{ steps.verify-index.outputs.image_digest }}
-    needs: build
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: ${{ runner.temp }}/digests
-          pattern: digests-*
-          merge-multiple: true
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: GHCR 로그인
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 하나의 태그로 묶기
-        working-directory: ${{ runner.temp }}/digests
-        run: |
-          # 릴리스 태그 푸시는 릴리스 이름과 SHA, develop 푸시는 develop 과 SHA 를 붙임 (릴리스가 develop 을 옮기지 않게)
-          tags=(-t "${IMAGE}:${GITHUB_SHA}")
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            tags+=(-t "${IMAGE}:${GITHUB_REF_NAME}")
-          else
-            tags+=(-t "${IMAGE}:develop")
-          fi
-          sources=()
-          for digest_file in *; do
-            [[ "$digest_file" =~ ^[0-9a-f]{64}$ ]] || exit 1
-            sources+=("${IMAGE}@sha256:${digest_file}")
-          done
-          docker buildx imagetools create \
-            --metadata-file "${RUNNER_TEMP}/ai-index-metadata.json" \
-            --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
-            "${tags[@]}" \
-            "${sources[@]}"
-
-      - name: 두 플랫폼이 들어갔는지 확인
-        id: verify-index
-        run: |
-          set -euo pipefail
-          digest=$(jq -er '."containerimage.descriptor".digest' "${RUNNER_TEMP}/ai-index-metadata.json")
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          docker buildx imagetools inspect "${IMAGE}@${digest}" | tee inspect.txt
-          grep -q "linux/amd64" inspect.txt || exit 1
-          grep -q "linux/arm64" inspect.txt || exit 1
-          echo "묶음 확인: linux/amd64, linux/arm64" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "image_digest=$digest" >> "$GITHUB_OUTPUT"
-
-
-  # 검증된 GHCR 묶음의 AMD64 이미지만 DEV ECR에 전송한다. EKS 배포는 실행하지 않는다.
+          if-no-files-found: error
   dev-ecr:
     name: Verify and publish DEV ECR image
-    needs: merge
+    needs: build
     if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: read
       id-token: write
     outputs:
       image_repository: ${{ steps.publish.outputs.image_repository }}
@@ -242,18 +86,16 @@ jobs:
     env:
       AWS_REGION: ap-northeast-2
       EXPECTED_ACCOUNT: '443845329525'
-      SOURCE_IMAGE: ghcr.io/nineouting/nineouting-ai-service
-      SOURCE_DIGEST: ${{ needs.merge.outputs.image_digest }}
       TARGET_IMAGE: 443845329525.dkr.ecr.ap-northeast-2.amazonaws.com/nineouting-dev-ai-service
+      LOCAL_IMAGE: nineouting-verified:local
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Login to verified GHCR image
-        uses: docker/login-action@v3
+      - uses: actions/download-artifact@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          name: verified-image-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Load verified image
+        run: gunzip -c verified-image.tar.gz | docker load
+      - uses: docker/setup-buildx-action@v3
       - name: Authenticate to DEV with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -269,9 +111,8 @@ jobs:
           echo "AWS account verified: $account"
       - name: Login to DEV ECR
         uses: aws-actions/amazon-ecr-login@v2
-      - name: Publish and verify AMD64 image in DEV ECR
+      - name: Publish and verify exact local image in DEV ECR
         id: publish
-        shell: bash
         run: bash .github/scripts/publish-dev-ecr.sh
       - name: Save verified DEV image reference
         uses: actions/upload-artifact@v4
@@ -283,7 +124,6 @@ jobs:
             ecr-manifest-raw.json
           if-no-files-found: error
           retention-days: 30
-
   dev-gitops:
     name: Create verified AI DEV image PR
     needs: dev-ecr
@@ -321,3 +161,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           DEV_GITOPS_TOKEN: ${{ secrets.DEV_GITOPS_TOKEN }}
+'on':
+  push:
+    branches:
+      - develop
+    tags:
+      - v[0-9]+.[0-9]+.[0-9]+
+    paths:
+      - summary/**
+      - server/**
+      - rag/**
+      - minutes/**
+      - shared/**
+      - requirements.txt
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/image.yml
+      - .github/scripts/publish-dev-ecr.sh
+      - .github/scripts/test_publish_dev_ecr.py
+  pull_request:
+    paths:
+      - summary/**
+      - server/**
+      - rag/**
+      - minutes/**
+      - shared/**
+      - requirements.txt
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/image.yml
+      - .github/scripts/publish-dev-ecr.sh
+      - .github/scripts/test_publish_dev_ecr.py
+  workflow_dispatch: null

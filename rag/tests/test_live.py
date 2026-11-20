@@ -198,7 +198,7 @@ class FakeEmbedder:
         self.calls += 1
         return self._vec(text)
 
-    def embed_passages(self, texts):
+    def embed_passages(self, texts, on_progress=None):
         self.calls += 1
         return [self._vec(t) for t in texts]
 

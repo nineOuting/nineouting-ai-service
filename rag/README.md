@@ -111,13 +111,14 @@ cd <저장소 루트> && set -a && . ./.env && set +a
 | 주소 | 응답 |
 |---|---|
 | `POST /internal/rag/documents` | 202 `{sourceType, docId, docVersion, status: "accepted"}`. 저장된 것보다 낮은 회의록 버전이면 `"ignored"` (처리·콜백 없음) |
-| `GET /internal/rag/documents/{sourceType}/{docId}` | 200 `{sourceType, docId, docVersion, status, errorCode, chunkCount}`, 없으면 404 |
+| `GET /internal/rag/documents/{sourceType}/{docId}` | 200 `{sourceType, docId, docVersion, status, errorCode, chunkCount, progress}`, 없으면 404 |
 | `DELETE /internal/rag/documents/{sourceType}/{docId}` | 204 (없어도) |
 | `DELETE /internal/rag/workspaces/{workspaceId}` | 204 |
 
 - 문서는 `sourceType`(`minutes` 회의록 / `upload` 첨부 자료)과 `docId` 의 짝으로 구분한다. 회의록 200번과 첨부 자료 200번은 다른 문서다. 완료 콜백에도 `sourceType` 이 들어간다 (`{sourceType, docId, docVersion, status, errorCode, chunkCount}`)
 - 옛 모양(`/documents/{docId}`, 답변의 `docIds`)은 받지 않는다 (2026-11-12, SCRUM-227). 번호만으로는 종류를 알 수 없다. 옛 주소는 404, `docIds` 만 보내면 400
 - 상태 값은 `accepted` / `processing` / `ready` / `failed` (DB 의 `queued` 를 `accepted` 로 보여 줌)
+- `progress`(SCRUM-339): 0~100 정수. 상태 조회에만 있다 (완료 콜백에는 없음). `ready` 일 때만 100이고, `processing` 이면 임베딩이 끝난 조각 비율(내림)이며 저장이 끝나기 전에는 99를 넘지 않는다. `accepted`(대기 중)·나누기 전·`failed` 는 0. 새 버전을 접수하면 0부터 다시 센다
 - 명세에 없어서 AI 쪽이 정한 것 (확인 필요): 입력 오류 400 `{"error": "INVALID_INPUT"}`, 같은 `sourceType`+`docId` 가 다른 워크스페이스로 오면 409 `CONFLICT`, DB 를 쓸 수 없으면 503 `NOT_READY`, 넣기 응답 코드 202
 - `sourceType=upload` 는 허용 저장소(`RAG_UPLOAD_ALLOWED_HOSTS`)가 설정됐을 때만 받는다. 없으면 400. `fileUrl` 의 호스트가 허용 저장소가 아니어도 400
   - 작업자가 파일을 메모리로 받아(디스크에 쓰지 않음) 안쪽 모양으로 형식을 알아낸다. 확장자는 믿지 않는다
@@ -239,6 +240,7 @@ API 프로세스 안에서 띄울 때는 `worker.start_in_thread(worker.from_env
 | 일시 실패 | 그 밖의 예외는 30초·2분 뒤 다시, 3번째도 실패하면 `internal_error` |
 | 결과 버림 | 처리 중 문서가 지워졌거나 더 새 버전이 접수되면 콜백 없이 끝낸다 |
 | 콜백 | `POST {callbackUrl}`, `X-Request-Id` 를 돌려준다. 408·429·5xx·연결 오류만 3번 재시도(1·2·4초), 리다이렉트는 따라가지 않는다 |
+| 진행률 | 나누기가 끝나면 (0, 전체 조각 수), 임베딩 묶음(16개)마다 (끝난 수, 전체 수)를 문서 행(`embed_done`, `embed_total`)에 적는다. 그 버전을 처리 중일 때만 쓴다. 적기가 실패해도 작업은 계속하고 경고는 작업마다 한 번만 남긴다 (SCRUM-339) |
 | 정리 | 끝난 작업은 `payload`(문서 내용)를 비우고, 7일 뒤 줄을 지운다 |
 | DB 접속 | 시작할 때 접속하지 않고 반복을 돌며 접속한다. DB 가 늦게 뜨거나 `vector` 확장이 없어도 서버는 뜨고(그동안 RAG 주소는 503), 연결이 끊기면 다음 반복에서 다시 접속한다 |
 

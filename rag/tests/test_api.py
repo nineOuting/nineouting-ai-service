@@ -169,7 +169,8 @@ def test_상태_조회는_queued를_accepted로_보여줌(client):
     client.post(f"{BASE}/documents", json=body())
     r = client.get(f"{BASE}/documents/minutes/1")
     assert r.status_code == 200
-    assert r.json() == {"sourceType": "minutes", "docId": 1, "docVersion": "v1", "status": "accepted", "errorCode": None, "chunkCount": 0}
+    assert r.json() == {"sourceType": "minutes", "docId": 1, "docVersion": "v1", "status": "accepted", "errorCode": None, "chunkCount": 0,
+                        "progress": 0}
 
 
 def test_상태_조회는_처리_결과를_그대로_보여줌(client, conn):

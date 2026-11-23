@@ -59,6 +59,12 @@ jobs:
           assert files, '마이그레이션 파일 없음'
           print('회의록 초안 확인', files)
           "
+      - name: Verify real Docker config archive
+        if: matrix.platform == 'linux/amd64'
+        run: python3 .github/scripts/test_publish_dev_ecr.py -k real_runner
+        env:
+          PUBLISH_REAL_DOCKER: '1'
+          REAL_DOCKER_TEST_IMAGE: nineouting-verified:local
       - name: Save exact built image
         if: matrix.platform == 'linux/amd64' && (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch'))
         run: docker save nineouting-verified:local | gzip > verified-image.tar.gz

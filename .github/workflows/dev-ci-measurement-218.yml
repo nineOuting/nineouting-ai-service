@@ -1,0 +1,76 @@
+# Measurement only: pinned DEV source; no registry publishing, deployment or DEV cache writes.
+name: DEV CI current measurement 218
+'on':
+  pull_request:
+    branches:
+    - develop
+    paths:
+    - .github/workflows/dev-ci-measurement-218.yml
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - platform: linux/amd64
+          runner: ubuntu-latest
+          pair: linux-amd64
+        - platform: linux/arm64
+          runner: ubuntu-24.04-arm
+          pair: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ca8bb44f1e3ee4829551c6e880d7e3bb8f2452db
+        persist-credentials: false
+    - name: Test ECR publish failure paths (offline)
+      run: python3 .github/scripts/test_publish_dev_ecr.py
+    - uses: docker/setup-buildx-action@v3
+    - name: Build local image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        platforms: ${{ matrix.platform }}
+        load: true
+        tags: nineouting-verified:local
+        cache-from: type=gha,scope=${{ matrix.pair }}
+        push: false
+    - name: 확인할 이미지
+      run: echo "REF=nineouting-verified:local" >> "$GITHUB_ENV"
+    - name: 이미지 크기
+      run: |
+        size=$(docker image inspect "$REF" --format '{{.Size}}')
+        echo "${{ matrix.platform }} 이미지 크기(압축 풀린 상태): $((size / 1000000)) MB (${size} bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
+    - name: 모델 확인
+      run: |
+        docker run --rm --network none "$REF" python -c "
+        import os, platform
+        from rag.embedding import E5Embedder, verify_model_files
+        verify_model_files()
+        E5Embedder()
+        print('모델 확인 uid=%d arch=%s' % (os.getuid(), platform.machine()))
+        "
+    - name: 공용 코드 확인
+      run: |
+        docker run --rm --network none "$REF" python -c "
+        import openai, shared.llm, shared.callback, rag.runtime
+        print('공용 코드 확인 openai', openai.__version__)
+        "
+    - name: 회의록 초안 확인
+      run: |
+        docker run --rm --network none "$REF" python -c "
+        import minutes.api, minutes.runtime, minutes.worker
+        from minutes.migrate import MIGRATIONS
+        files = sorted(p.name for p in MIGRATIONS.glob('*.sql'))
+        assert files, '마이그레이션 파일 없음'
+        print('회의록 초안 확인', files)
+        "
+    - name: Clean measurement image
+      if: always()
+      run: docker image rm nineouting-verified:local || true
+    timeout-minutes: 45

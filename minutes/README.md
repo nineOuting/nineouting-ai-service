@@ -14,7 +14,7 @@
 | STT 오인식 교정 (명세 7.7) | 구현 (SCRUM-150, `correction.py`). 처음 초안에서 칸을 고르기 전에 AI 를 한 번 더 불러 "잘못 적힌 말 → 맞는 표기" 쌍만 받는다. 맞는 표기는 요청 안(요약 글의 「」 밖, 안건 제목, 결정할 사항)의 것을 먼저 쓰고, 없으면 앞뒤 글로 분명할 때만 짐작한다 (SCRUM-151). 소리가 비슷한 쌍만 코드가 `테라폼(STT: 테로폰)`, `버그 수정(STT: 어그 수정)` 모양으로 반영한다. 원래 글이 남아 사용자가 판단한다. 실패하면 교정 없이 간다. 다시 배치에서는 하지 않는다 |
 | 문장 다듬기 (명세 7.8) | 구현 (SCRUM-218, `polish.py`). 배치·표 채우기 뒤 글 필드의 줄을 개조식 "~함/~음"·아라비아 숫자·대괄호 표시(`[맞는 표기]`, `[불확실한 말?]`)로 다시 쓴다. 코드가 숫자·표시·영어 낱말·길이를 검사해 걸린 줄은 원문(읽은 값만 바꾼 글). 실패하면 원문. 사람이 고친 항목·표·다시 배치는 다듬지 않는다 |
 | 양식 변경 시 다시 배치 (`previousLines`) | 구현 (SCRUM-98, `relayout.py`). 고친 줄·새로 쓴 줄은 글 그대로 칸만 다시 고름. 처음 초안과 지시문을 따로 씀 (`prompts/relayout/`) |
-| 양식 가져오기 (REQ-195, SCRUM-289) | 모듈과 손 시험 도구 구현, 서버 주소 없음 (`template_import.py`). 양식 파일(PDF·워드·엑셀·글 파일)에서 항목(제목, 기록 방식, 표 열 개수, 설명, 머리글·바닥글)을 읽어 `template.fields` 모양으로 만든다. AI 는 줄 번호만 고르고 글은 코드가 원문에서 가져온다. 실제 양식 PDF 로는 아직 평가하지 않았다. 계약은 `docs/api/template-import-contract.md` (초안, 협의 전) |
+| 양식 가져오기 (REQ-195, SCRUM-289) | 모듈, 손 시험 도구, 서버 주소(`POST /internal/minutes/template-imports`, 동기, `import_api.py`) 구현 (`template_import.py`). 양식 파일에서 항목(제목, 기록 방식, 표 열 개수, 설명, 머리글·바닥글)을 읽어 `template.fields` 모양으로 만든다. AI 는 줄 번호만 고르고 글은 코드가 원문에서 가져온다. 실제 양식 PDF 로는 아직 평가하지 않았다. **서비스에서 받는 형식은 PDF·워드만이다** (기획 결정 2026-11-24. 엑셀·글 파일은 읽는 코드만 있고 `MINUTES_IMPORT_FORMATS`로 켠다). 계약은 `docs/api/template-import-contract.md` (서버 주소 형식은 AI 쪽 제안을 통보한 것, 백엔드 합의 전) |
 | 근거·맥락 연결 (AI-11) | ai-service API 없음. 결과의 `sources`·`transcriptSeqs` 를 백엔드가 따라간다 |
 
 ## 흐름
@@ -66,6 +66,7 @@ export MINUTES_DATABASE_URL="$RAG_DATABASE_URL"        # 로컬에서는 RAG 개
 | `MINUTES_CORRECTION` | `0` 이면 STT 오인식 교정(명세 7.7)을 하지 않는다. 초안마다 AI 호출이 1번 준다 (실제 회의에서 교정 호출이 20~30초 걸렸다, 2026-11-04 측정). 요약 단계가 오인식을 충분히 잡게 되면 끈다. `0`·`1` 말고 다른 값이면 서버는 뜨고 시작 로그에 `회의록 초안 설정 오류` 가 남고 초안 주소만 503 | `1` (켬) |
 | `MINUTES_POLISH` | `0` 이면 AI 문장 다듬기(명세 7.8)를 하지 않는다. 읽은 값이 붙은 수 인용을 바꾸는 코드 정리만 한다. 초안마다 AI 호출이 1~2번 준다 (검사에 걸린 줄을 한 번 더 묻는다. 실제 회의 33줄에서 초안이 82~105초에서 31~44초로 준다, 2026-11-11 측정). `0`·`1` 말고 다른 값이면 서버는 뜨고 시작 로그에 `회의록 초안 설정 오류` 가 남고 초안 주소만 503 | `1` (켬) |
 | `MINUTES_POLISH_CHUNK` | 문장 다듬기에서 다듬을 줄이 이 수(5-200)를 넘으면 이 줄 수씩 나눠 **동시에** 부른다. 호출 하나의 출력이 줄 수에 비례해 길어져 시간 제한(`MINUTES_LLM_TIMEOUT_S`)에 닿는 것을 막고, 걸리는 시간을 조각 하나 수준으로 줄인다. 조각마다 따로 다시 쓰고 검사하고 다시 묻고, 조각 하나가 실패하면 그 조각의 줄만 ①의 글로 간다. 동시에 부르는 조각은 최대 8개다. 입력 토큰은 조각마다 지시문을 다시 보내 조금 늘어난다. 실제 회의로 확인하기 전에는 `0`. `0` 이나 비우면 한 번에 부른다. 5-200 이 아니거나 정수가 아니면 서버는 뜨고 시작 로그에 `회의록 초안 설정 오류` 가 남고 초안 주소만 503 | `0` (나누지 않음) |
+| `MINUTES_IMPORT_TIMEOUT_S`, `MINUTES_IMPORT_MAX_MB`, `MINUTES_IMPORT_MAX_CONCURRENT`, `MINUTES_IMPORT_PROMPT_VERSION`, `MINUTES_IMPORT_FORMATS` | 양식 가져오기: AI 호출 하나의 시간 제한(초), 받는 파일 크기 상한(MB), 동시에 처리하는 양식 수(넘으면 503 BUSY), 지시문 버전, 받는 파일 형식(쉼표로: pdf, docx, xlsx, text. 그 밖은 unsupported_format). 파일은 서명 주소(`fileUrl`)로 받고 허용 저장소는 RAG 업로드와 같은 `RAG_UPLOAD_ALLOWED_HOSTS`(없으면 503 NOT_READY). 값이 틀리면 서버는 뜨고 이 주소만 503 | 30, 20, 4, `v1`, `pdf,docx` |
 | `MINUTES_WORKER_IN_PROCESS` | `0` 이면 서버 안에서 작업자를 띄우지 않는다 (`python -m minutes.worker` 로 따로) | `1` |
 | `MINUTES_DB_POOL_MAX`, `MINUTES_DB_POOL_TIMEOUT_S` | 접수 주소의 DB 연결 수, 연결을 기다리는 초 | 3, 5 |
 | `MINUTES_DB_STATEMENT_TIMEOUT_MS`, `MINUTES_DB_IDLE_TX_TIMEOUT_MS`, `MINUTES_DB_CONNECT_TIMEOUT_S` | DB 시간 제한 | 30000, 60000, 10 |

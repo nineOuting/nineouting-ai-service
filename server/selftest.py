@@ -98,6 +98,193 @@ def test_flow(cap):
     assert not any(t in blob for t in TEXTS), "상태나 로그에 전사 내용이 새어 나감"
 
 
+def test_call_limit():
+    """모델 호출 전체 동시 수 상한: 설정 읽기, 상한을 넘지 않음, 기다리다 풀림, 시간 초과, 실패해도 자리 반납, 폴백으로 넘기지 않음, 지표"""
+    import meeting_summary as ms
+    from call_limit import CallLimiter, CallQueueTimeout
+    from .service import ConfigError, call_limit_from_env
+
+    # 설정: 기본은 상한 없음 (예전 동작)
+    assert call_limit_from_env({}) == (0, 0.0, 10.0)
+    assert call_limit_from_env({"LLM_MAX_CONCURRENT": " 8 ", "LLM_QUEUE_TIMEOUT_SEC": "30", "LLM_QUEUE_WARN_SEC": "2.5"}) == (8, 30.0, 2.5)
+    for key, bad in (("LLM_MAX_CONCURRENT", "-1"), ("LLM_MAX_CONCURRENT", "abc"), ("LLM_MAX_CONCURRENT", "1.5"), ("LLM_MAX_CONCURRENT", "5000"),
+                     ("LLM_QUEUE_TIMEOUT_SEC", "-3"), ("LLM_QUEUE_TIMEOUT_SEC", "x"), ("LLM_QUEUE_WARN_SEC", "-1")):
+        try:
+            call_limit_from_env({key: bad})
+        except ConfigError as e:
+            assert key in str(e), (key, bad)
+        else:
+            raise AssertionError(f"잘못된 값 {key}={bad} 은 설정 오류여야 함")
+
+    def run_many(lim, n, hold_s=0.05):
+        """n 개 호출을 동시에 시작해 동시에 나가 있던 최대 수를 돌려준다"""
+        lock, state = threading.Lock(), {"now": 0, "max": 0}
+
+        def one():
+            with lim.slot("t"):
+                with lock:
+                    state["now"] += 1
+                    state["max"] = max(state["max"], state["now"])
+                time.sleep(hold_s)
+                with lock:
+                    state["now"] -= 1
+        ts = [threading.Thread(target=one, daemon=True) for _ in range(n)]
+        [t.start() for t in ts]
+        [t.join(2) for t in ts]
+        return state["max"]
+
+    off = CallLimiter()
+    assert run_many(off, 8) == 8 and off.snapshot()["peak"] == 8 and off.snapshot()["inFlight"] == 0       # 상한 없음: 막지 않고 세기만 한다
+    on = CallLimiter()
+    on.configure(limit=3)
+    assert run_many(on, 12) == 3, "상한을 넘어서 동시에 나감"
+    snap = on.snapshot()
+    assert snap == {"limit": 3, "inFlight": 0, "waiting": 0, "peak": 3}, snap                      # 다 끝나면 자리와 대기가 모두 돌아옴
+
+    # 기다리는 호출은 자리가 나면 풀린다 (대기 수가 세어진다)
+    one = CallLimiter()
+    one.configure(limit=1)
+    gate, started = threading.Event(), threading.Event()
+
+    def holder():
+        with one.slot("a"):
+            started.set()
+            gate.wait(5)
+    t1 = threading.Thread(target=holder, daemon=True)
+    t1.start()
+    assert started.wait(5)
+    waiter_ok = []
+
+    def waiter():
+        with one.slot("b"):
+            waiter_ok.append(True)
+    t2 = threading.Thread(target=waiter, daemon=True)
+    t2.start()
+    deadline = time.monotonic() + 5
+    while one.snapshot()["waiting"] != 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert one.snapshot() == {"limit": 1, "inFlight": 1, "waiting": 1, "peak": 1} and not waiter_ok
+    gate.set()
+    t1.join(5)
+    t2.join(5)
+    assert waiter_ok == [True] and one.snapshot()["inFlight"] == 0 and one.snapshot()["waiting"] == 0
+
+    # 기다리는 시간 제한: 넘으면 CallQueueTimeout, 대기 수와 자리는 새지 않는다
+    tq = CallLimiter()
+    tq.configure(limit=1, queue_timeout_s=0.1)
+    with tq.slot("a"):
+        try:
+            with tq.slot("b"):
+                raise AssertionError("자리가 없는데 들어옴")
+        except CallQueueTimeout:
+            pass
+        assert tq.snapshot()["waiting"] == 0 and tq.snapshot()["inFlight"] == 1
+    with tq.slot("c"):                                                                         # 자리가 돌아와 있다
+        pass
+
+    # 호출이 예외로 끝나도 자리를 돌려준다
+    try:
+        with tq.slot("x"):
+            raise ValueError("호출 실패")
+    except ValueError:
+        pass
+    assert tq.snapshot()["inFlight"] == 0
+    with tq.slot("y"):
+        pass
+
+    # 서버 호출 길(_invoke_llm): 상한을 지키고, 걸린 시간 지표에 기다린 시간을 넣지 않는다
+    ops, real_hook, real_cfg = [], ms.OPERATION_HOOK, ms.CALL_LIMITER.snapshot()
+    ms.OPERATION_HOOK = lambda *a: ops.append(a)
+    try:
+        ms.CALL_LIMITER.configure(limit=1)
+        gate2, in_call = threading.Event(), threading.Event()
+        results = []
+
+        def slow():
+            in_call.set()
+            gate2.wait(5)
+            return "slow"
+        a = threading.Thread(target=lambda: results.append(ms._invoke_llm("openai", "m", "t1", slow)), daemon=True)
+        a.start()
+        assert in_call.wait(5)
+        b = threading.Thread(target=lambda: results.append(ms._invoke_llm("openai", "m", "t2", lambda: "fast")), daemon=True)
+        b.start()
+        time.sleep(0.2)
+        assert results == [] and ms.CALL_LIMITER.snapshot()["waiting"] == 1, "상한이 1인데 두 번째 호출이 나감"
+        gate2.set()
+        a.join(5)
+        b.join(5)
+        assert sorted(results) == ["fast", "slow"] and ms.CALL_LIMITER.snapshot()["inFlight"] == 0
+        fast = next(o for o in ops if o[2] == "t2")
+        assert fast[3] < 0.15, f"기다린 시간이 호출 시간에 섞임: {fast[3]}"
+
+        # 자리가 안 난 것은 모델 실패가 아니다: 폴백으로 넘기지 않고 기본 모델을 쉬게 하지도 않는다
+        ms.CALL_LIMITER.configure(limit=1, queue_timeout_s=0.1)
+        saved = {k: os.environ.get(k) for k in ("LLM_PROVIDER", "LLM_MODEL", "LLM_FALLBACK_MODEL")}
+        real_enabled, real_once = ms.FALLBACK_ENABLED, ms._call_once
+        calls = []
+
+        def fake_once(provider, model, system, user, mock_file=None, task=None):
+            calls.append(model)
+            return ms._invoke_llm(provider, model, task, lambda: "ok")
+        try:
+            os.environ.update({"LLM_PROVIDER": "openai", "LLM_MODEL": "primary", "LLM_FALLBACK_MODEL": "fallback"})
+            ms.FALLBACK_ENABLED = True
+            ms._call_once = fake_once
+            ms._primary_down_until.clear()
+            with ms.CALL_LIMITER.slot("holder"):
+                try:
+                    ms.call_llm("openai", "primary", "s", "u", task="t")
+                except CallQueueTimeout:
+                    pass
+                else:
+                    raise AssertionError("자리가 없는데 호출이 나감")
+            assert calls == ["primary"], f"폴백으로 넘어감: {calls}"
+            assert not ms._primary_down_until, "자리가 안 난 것을 기본 모델 실패로 셈"
+        finally:
+            ms._call_once, ms.FALLBACK_ENABLED = real_once, real_enabled
+            ms._primary_down_until.clear()
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        assert any(o[4] == "CallQueueTimeout" for o in ops)                                    # 지표에는 실패로 남는다
+    finally:
+        ms.OPERATION_HOOK = real_hook
+        ms.CALL_LIMITER.configure(limit=real_cfg["limit"])
+
+    # Registry 는 시작할 때 설정을 읽어 적용하고, 틀린 값이면 뜨지 않는다
+    try:
+        Registry(cfg_from_env({}), env={"LLM_MAX_CONCURRENT": "-2"})
+    except ConfigError:
+        pass
+    else:
+        raise AssertionError("잘못된 LLM_MAX_CONCURRENT 로 Registry 가 만들어짐")
+    Registry(cfg_from_env({}), env={"LLM_MAX_CONCURRENT": "7", "LLM_QUEUE_TIMEOUT_SEC": "20"})
+    assert ms.CALL_LIMITER.snapshot()["limit"] == 7 and ms.CALL_LIMITER.queue_timeout_s == 20.0
+    Registry(cfg_from_env({}), env={})
+    assert ms.CALL_LIMITER.snapshot()["limit"] == 0                                           # 설정이 없으면 상한 없음
+
+    # 지표: 나가 있는 수, 기다리는 수, 최대, 상한이 내보내진다
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+    from .metrics import Metrics
+    lim = CallLimiter()
+    lim.configure(limit=5)
+    reader = InMemoryMetricReader()
+    m = Metrics([reader])
+    m.watch_call_limiter(lim)
+    with lim.slot("a"), lim.slot("b"):
+        vals = {}
+        for rm in reader.get_metrics_data().resource_metrics:
+            for sm in rm.scope_metrics:
+                for met in sm.metrics:
+                    if met.name.startswith("ai.llm.calls."):
+                        vals[met.name] = met.data.data_points[0].value
+    assert vals == {"ai.llm.calls.in_flight": 2, "ai.llm.calls.waiting": 0, "ai.llm.calls.in_flight_peak": 2, "ai.llm.calls.limit": 5}, vals
+    m.shutdown()
+
+
 def test_meeting_cleanup():
     """끝난 회의는 retain_sec 이 지나면 정리한다: 일꾼 스레드가 쉬고, 상태가 사라지고, 같은 회의로 뭐가 와도 되살아나지 않는다"""
     from .service import ConfigError, retain_from_env
@@ -2548,13 +2735,14 @@ def main():
     test_decision_points_examples()
     test_api_end_request()
     test_numeric_meeting_id()
+    test_call_limit()
     print("수신 서버 자체 시험 통과 (설정, 묶음 번호 409, 요약 전송·재시도, 503, 잘못된 요청, 처리 실패, 토큰 지표, 로그에 전사 내용 없음, HTTP, "
           "안건 분류: 안건 목록·고친 분류 받기, 바뀐 줄만 전송, 고정, 종료 final, 실패 격리, 합쳐 보내기, 숫자 meetingId, "
           "안건 요약: 안건 보드 전송, 고친 요약 받기, 실패 격리, 1초 간격, "
           "의견·할 일: 참석자 명단 받기, 고친 항목 받기, 이름 다시 맞추기, 실패 격리, "
           "주제 변경: 새 안건 제안 보드 전송, 무시와 재알림, 종료 시 거둠, 제목 실패 격리, 무시 요청 HTTP, "
           "미결 안건: 종료 버튼 목록, flush, 이어서 논의하기, 종료 시 마지막 값, 빈 목록, 실패 격리, 요청 HTTP, "
-          "오늘 회의 요약: 정리본 칸, 이월 후보 일치, 이어서 논의하기로 거둠, 종료 시 마지막 값, 실패 격리)")
+          "오늘 회의 요약: 정리본 칸, 이월 후보 일치, 이어서 논의하기로 거둠, 종료 시 마지막 값, 실패 격리, 모델 호출 동시 수 상한)")
 
 
 if __name__ == "__main__":

@@ -26,6 +26,9 @@ ROOT = os.path.dirname(HERE)
 if ROOT not in sys.path:                  # summary 폴더에서 직접 돌리는 도구도 shared 를 불러올 수 있게 한다
     sys.path.insert(0, ROOT)
 from shared.masking import masked_call  # noqa: E402  (표준 라이브러리만 쓴다)
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from call_limit import LIMITER as CALL_LIMITER, CallQueueTimeout  # noqa: E402  (모델 호출 전체 동시 수 상한)
 
 HEDGE = re.compile(r"STT|불확실|불명확")          # 프롬프트 규칙 4와 같은 말
 RECOVERED_DELAY_MS = 2000                          # recovered 줄은 말소리 끝 약 2초 뒤 도착 (규격 문서)
@@ -322,14 +325,21 @@ def report_operation(provider, model, task, duration_seconds, error_type=None):
 
 
 def _invoke_llm(provider, model, task, invoke):
-    """실제 SDK 호출을 실행하고 성공·실패 시간을 기록한다. 실패 예외는 호출자에게 그대로 전달한다."""
-    started = time.perf_counter()
+    """실제 SDK 호출을 실행하고 성공·실패 시간을 기록한다. 실패 예외는 호출자에게 그대로 전달한다.
+    전체 동시 수 상한(call_limit.py, LLM_MAX_CONCURRENT)이 있으면 자리가 날 때까지 기다린 뒤 부른다. 걸린 시간에는 기다린 시간을 넣지 않는다."""
     try:
-        response = invoke()
-    except Exception as exc:
-        report_operation(provider, model, task, time.perf_counter() - started, type(exc).__name__)
+        with CALL_LIMITER.slot(task):
+            started = time.perf_counter()
+            try:
+                response = invoke()
+            except Exception as exc:
+                report_operation(provider, model, task, time.perf_counter() - started, type(exc).__name__)
+                raise
+            elapsed = time.perf_counter() - started
+    except CallQueueTimeout as exc:
+        report_operation(provider, model, task, 0.0, type(exc).__name__)
         raise
-    report_operation(provider, model, task, time.perf_counter() - started)
+    report_operation(provider, model, task, elapsed)
     report_usage(provider, model, task, response)
     return response
 
@@ -451,6 +461,8 @@ def call_llm(provider, model, system, user, mock_file=None, task=None):
         return _call_once(fb[0], fb[1], system, user, mock_file, task)
     try:
         return _call_once(provider, model, system, user, mock_file, task)
+    except CallQueueTimeout:
+        raise                                            # 자리가 안 난 것이지 기본 모델이 실패한 것이 아니다. 폴백으로 넘기지 않는다
     except Exception as exc:
         cooldown = _fallback_cooldown_sec()
         _primary_down_until[(provider, model)] = time.monotonic() + cooldown

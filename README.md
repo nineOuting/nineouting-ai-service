@@ -33,6 +33,7 @@ flowchart LR
 | 회의 중 요약 전달 | 구현 | 요약이 바뀔 때마다 백엔드로 PUT. 실패하면 재시도 3회 (`BACKEND_BASE_URL`을 설정했을 때) |
 | 묶음 번호 확인과 재시작 복구 | 구현 | 번호가 이어지지 않으면 `409` + `expectedBatch`, 백엔드가 그 번호부터 다시 보냄 |
 | 토큰 사용량 지표 | 구현 | OpenTelemetry `gen_ai.client.token.usage`, `GET /metrics` |
+| 프롬프트 캐시 지표 | 구현 | 입력 토큰 중 캐시에서 읽은 수 `ai.llm.input_tokens.cache_read`, 캐시에 쓴 수 `ai.llm.input_tokens.cache_write`(카운터, 속성은 토큰 사용량 지표와 같음). 적중률 = cache_read ÷ `gen_ai.client.token.usage`(input)의 합. 응답에 캐시 칸이 없으면 세지 않고, 쓰기 토큰은 공급자가 알려 줄 때만 센다. 읽은 토큰은 일반 입력보다 싸고 쓴 토큰은 더 비쌀 수 있으므로(공급자 가격표 확인) DEV에서 `/metrics`로 적중률과 쓰기량을 본 뒤 호출 구조(지시문을 앞에 고정)를 조정한다. 회의 진행 중 처리 호출만 대상(RAG·회의록 초안 제외). gpt-6-luna 는 읽기·쓰기 토큰을 모두 알려 준다(2026-11-24 실측: 처음 호출은 입력 3,470토큰 중 3,467이 쓰기, 같은 앞부분의 두 번째 호출은 3,458이 읽기) |
 | Bedrock 호출 | 미구현 | 리전·모델 ID 확인 후 추가 |
 | 안건 자동 분류 | 구현, 1차 평가 완료 | 줄마다 안건 하나 또는 해당 없음. 직전 대화와 사람이 고친 예를 함께 보여 줌. 사람이 고친 줄은 고정. 결과는 새로 분류했거나 바뀐 줄만 PUT (`docs/eval/agenda-classification-eval-v1.md`) |
 | 안건별 요약 | 구현, 평가 전 | 안건마다 그 안건의 줄만 모아 2~3문장으로 요약하고 문장마다 근거 줄을 붙임. 사람이 고친 문장은 고정하고 근거가 달라지면 "확인 필요" 표시. 안건 보드 전체 상태를 PUT (`docs/api/agenda-summary-contract.md`) |

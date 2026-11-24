@@ -3,6 +3,9 @@
 토큰 사용량 지표 (OpenTelemetry)
 
 지표 이름: gen_ai.client.token.usage (OTel GenAI 규약), 단위 {token}, 히스토그램
+프롬프트 캐시 지표(카운터, 속성은 아래와 같음)
+  ai.llm.input_tokens.cache_read   입력 토큰 중 프롬프트 캐시에서 읽은 수. 적중률 = 이 값 / gen_ai.client.token.usage(input) 의 합
+  ai.llm.input_tokens.cache_write  입력 토큰 중 프롬프트 캐시에 쓴 수. 공급자가 알려 줄 때만 센다 (쓰기는 일반 입력보다 비쌀 수 있다)
 속성
   gen_ai.operation.name  chat
   gen_ai.provider.name   gcp.gemini / anthropic / openai
@@ -34,6 +37,11 @@ class Metrics:
             "gen_ai.client.token.usage", unit="{token}",
             description="LLM 호출의 입력·출력 토큰 수",
             explicit_bucket_boundaries_advisory=BUCKETS)
+        # 프롬프트 캐시: 입력 토큰 중 캐시에서 읽은 것(싸다)과 캐시에 쓴 것(공급자에 따라 더 비쌀 수 있다). 값을 모르는 호출은 더하지 않는다
+        self.cache_read_tokens = meter.create_counter(
+            "ai.llm.input_tokens.cache_read", unit="{token}", description="입력 토큰 중 프롬프트 캐시에서 읽은 토큰 수")
+        self.cache_write_tokens = meter.create_counter(
+            "ai.llm.input_tokens.cache_write", unit="{token}", description="입력 토큰 중 프롬프트 캐시에 쓴 토큰 수")
         self.operation_duration = meter.create_histogram(
             "gen_ai.client.operation.duration", unit="s",
             description="LLM 호출 응답 시간",
@@ -48,6 +56,20 @@ class Metrics:
         }
         self.token_usage.record(int(input_tokens), {**base, "gen_ai.token.type": "input"})
         self.token_usage.record(int(output_tokens), {**base, "gen_ai.token.type": "output"})
+
+    def record_cache_usage(self, provider, model, task, cache_read_tokens, cache_write_tokens):
+        """호출마다 캐시에서 읽은 입력 토큰과 캐시에 쓴 입력 토큰을 센다. 캐시 적중률 = cache_read / gen_ai.client.token.usage(input) 의 합.
+        속성은 token.usage 와 같다(provider, model, ai.task)."""
+        base = {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": PROVIDER_NAMES.get(provider, provider),
+            "gen_ai.request.model": model or "unknown",
+            "ai.task": task or "unknown",
+        }
+        if cache_read_tokens is not None:
+            self.cache_read_tokens.add(int(cache_read_tokens), base)
+        if cache_write_tokens is not None:
+            self.cache_write_tokens.add(int(cache_write_tokens), base)
 
     def record_operation(self, provider, model, task, duration_seconds, error_type=None):
         attributes = {

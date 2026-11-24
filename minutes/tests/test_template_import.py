@@ -425,3 +425,24 @@ def test_워드에서도_항목과_머리글_바닥글을_읽어_돌려준다():
     assert [(f["title"], f["type"], f.get("columns")) for f in out.result.fields] == [("논의 내용", "free", None), ("할 일", "table", 3)]
     assert out.result.fields[0]["description"] == "※ 안건별로 적는다"
     assert "L1 (1쪽) 나인아웃팅 | 내부 문서" in llm.calls[0][1]
+
+
+# ---- 받는 형식 제한 (formats)
+
+def test_받는_형식을_정하면_그_밖의_형식은_AI를_부르기_전에_거절한다():
+    import io
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.active["A1"] = "1. 개요"
+    buf = io.BytesIO()
+    wb.save(buf)
+    data = buf.getvalue()
+    assert ti.read_lines(data)                                              # 정하지 않으면 읽는다
+    with pytest.raises(ti.IngestError) as e:
+        ti.read_lines(data, ti.PRODUCT_FORMATS)
+    assert e.value.code == UNSUPPORTED_FORMAT
+    llm = ScriptLLM()
+    out = ti.import_template(data, llm, 30, formats=ti.PRODUCT_FORMATS)
+    assert out.error_code == UNSUPPORTED_FORMAT and out.attempts == 0 and llm.calls == []
+    assert ti.read_lines(pdf("upload_report.pdf"), ti.PRODUCT_FORMATS)       # PDF 는 통과
+    assert ti.PRODUCT_FORMATS == frozenset({"pdf", "docx"}) and ti.ALL_FORMATS == frozenset({"pdf", "docx", "xlsx", "text"})

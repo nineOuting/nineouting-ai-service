@@ -28,6 +28,8 @@ from rag.loaders.text import normalize
 from .placement import Outcome, Prompt, ask, load_prompt
 
 KIND = "template_import"
+PRODUCT_FORMATS = frozenset({PDF, DOCX})   # 서비스에서 받는 형식 (2026-11-24 기획 결정: PDF·워드만). 읽는 코드는 엑셀·글 파일도 읽을 수 있어 설정(MINUTES_IMPORT_FORMATS)으로 넓힌다
+ALL_FORMATS = frozenset({PDF, DOCX, XLSX, TEXT})
 NO_FIELDS = "NO_FIELDS"               # AI 가 항목을 하나도 찾지 못함 (양식이 아니거나 읽을 수 없음)
 
 MAX_PAGES = 10                        # 제안값. 양식 PDF 는 짧다 (실제 양식 샘플로 확인 전)
@@ -74,10 +76,13 @@ class ImportOutcome:
     output_tokens: int = 0
 
 
-def read_lines(data: bytes) -> list[Line]:
+def read_lines(data: bytes, formats=None) -> list[Line]:
     """파일 바이트 -> 줄 목록. 읽을 수 없으면 IngestError (unsupported_format, encrypted, too_large, no_text).
-    PDF, 워드(docx), 엑셀(xlsx), 글 파일(txt·md·csv)을 읽는다. 형식은 파일 내용으로 판단한다."""
+    PDF, 워드(docx), 엑셀(xlsx), 글 파일(txt·md·csv)을 읽을 수 있다. 형식은 파일 내용으로 판단한다.
+    formats: 받는 형식 집합(PDF, DOCX, XLSX, TEXT). 정하면 그 밖의 형식은 unsupported_format. None 이면 읽을 수 있는 형식 모두."""
     kind = detect(data)
+    if formats is not None and kind not in formats:
+        raise IngestError(UNSUPPORTED_FORMAT, f"{kind} 형식은 받지 않음")
     if kind == PDF:
         return number_lines(_pdf_pages(data))
     if kind == DOCX:
@@ -371,11 +376,11 @@ def check(data, lines: list[Line]) -> tuple[Imported | None, list[str]]:
 
 
 def import_template(data: bytes, llm, timeout_s: float, max_retries: int = 2, call_retries: int = 1,
-                    prompt: Prompt | None = None) -> ImportOutcome:
+                    prompt: Prompt | None = None, formats=None) -> ImportOutcome:
     """양식 PDF -> ImportOutcome. 파일을 읽지 못하면 error_code 에 IngestError 의 코드(no_text 등), AI 쪽은 placement 의
     CHECK_FAILED / LLM_TIMEOUT / LLM_FAILED, 항목이 없으면 NO_FIELDS."""
     try:
-        lines = read_lines(data)
+        lines = read_lines(data, formats)
     except IngestError as e:
         return ImportOutcome(None, e.code)
     out: Outcome = ask(prompt or load_prompt(None, KIND), lambda problems: build_user(lines, problems),

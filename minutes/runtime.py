@@ -61,6 +61,18 @@ class MinutesRuntime:
         self.pool.close()
 
 
+def _formats_from_env(env, allowed, default):
+    """MINUTES_IMPORT_FORMATS (쉼표로 구분: pdf, docx, xlsx, text). 비면 기본. 모르는 이름이 있으면 ValueError."""
+    raw = (env.get("MINUTES_IMPORT_FORMATS") or "").strip()
+    if not raw:
+        return default
+    names = {x.strip().lower() for x in raw.split(",") if x.strip()}
+    unknown = names - allowed
+    if unknown or not names:
+        raise ValueError(f"MINUTES_IMPORT_FORMATS 는 {', '.join(sorted(allowed))} 중에서 고른다")
+    return frozenset(names)
+
+
 def _import_router(env, llm, config_error, request_id_header, prefix):
     """양식 가져오기(SCRUM-289)의 주소. 초안과 같은 AI(MINUTES_LLM_*)를 쓴다. 이 쪽 설정(MINUTES_IMPORT_*)이 틀려도
     회의록 초안은 멈추지 않고 이 주소만 503 으로 답한다. 초안 쪽 AI 설정이 틀리면 이 주소도 같이 503 이다. DB 는 쓰지 않는다.
@@ -68,6 +80,7 @@ def _import_router(env, llm, config_error, request_id_header, prefix):
       MINUTES_IMPORT_MAX_MB           받는 파일 크기 상한 (기본 20MB)
       MINUTES_IMPORT_MAX_CONCURRENT   동시에 처리하는 양식 수 (기본 4). 넘으면 503 BUSY
       MINUTES_IMPORT_PROMPT_VERSION   지시문 버전 (기본 v1)
+      MINUTES_IMPORT_FORMATS          받는 파일 형식 (기본 pdf,docx. 읽을 수 있는 것: pdf, docx, xlsx, text). 그 밖은 unsupported_format
       RAG_UPLOAD_ALLOWED_HOSTS        파일을 받을 수 있는 저장소 (RAG 업로드와 같은 설정. 없으면 503 NOT_READY)
     """
     from dataclasses import replace
@@ -76,23 +89,25 @@ def _import_router(env, llm, config_error, request_id_header, prefix):
 
     from .import_api import DEFAULT_MAX_CONCURRENT, make_import_router
     from .placement import load_prompt
-    from .template_import import KIND as IMPORT_KIND
+    from .template_import import ALL_FORMATS, KIND as IMPORT_KIND, PRODUCT_FORMATS
 
     prompt, upload, timeout_s, max_concurrent, import_error = None, UPLOAD_OFF, 30.0, DEFAULT_MAX_CONCURRENT, config_error
+    formats = PRODUCT_FORMATS
     if llm is not None:
         try:
             prompt = load_prompt(env.get("MINUTES_IMPORT_PROMPT_VERSION") or None, IMPORT_KIND)
             upload = replace(settings_from_env(env), max_bytes=int(float(env.get("MINUTES_IMPORT_MAX_MB") or 20) * 1024 * 1024))
             timeout_s = float(env.get("MINUTES_IMPORT_TIMEOUT_S") or timeout_s)
             max_concurrent = int(env.get("MINUTES_IMPORT_MAX_CONCURRENT") or max_concurrent)
+            formats = _formats_from_env(env, ALL_FORMATS, PRODUCT_FORMATS)
         except ValueError as e:
             import_error = str(e)
             log.error("양식 가져오기 설정 오류: %s", e)
         else:
-            log.info("양식 가져오기 지시문 %s, 파일 받기 %s, 상한 %dMB, 시간 제한 %.0f초, 동시 %d개", prompt.version,
+            log.info("양식 가져오기 지시문 %s, 형식 %s, 파일 받기 %s, 상한 %dMB, 시간 제한 %.0f초, 동시 %d개", prompt.version, ",".join(sorted(formats)),
                      "켬" if upload.enabled else "끔 (RAG_UPLOAD_ALLOWED_HOSTS 없음)", upload.max_bytes // (1024 * 1024), timeout_s,
                      max_concurrent)
-    return make_import_router(llm, timeout_s, upload, prompt, import_error, max_concurrent, request_id_header, prefix)
+    return make_import_router(llm, timeout_s, upload, prompt, import_error, max_concurrent, request_id_header, prefix, formats)
 
 
 def setup(app, env) -> MinutesRuntime:

@@ -3,6 +3,7 @@
   POST /internal/minutes/template-imports   양식 파일 하나를 읽어 양식 항목을 돌려준다. 동기 (호출 1번에 보통 4~25초)
 
 요청  {"requestId": "...(선택, 로그용)", "fileUrl": "https://<허용한 저장소>/...?서명"}
+      받는 파일 형식은 PDF·워드(docx) (MINUTES_IMPORT_FORMATS 로 바꿀 수 있다). 다른 형식은 FAILED unsupported_format
 200   {"requestId", "status": "SUCCEEDED", "fields": [...], "header", "footer", "warnings": [...]}
 200   {"requestId", "status": "FAILED", "errorCode": "unsupported_format" | "encrypted" | "too_large" | "no_text" | "NO_FIELDS" |
                      "CHECK_FAILED" | "LLM_TIMEOUT" | "LLM_FAILED" | "url_expired" | "download_failed" | "internal_error"}
@@ -25,7 +26,7 @@ from rag.download import FileUrlNotAllowed, UploadSettings, check_file_url, fetc
 from rag.errors import INTERNAL_ERROR, IngestError
 
 from .api import MAX_TRACE_ID, PREFIX, REQUEST_ID_HEADER, invalid, not_ready, verify_internal_request
-from .template_import import import_template
+from .template_import import PRODUCT_FORMATS, import_template
 
 log = logging.getLogger("minutes.import")
 
@@ -63,14 +64,16 @@ def _reply(request_id, **fields):
 
 
 def make_import_router(llm, timeout_s: float, upload: UploadSettings, prompt=None, config_error=None,
-                       max_concurrent: int = DEFAULT_MAX_CONCURRENT, request_id_header=REQUEST_ID_HEADER, prefix=PREFIX):
-    """llm: shared.llm 의 LLM (None 이면 AI 설정 오류). upload: 파일을 받을 수 있는 저장소 설정."""
+                       max_concurrent: int = DEFAULT_MAX_CONCURRENT, request_id_header=REQUEST_ID_HEADER, prefix=PREFIX,
+                       formats=PRODUCT_FORMATS):
+    """llm: shared.llm 의 LLM (None 이면 AI 설정 오류). upload: 파일을 받을 수 있는 저장소 설정.
+    formats: 받는 파일 형식(기본 PDF·워드). 그 밖의 형식은 AI 를 부르지 않고 FAILED unsupported_format."""
     router = APIRouter(prefix=prefix, tags=["회의록 양식 가져오기"], dependencies=[Depends(verify_internal_request)])
     slots = threading.BoundedSemaphore(max(1, max_concurrent))
 
     @router.post(
         PATH, summary="양식 파일에서 항목 읽기",
-        description="서명 주소(fileUrl)로 양식 파일(PDF, 워드, 엑셀, txt·md·csv)을 받아 양식 항목(제목, 기록 방식, 표의 열 개수, 설명)과 "
+        description="서명 주소(fileUrl)로 양식 파일(PDF, 워드)을 받아 양식 항목(제목, 기록 방식, 표의 열 개수, 설명)과 "
                     "머리글·바닥글을 돌려준다. 동기로 답한다. 파일을 읽지 못했거나 항목을 못 찾은 것은 200 + FAILED 와 errorCode 로 알린다.",
         openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"example": EXAMPLE}}}},
         responses={200: {"description": "SUCCEEDED 또는 FAILED", "content": {"application/json": {"examples": {
@@ -102,7 +105,7 @@ def make_import_router(llm, timeout_s: float, upload: UploadSettings, prompt=Non
         try:
             try:
                 data = fetch(url, upload)
-                out = import_template(data, llm, timeout_s, prompt=prompt)
+                out = import_template(data, llm, timeout_s, prompt=prompt, formats=formats)
                 attempts, tokens_in, tokens_out = out.attempts, out.input_tokens, out.output_tokens
                 error_code, result = out.error_code, out.result
             except IngestError as e:                                 # 파일을 받지 못함 (url_expired, download_failed, too_large)

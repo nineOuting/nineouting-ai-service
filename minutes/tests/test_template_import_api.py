@@ -205,3 +205,75 @@ def test_setup이_주소를_붙인다_설정이_틀려도_서버는_뜬다():
     app3 = FastAPI()
     setup(app3, dict(env, RAG_UPLOAD_ALLOWED_HOSTS=""))                                    # 저장소 설정 없음 -> 503
     assert TestClient(app3).post(URL, json={"fileUrl": SIGNED}).status_code == 503
+
+
+# ---- 받는 형식 (2026-11-24 기획 결정: PDF·워드만)
+
+def docx_bytes():
+    import io
+    from docx import Document
+    d = Document()
+    d.add_paragraph("1. 개요")
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
+def xlsx_bytes():
+    import io
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.active["A1"] = "1. 개요"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def docx_answer():
+    ls = ti.read_lines(docx_bytes())
+    return {"header": [], "footer": [], "fields": [{"ref": ls[0].ref, "title": "개요", "type": "free", "columns": None, "descriptionRefs": []}]}
+
+
+def test_워드는_받는다(fetched):
+    fetched["data"] = docx_bytes()
+    r = app_with(ScriptLLM(docx_answer())).post(URL, json={"fileUrl": SIGNED})
+    assert r.json()["status"] == "SUCCEEDED" and r.json()["fields"] == [{"title": "개요", "type": "free", "aiFill": True}]
+
+
+@pytest.mark.parametrize("make", [xlsx_bytes, lambda: "1. 개요\n2. 결정 사항".encode("utf-8")], ids=["엑셀", "글 파일"])
+def test_엑셀과_글_파일은_기본으로_받지_않고_AI도_부르지_않는다(fetched, make):
+    fetched["data"] = make()
+    llm = ScriptLLM()
+    r = app_with(llm).post(URL, json={"fileUrl": SIGNED})
+    assert r.status_code == 200 and r.json() == {"status": "FAILED", "errorCode": UNSUPPORTED_FORMAT} and llm.calls == []
+
+
+def test_설정으로_받는_형식을_넓힐_수_있다(fetched):
+    fetched["data"] = xlsx_bytes()
+    app = FastAPI()
+    app.include_router(api.make_import_router(ScriptLLM(docx_answer()), 30.0, UPLOAD, load_prompt(None, ti.KIND), None, 4,
+                                              formats=ti.ALL_FORMATS))
+    assert TestClient(app).post(URL, json={"fileUrl": SIGNED}).json()["status"] == "SUCCEEDED"
+
+
+def test_MINUTES_IMPORT_FORMATS_읽기():
+    from minutes.runtime import _formats_from_env
+    allowed, default = ti.ALL_FORMATS, ti.PRODUCT_FORMATS
+    assert _formats_from_env({}, allowed, default) == default == frozenset({"pdf", "docx"})
+    assert _formats_from_env({"MINUTES_IMPORT_FORMATS": " "}, allowed, default) == default
+    assert _formats_from_env({"MINUTES_IMPORT_FORMATS": "PDF, docx ,xlsx,text"}, allowed, default) == allowed
+    for bad in ("pdf,hwp", ",", "txt"):
+        with pytest.raises(ValueError, match="MINUTES_IMPORT_FORMATS"):
+            _formats_from_env({"MINUTES_IMPORT_FORMATS": bad}, allowed, default)
+
+
+def test_형식_설정이_틀리면_이_주소만_503():
+    pytest.importorskip("psycopg_pool")
+    from minutes.runtime import setup
+    env = {"MINUTES_DATABASE_URL": "postgresql://x:y@localhost:1/z", "MINUTES_LLM_PROVIDER": "fake",
+           "RAG_UPLOAD_ALLOWED_HOSTS": HOST, "MINUTES_IMPORT_FORMATS": "pdf,hwp"}
+    app = FastAPI()
+    setup(app, env)
+    r = TestClient(app).post(URL, json={"fileUrl": SIGNED})
+    assert r.status_code == 503 and r.json()["error"] == "NOT_READY"
+    assert "/internal/minutes/drafts" in app.openapi()["paths"]

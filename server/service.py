@@ -41,6 +41,7 @@ from agenda_items import ITEM_PROMPT_VERSIONS  # noqa: E402
 from agenda_opinions import AgendaOpinions, OpinionCfg  # noqa: E402
 from agenda_todos import AgendaTodos, TodoCfg  # noqa: E402
 from agenda_offtopic import AgendaOffTopic, OffTopicCfg  # noqa: E402
+from call_limit import LIMITER as CALL_LIMITER  # noqa: E402
 from agenda_leftover import AgendaLeftover  # noqa: E402
 from transcript_terms import TranscriptTerms, TermsFeed, Glossary, TermsCfg  # noqa: E402
 from .publisher import AGENDA_CLASSIFICATION, AGENDA_BOARD, TRANSCRIPT_TERMS  # noqa: E402
@@ -283,6 +284,34 @@ def coalesce_from_env(env=None):
     return n
 
 
+CALL_LIMIT_MAX = 1000
+
+
+def call_limit_from_env(env=None):
+    """환경변수 -> 회의 진행 중 모델 호출의 전체 동시 수 상한 (limit, 기다리는 최대 시간 초, 경고 대기 시간 초). summary/call_limit.py 참고.
+      LLM_MAX_CONCURRENT     0(기본)이면 상한 없음(예전 동작). 1 이상이면 서버 전체에서 동시에 나가는 호출이 이 수를 넘지 않는다
+      LLM_QUEUE_TIMEOUT_SEC  상한 때문에 기다리는 최대 시간. 0(기본)이면 끝까지 기다린다
+      LLM_QUEUE_WARN_SEC     이만큼 이상 기다린 호출은 경고 로그 (기본 10)"""
+    env = os.environ if env is None else env
+
+    def number(key, default, cast, low, high):
+        v = (env.get(key) or "").strip()
+        if not v:
+            return default
+        try:
+            n = cast(v)
+        except ValueError:
+            raise ConfigError(f"{key} 는 {low} 이상 {high} 이하의 숫자여야 함: {v}")
+        if not low <= n <= high:
+            raise ConfigError(f"{key} 는 {low} 이상 {high} 이하의 숫자여야 함: {v}")
+        return n
+
+    limit = number("LLM_MAX_CONCURRENT", 0, int, 0, CALL_LIMIT_MAX)
+    queue_timeout = number("LLM_QUEUE_TIMEOUT_SEC", 0.0, float, 0.0, 3600.0)
+    warn = number("LLM_QUEUE_WARN_SEC", 10.0, float, 0.0, 3600.0)
+    return limit, queue_timeout, warn
+
+
 DEFAULT_RETAIN_SEC = 3600
 EVICTED_MAX = 10000                  # 정리한 회의 번호를 기억하는 최대 개수
 
@@ -361,7 +390,7 @@ class Registry:
                  summarize_cfg=None, summarize_llm=None, status_cfg=None, status_llm=None,
                  opinion_cfg=None, opinion_llm=None, todo_cfg=None, todo_llm=None, offtopic_cfg=None, offtopic_llm=None,
                  parallel=None, coalesce_max=None, terms_cfg=None, terms_llm=None, terms_glossary=None,
-                 retain_sec=None, clock=None):
+                 retain_sec=None, clock=None, call_limit=None):
         self.cfg = cfg
         self.llm = llm                      # 시험용: 모델 호출 대신 쓸 함수
         self.publisher = publisher
@@ -385,6 +414,11 @@ class Registry:
         self.terms_llm = terms_llm          # 시험용: 용어 후보 찾기에서 모델 호출 대신 쓸 함수
         self.parallel = parallel_from_env(self.env) if parallel is None else bool(parallel)   # 안건 단계를 동시에 돌릴지
         self.coalesce_max = coalesce_from_env(self.env) if coalesce_max is None else int(coalesce_max)   # 밀린 묶음을 한 번에 처리할 최대 개수
+        self.call_limit = call_limit_from_env(self.env) if call_limit is None else tuple(call_limit)   # 모델 호출 전체 동시 수 상한
+        CALL_LIMITER.configure(*self.call_limit)
+        if self.call_limit[0]:
+            log.info("모델 호출 전체 동시 수 상한 %d (기다리는 최대 %s초, 경고 %s초)", self.call_limit[0],
+                     self.call_limit[1] or "제한 없음", self.call_limit[2])
         self.shutting_down = False
         self.meetings = {}
         self.retain_sec = retain_from_env(self.env) if retain_sec is None else int(retain_sec)   # 끝난 회의를 남겨 두는 시간 (0 이면 정리 안 함)

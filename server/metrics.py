@@ -60,6 +60,18 @@ class Metrics:
             attributes["error.type"] = error_type
         self.operation_duration.record(float(duration_seconds), attributes)
 
+    def watch_call_limiter(self, limiter):
+        """모델 호출 전체 동시 수 상한(summary/call_limit.py)의 현재 값을 지표로 내보낸다. 상한을 켜기 전에도 세기 때문에
+        DEV 에서 동시에 몇 개가 나가는지(in_flight_peak) 재서 상한을 정하는 데 쓴다."""
+        from opentelemetry.metrics import Observation
+        meter = self.provider.get_meter("nineouting.ai_service")
+        for name, key, desc in (("ai.llm.calls.in_flight", "inFlight", "지금 나가 있는 회의 중 모델 호출 수"),
+                                ("ai.llm.calls.waiting", "waiting", "동시 수 상한 때문에 기다리는 모델 호출 수"),
+                                ("ai.llm.calls.in_flight_peak", "peak", "서버를 켠 뒤 동시에 나가 있던 모델 호출의 최대 수"),
+                                ("ai.llm.calls.limit", "limit", "모델 호출 전체 동시 수 상한 (0 이면 상한 없음)")):
+            meter.create_observable_gauge(name, callbacks=[lambda options, k=key: [Observation(limiter.snapshot()[k])]],
+                                          unit="{call}", description=desc)
+
     def shutdown(self):
         self.provider.shutdown()
 

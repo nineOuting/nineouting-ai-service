@@ -1,15 +1,16 @@
-# Analysis only: no model/dependency deletion, registry publishing or deployment.
-name: SCRUM-357 AI image analysis
+# Unchanged control: same pinned source and checks in both arms.
+# Read-only existing Docker cache; no publishing, AWS authentication, GitOps or deployment.
+name: SCRUM-357 AI unchanged CI comparison
 'on':
   pull_request:
     branches:
     - develop
     paths:
-    - .github/workflows/scrum-357-analysis.yml
+    - .github/workflows/scrum-357-controls.yml
 permissions:
   contents: read
 jobs:
-  analysis:
+  measure:
     strategy:
       fail-fast: false
       matrix:
@@ -17,9 +18,20 @@ jobs:
         - platform: linux/amd64
           runner: ubuntu-latest
           pair: linux-amd64
+          variant: before
         - platform: linux/arm64
           runner: ubuntu-24.04-arm
           pair: linux-arm64
+          variant: before
+        - platform: linux/amd64
+          runner: ubuntu-latest
+          pair: linux-amd64
+          variant: after
+        - platform: linux/arm64
+          runner: ubuntu-24.04-arm
+          pair: linux-arm64
+          variant: after
+      max-parallel: 2
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -64,27 +76,6 @@ jobs:
       env:
         PUBLISH_REAL_DOCKER: '1'
         REAL_DOCKER_TEST_IMAGE: nineouting-verified:local
-    - name: Measure image components without changing files
-      run: 'mkdir -p size-evidence
-
-        docker image inspect nineouting-verified:local --format ''{{.Size}}'' > size-evidence/total-bytes.txt
-
-        docker history --no-trunc --format ''{{.Size}} {{.CreatedBy}}'' nineouting-verified:local > size-evidence/layers.txt
-
-        docker run --rm --network none nineouting-verified:local sh -c ''du -x -k -d 1 /usr/local/lib/python3.12/site-packages
-        /models /app 2>/dev/null | sort -n'' > size-evidence/directories-kib.txt
-
-        docker run --rm --network none nineouting-verified:local python -m pip list --format=json > size-evidence/packages.json
-
-        cat size-evidence/total-bytes.txt size-evidence/directories-kib.txt
-
-        '
-    - name: Save size evidence
-      uses: actions/upload-artifact@v4
-      with:
-        name: ai-size-${{ matrix.pair }}
-        path: size-evidence/
-        retention-days: 7
     - name: Remove measurement image
       if: always()
       run: docker image rm nineouting-verified:local || true

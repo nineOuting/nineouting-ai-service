@@ -729,6 +729,69 @@ def test_classify_config():
         pass
 
 
+def test_cache_usage():
+    """프롬프트 캐시 사용량: 공급자별 응답에서 읽기·쓰기 토큰을 꺼내고, 지표 훅으로 내보내며, 알 수 없으면 센 척하지 않는다"""
+    from types import SimpleNamespace as NS
+    import meeting_summary as ms
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+    from .metrics import Metrics
+
+    openai_r = lambda **d: NS(usage=NS(prompt_tokens=1500, completion_tokens=200, prompt_tokens_details=NS(**d) if d is not None else None))
+    # 공급자별로 꺼내는 값
+    assert ms.cache_usage_of("openai", openai_r(cached_tokens=1024, cache_write_tokens=0)) == (1024, 0)
+    assert ms.cache_usage_of("openai", openai_r(cached_tokens=0)) == (0, None)                 # 쓰기 칸이 없으면 모름(None)
+    assert ms.cache_usage_of("openai", openai_r(cached_tokens=None, cache_write_tokens=300)) == (0, 300)
+    assert ms.cache_usage_of("openai", NS(usage=NS(prompt_tokens=10, completion_tokens=1))) is None     # 캐시 칸이 없는 응답
+    assert ms.cache_usage_of("openai", NS(usage=NS(prompt_tokens=10, prompt_tokens_details=None))) is None
+    assert ms.cache_usage_of("gemini", NS(usage_metadata=NS(cached_content_token_count=700))) == (700, None)
+    assert ms.cache_usage_of("gemini", NS(usage_metadata=NS())) == (0, None)
+    assert ms.cache_usage_of("anthropic", NS(usage=NS(cache_read_input_tokens=50, cache_creation_input_tokens=400))) == (50, 400)
+    assert ms.cache_usage_of("openai", NS()) is None and ms.cache_usage_of("nope", NS(usage=NS())) is None   # 모양이 다르면 모름
+
+    # report_usage: 두 훅은 서로 영향을 주지 않는다. 지표 오류가 호출을 막지 않는다
+    real_usage, real_cache = ms.USAGE_HOOK, ms.CACHE_HOOK
+    usage_calls, cache_calls = [], []
+    try:
+        ms.USAGE_HOOK, ms.CACHE_HOOK = None, lambda *a: cache_calls.append(a)
+        ms.report_usage("openai", "m", "t", openai_r(cached_tokens=900))
+        assert cache_calls == [("openai", "m", "t", 900, None)], cache_calls                      # 사용량 훅이 없어도 캐시는 센다
+        ms.USAGE_HOOK, ms.CACHE_HOOK = lambda *a: usage_calls.append(a), None
+        ms.report_usage("openai", "m", "t", openai_r(cached_tokens=900))
+        assert usage_calls == [("openai", "m", "t", 1500, 200)] and len(cache_calls) == 1          # 캐시 훅이 없어도 사용량은 센다
+        ms.USAGE_HOOK, ms.CACHE_HOOK = lambda *a: 1 / 0, lambda *a: 1 / 0
+        ms.report_usage("openai", "m", "t", openai_r(cached_tokens=900))                         # 훅이 예외를 내도 조용히 넘어간다
+        cache_calls.clear()
+        ms.USAGE_HOOK, ms.CACHE_HOOK = None, lambda *a: cache_calls.append(a)
+        ms.report_usage("openai", "m", "t", NS(usage=NS(prompt_tokens=10, completion_tokens=1)))
+        assert cache_calls == [], "캐시 칸이 없는 응답을 0으로 셈"
+        ms.report_usage("openai", "m", "t", openai_r(cached_tokens=0))
+        assert cache_calls == [("openai", "m", "t", 0, None)], "0 도 센다 (적중률 계산에 필요)"
+    finally:
+        ms.USAGE_HOOK, ms.CACHE_HOOK = real_usage, real_cache
+
+    # 지표: 카운터에 더해지고, 모르는 값은 더하지 않는다. 속성은 토큰 사용량 지표와 같다
+    reader = InMemoryMetricReader()
+    m = Metrics([reader])
+    m.record_cache_usage("openai", "gpt-x", "agenda_summary", 1024, None)
+    m.record_cache_usage("openai", "gpt-x", "agenda_summary", 0, 300)
+    m.record_cache_usage("openai", "gpt-x", "agenda_status", 512, 0)
+    m.record_cache_usage("openai", "gpt-x", "agenda_todos", 10, None)
+    pts = {}
+    for rm in reader.get_metrics_data().resource_metrics:
+        for sm in rm.scope_metrics:
+            for met in sm.metrics:
+                assert met.unit == "{token}", met.name
+                for dp in met.data.data_points:
+                    a = dict(dp.attributes)
+                    pts[(met.name, a["ai.task"])] = (dp.value, a["gen_ai.provider.name"], a["gen_ai.request.model"], a["gen_ai.operation.name"])
+    assert pts[("ai.llm.input_tokens.cache_read", "agenda_summary")] == (1024, "openai", "gpt-x", "chat"), pts
+    assert pts[("ai.llm.input_tokens.cache_write", "agenda_summary")][0] == 300, pts               # 쓰기를 모르는 호출(None)은 더하지 않음
+    assert pts[("ai.llm.input_tokens.cache_read", "agenda_status")][0] == 512, pts
+    assert pts[("ai.llm.input_tokens.cache_write", "agenda_status")][0] == 0, pts
+    assert pts[("ai.llm.input_tokens.cache_read", "agenda_todos")][0] == 10 and ("ai.llm.input_tokens.cache_write", "agenda_todos") not in pts, pts   # 쓰기를 모르는 호출은 점도 만들지 않음
+    m.shutdown()
+
+
 def test_metrics():
     from opentelemetry.sdk.metrics.export import InMemoryMetricReader
     from .metrics import Metrics
@@ -2708,6 +2771,7 @@ def main():
     test_rejects_and_warnings()
     test_failure_does_not_stop_worker()
     test_metrics()
+    test_cache_usage()
     test_llm_operation_hook()
     test_api()
     test_api_agenda()

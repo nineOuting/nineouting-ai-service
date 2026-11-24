@@ -286,6 +286,7 @@ def plain_number_issues(text, stream):
 # --------------------------------------------------------------------------------------
 USAGE_HOOK = None    # 서버가 지정한다: fn(provider, model, task, input_tokens, output_tokens). 토큰 사용량 지표용
 OPERATION_HOOK = None  # 서버가 지정한다: fn(provider, model, task, duration_seconds, error_type)
+CACHE_HOOK = None      # 서버가 지정한다: fn(provider, model, task, cache_read_tokens, cache_write_tokens). 프롬프트 캐시 사용량 지표용. 알 수 없는 값은 None
 
 
 def usage_of(provider, r):
@@ -303,16 +304,39 @@ def usage_of(provider, r):
     return None, None
 
 
-def report_usage(provider, model, task, r):
-    if USAGE_HOOK is None:
-        return
-    tin, tout = usage_of(provider, r)
-    if tin is None and tout is None:
-        return
+def cache_usage_of(provider, r):
+    """모델 응답 객체에서 프롬프트 캐시 사용량 (캐시에서 읽은 입력 토큰, 캐시에 쓴 입력 토큰). 응답에 캐시 칸이 없으면 None.
+    각 값은 알 수 없으면 None. 캐시에서 읽은 입력은 일반 입력보다 싸고, 캐시에 쓴 입력은 일반 입력보다 비쌀 수 있다(공급자 가격표 확인 필요)."""
     try:
-        USAGE_HOOK(provider, model, task, tin or 0, tout or 0)
-    except Exception:
-        pass                                # 지표 오류가 요약을 막으면 안 된다
+        if provider == "openai":
+            d = getattr(r.usage, "prompt_tokens_details", None)
+            if d is None:
+                return None
+            return getattr(d, "cached_tokens", None) or 0, getattr(d, "cache_write_tokens", None)
+        if provider == "gemini":
+            return getattr(r.usage_metadata, "cached_content_token_count", None) or 0, None
+        if provider == "anthropic":
+            return getattr(r.usage, "cache_read_input_tokens", None) or 0, getattr(r.usage, "cache_creation_input_tokens", None)
+    except AttributeError:
+        pass
+    return None
+
+
+def report_usage(provider, model, task, r):
+    if USAGE_HOOK is not None:
+        tin, tout = usage_of(provider, r)
+        if tin is not None or tout is not None:
+            try:
+                USAGE_HOOK(provider, model, task, tin or 0, tout or 0)
+            except Exception:
+                pass                        # 지표 오류가 요약을 막으면 안 된다
+    if CACHE_HOOK is not None:
+        cache = cache_usage_of(provider, r)
+        if cache is not None:
+            try:
+                CACHE_HOOK(provider, model, task, cache[0], cache[1])
+            except Exception:
+                pass                        # 지표 오류가 요약을 막으면 안 된다
 
 
 def report_operation(provider, model, task, duration_seconds, error_type=None):

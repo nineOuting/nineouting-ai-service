@@ -61,6 +61,40 @@ class MinutesRuntime:
         self.pool.close()
 
 
+def _import_router(env, llm, config_error, request_id_header, prefix):
+    """양식 가져오기(SCRUM-289)의 주소. 초안과 같은 AI(MINUTES_LLM_*)를 쓴다. 이 쪽 설정(MINUTES_IMPORT_*)이 틀려도
+    회의록 초안은 멈추지 않고 이 주소만 503 으로 답한다. 초안 쪽 AI 설정이 틀리면 이 주소도 같이 503 이다. DB 는 쓰지 않는다.
+      MINUTES_IMPORT_TIMEOUT_S        AI 호출 하나의 시간 제한 (기본 30초)
+      MINUTES_IMPORT_MAX_MB           받는 파일 크기 상한 (기본 20MB)
+      MINUTES_IMPORT_MAX_CONCURRENT   동시에 처리하는 양식 수 (기본 4). 넘으면 503 BUSY
+      MINUTES_IMPORT_PROMPT_VERSION   지시문 버전 (기본 v1)
+      RAG_UPLOAD_ALLOWED_HOSTS        파일을 받을 수 있는 저장소 (RAG 업로드와 같은 설정. 없으면 503 NOT_READY)
+    """
+    from dataclasses import replace
+
+    from rag.download import UPLOAD_OFF, settings_from_env
+
+    from .import_api import DEFAULT_MAX_CONCURRENT, make_import_router
+    from .placement import load_prompt
+    from .template_import import KIND as IMPORT_KIND
+
+    prompt, upload, timeout_s, max_concurrent, import_error = None, UPLOAD_OFF, 30.0, DEFAULT_MAX_CONCURRENT, config_error
+    if llm is not None:
+        try:
+            prompt = load_prompt(env.get("MINUTES_IMPORT_PROMPT_VERSION") or None, IMPORT_KIND)
+            upload = replace(settings_from_env(env), max_bytes=int(float(env.get("MINUTES_IMPORT_MAX_MB") or 20) * 1024 * 1024))
+            timeout_s = float(env.get("MINUTES_IMPORT_TIMEOUT_S") or timeout_s)
+            max_concurrent = int(env.get("MINUTES_IMPORT_MAX_CONCURRENT") or max_concurrent)
+        except ValueError as e:
+            import_error = str(e)
+            log.error("양식 가져오기 설정 오류: %s", e)
+        else:
+            log.info("양식 가져오기 지시문 %s, 파일 받기 %s, 상한 %dMB, 시간 제한 %.0f초, 동시 %d개", prompt.version,
+                     "켬" if upload.enabled else "끔 (RAG_UPLOAD_ALLOWED_HOSTS 없음)", upload.max_bytes // (1024 * 1024), timeout_s,
+                     max_concurrent)
+    return make_import_router(llm, timeout_s, upload, prompt, import_error, max_concurrent, request_id_header, prefix)
+
+
 def setup(app, env) -> MinutesRuntime:
     from psycopg_pool import ConnectionPool
 
@@ -104,6 +138,8 @@ def setup(app, env) -> MinutesRuntime:
                  "" if isinstance(llm, FallbackLLM) else " (폴백 없음)", prompt.version,
                  relayout_prompt.version, table_prompt.version, correction_prompt.version, polish_prompt.version)
 
-    app.include_router(make_router(pool, allowed, env.get("MINUTES_REQUEST_ID_HEADER", REQUEST_ID_HEADER),
-                                   env.get("MINUTES_API_PREFIX", PREFIX), config_error=config_error))
+    request_id_header = env.get("MINUTES_REQUEST_ID_HEADER", REQUEST_ID_HEADER)
+    prefix = env.get("MINUTES_API_PREFIX", PREFIX)
+    app.include_router(make_router(pool, allowed, request_id_header, prefix, config_error=config_error))
+    app.include_router(_import_router(env, llm, config_error, request_id_header, prefix))
     return MinutesRuntime(pool, env, llm, prompt, relayout_prompt, table_prompt, correction_prompt, polish_prompt)

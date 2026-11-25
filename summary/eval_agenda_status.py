@@ -15,7 +15,11 @@
   - 결정 확인 필요 정밀도: DECISION_CHECK 로 낸 안건 중 정답이 DECIDED 나 DECISION_CHECK 인 비율
   - 근거 줄: 낸 근거가 그 안건의 정답 줄인 비율, 정답 근거와 겹치는지
   - 호출 수, 비용 추정
-결과 JSON 에는 전사와 이유 문장을 넣지 않는다 (상태와 줄 번호만).
+칸마다 "확인 필요" 표시(needsCheck)가 켜졌는지도 적는다 (점수에는 넣지 않는다).
+
+결과 JSON 에는 기본으로 전사와 이유 문장을 넣지 않는다 (상태, 표시, 줄 번호만).
+--save-text 를 주면 --out 파일에만 안건 제목, 칸마다 보드의 판정 문장, 모델 응답 원문을 더 적는다 (왜 틀렸는지 볼 때).
+회의 내용이 들어가므로 --out 은 커밋하지 않는 폴더(data/)에 두고 공유하지 않는다. 화면(표준 출력)에는 --save-text 여도 내지 않는다.
 
 사용
   # 모델 호출 없이 호출 수와 비용 추정만 (기본, 비용 0)
@@ -60,11 +64,18 @@ class StatusRecorder:
     def __init__(self, inner, dry):
         self.inner, self.dry = inner, dry
         self.calls, self.in_chars = 0, 0
+        self.responses = []              # --save-text 일 때만 결과 파일에 쓴다
 
     def __call__(self, user):
         self.calls += 1
         self.in_chars += len(ast.SYSTEM_PROMPT) + len(user)
-        return ast.echo_llm(user) if self.dry else self.inner(user)
+        raw = ast.echo_llm(user) if self.dry else self.inner(user)
+        title = next((ln[len("제목: "):] for ln in user.split("\n") if ln.startswith("제목: ")), "")
+        lines = user.split("[전사]\n", 1)[-1].split("\n\n", 1)[0].split("\n")
+        # 어느 안건을 어디까지 보고 낸 응답인지: 안건 제목, 보낸 줄 수, 마지막 줄의 시각. 응답은 잠긴 결정에 가려지기 전의 원문이다
+        self.responses.append({"call": self.calls, "agendaTitle": title, "lines": len(lines),
+                               "lastLineAt": (lines[-1].split("] ", 1)[-1].split(" ", 1)[0] if lines else ""), "response": raw})
+        return raw
 
 
 def load_dotenv(path):
@@ -146,7 +157,9 @@ def score(snaps, points, gold):
             ok_s = pred == t["status"]
             ok_l = ok_s or pred in t.get("alsoOk", [])
             pairs += 1; strict += ok_s; lenient += ok_l
-            row[aid] = {"truth": t["status"], "pred": pred, "strict": ok_s, "lenient": ok_l}
+            row[aid] = {"truth": t["status"], "pred": pred, "strict": ok_s, "lenient": ok_l,
+                        # 화면의 "확인 필요" 표시 (잠긴 결정을 뒤집는 말 등). 점수에는 넣지 않고 기록만 한다
+                        "needsCheck": any(pt.get("needsCheck") for pt in got[aid].get("points", []))}
         per_point[p["id"]] = row
     end = next(p for p in points if p["id"] == "END")
     missed, false_dec, check_total, check_ok, ev_total, ev_in, ev_overlap, ev_need = [], [], 0, 0, 0, 0, 0, 0
@@ -202,10 +215,14 @@ def main():
     ap.add_argument("--show-uncertain", action="store_true", help="낮은 확신도 줄을 [불확실] 표시를 달아 모델에 보여 준다(기본은 빼기). 전후 비교용")
     ap.add_argument("--use-draft", action="store_true", help="확정 전 정답·라벨 초안을 쓴다 (점검용)")
     ap.add_argument("--out", help="결과 JSON 경로 (유료 실행은 이미 있으면 거부)")
+    ap.add_argument("--save-text", action="store_true", help="--out 파일에 판정 문장과 모델 응답 원문도 적는다 (회의 내용 포함. 커밋·공유 금지). 화면에는 내지 않는다")
     a = ap.parse_args()
     global SHOW_UNCERTAIN, MIN_NEW_LINES
     SHOW_UNCERTAIN = a.show_uncertain
     MIN_NEW_LINES = a.min_new_lines
+
+    if a.save_text and not a.out:
+        sys.exit("--save-text 는 --out 과 함께 씁니다 (판정 문장은 화면에 내지 않습니다)")
 
     paid = a.provider != "echo" and not a.dry_run
     if paid and not a.paid_ok:
@@ -229,6 +246,7 @@ def main():
     gold, _unsure = ea.load_labels(a.labels, a.use_draft)
     points, confirmed = load_truth(a.truth, a.use_draft)
     dry = a.dry_run or a.provider == "echo"
+    texts = {}                       # 방식 -> 판정 문장과 응답 원문 (--save-text 일 때만 파일에 쓴다)
     result = {"provider": a.provider, "model": a.model, "dryRun": dry, "showUncertain": a.show_uncertain, "minNewLines": a.min_new_lines or ast.StatusCfg().min_new_lines, "labels": len(gold), "truthConfirmed": confirmed,
               "criteria": CRITERIA, "modes": {}}
     total = {"usd": 0.0, "krw": 0, "calls": 0}
@@ -246,6 +264,11 @@ def main():
             r["score"] = score(snaps, points, gold)
             r["pass"] = judge_pass(r["score"], mode)
         result["modes"][mode] = r
+        if a.save_text:
+            texts[mode] = {"board": {pid: {aid: {"status": g["status"], "points": [{k: pt.get(k) for k in ("status", "decisionText", "needsCheck", "evidenceSeqs")}
+                                                                                    for pt in g.get("points", [])]}
+                                           for aid, g in snap.items()} for pid, snap in snaps.items()},
+                           "responses": srec.responses}
         total["usd"] += st_cost["usd"] + (cls_cost["usd"] if cls_cost else 0)
         total["krw"] += st_cost["krw"] + (cls_cost["krw"] if cls_cost else 0)
         total["calls"] += srec.calls + crec.calls
@@ -254,7 +277,7 @@ def main():
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         with open(a.out, "w", encoding="utf-8") as f:
-            f.write(text)
+            f.write(json.dumps(dict(result, texts=texts), ensure_ascii=False, indent=2) if a.save_text else text)
     print(text)
     if any("invalid" in r for r in result["modes"].values()):
         print("\n[경고] 모델 호출이 멈춘 모드가 있어 결과가 유효하지 않습니다. 원인을 고친 뒤 새 파일 이름으로 다시 돌려야 합니다.", file=sys.stderr)

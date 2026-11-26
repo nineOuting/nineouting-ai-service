@@ -31,8 +31,8 @@ def todos():
     return [m for m in build_materials(body["agendas"], body["summary"]) if m.kind == "todo"]
 
 
-def table_field(title="할 일", columns=4, description=""):
-    return {"title": title, "description": description, "type": "table", "columns": columns, "aiFill": True}
+def table_field(title="할 일", columns=4, description="", **extra):
+    return {"title": title, "description": description, "type": "table", "columns": columns, "aiFill": True, **extra}
 
 
 def text_field(title):
@@ -79,7 +79,7 @@ def test_AI_입력에서_꺾쇠를_바꾸고_지난_답의_문제를_붙인다(t
 
 def test_지시문을_읽는다():
     prompt = load_prompt(kind=TABLE_KIND)
-    assert prompt.version == "table-v1" and "columns" in prompt.text and "STT 불확실" in prompt.text
+    assert prompt.version == "table-v2" and "columns" in prompt.text and "STT 불확실" in prompt.text
 
 
 # ---- 답 검사
@@ -280,3 +280,83 @@ def test_AI가_채우는_표_필드를_받고_글_필드의_columns는_보지_�
     validate_request(v08(load_request(), fields_with_table()))
     validate_request(v08(load_request(), fields_with_table(columns=None)))
     validate_request(v08(load_request(), [dict(text_field("메모"), columns="아무 값")]))
+
+
+# ---- 사용자가 정한 열 이름 (명세 5.8 columnNames)
+
+def test_정한_열_이름은_AI_입력에_자리마다_보이고_빈_자리는_AI가_정한다(todos):
+    text = build_user(Field("할 일", type="table", columns=4, column_names=("안건", "", "<담당>", "")), todos)
+    assert "<열>\n1번 열: 안건 (정해짐)\n2번 열: (AI가 정함)\n3번 열: ‹담당› (정해짐)\n4번 열: (AI가 정함)\n</열>\n<재료>" in text
+    assert "<열 개수>" not in text
+
+
+def test_정한_열_이름과_다르게_답하면_걸리고_같으면_그대로_쓴다(todos):
+    fixed = ("안건", "", "담당", "")
+    assert check(TODO_TABLE, todos, 4, fixed)[1] == []
+    answer = dict(TODO_TABLE, columns=["안건", "할 일", "담당자", "기한"])
+    assert check(answer, todos, 4, fixed)[1] == ['3번째 열 이름은 정해진 대로 "담당"여야 함']
+    answer = dict(TODO_TABLE, columns=["담당", "할 일", "안건", "기한"])                # 자리가 바뀌어도 걸린다
+    assert len(check(answer, todos, 4, fixed)[1]) == 2
+
+
+def test_열을_모두_정한_표는_빈_행과_내용_없는_행을_허용한다(todos):
+    empty = {"columns": ["예산", "비고"], "rows": [{"m": m.ref, "cells": ["", ""]} for m in todos]}
+    assert any("칸이 모두 비었음" in p for p in check(empty, todos, 2)[1])          # AI 가 정한 열이면 걸린다
+    assert any("칸이 모두 비었음" in p for p in check(empty, todos, 2, ("예산", ""))[1])   # 하나라도 AI 가 정하면 걸린다
+    table, problems = check(empty, todos, 2, ("예산", "비고"))
+    assert problems == [] and table.rows["m4"] == ("", "")
+    labels = {"columns": ["안건", "종류"], "rows": [{"m": m.ref, "cells": [m.agenda_title, "할 일"]} for m in todos]}
+    assert check(labels, todos, 2, ("안건", "종류"))[1] == []
+    wrong = {"columns": ["예산", "비고"], "rows": [{"m": m.ref, "cells": ["없는 글", ""]} for m in todos]}
+    assert any("재료 조각에 없음" in p for p in check(wrong, todos, 2, ("예산", "비고"))[1])   # 칸 값 검사는 그대로
+
+
+@pytest.mark.parametrize("names", [None, [], ["", "", "", ""], ["  ", "", "", ""]])
+def test_열_이름이_없거나_모두_비면_모든_열을_AI가_정한다(names):
+    body = v08(load_request(), fields_with_table(columnNames=names))
+    validate_request(body)
+    llm = ScriptLLM(GOOD, TODO_TABLE)
+    assert make_draft(body, llm)["status"] == SUCCEEDED and "<열 개수>4</열 개수>" in llm.calls[1][1]
+
+
+def test_정한_열_이름은_결과의_열이_된다():
+    body = v08(load_request(), fields_with_table(columnNames=[" 안건 ", "", "담당", ""]))
+    validate_request(body)
+    llm = ScriptLLM(GOOD, TODO_TABLE)
+    result = make_draft(body, llm)
+    assert result["status"] == SUCCEEDED and result["sections"][3]["columns"] == ["안건", "할 일", "담당", "기한"]
+    assert "1번 열: 안건 (정해짐)" in llm.calls[1][1]
+
+
+def test_정한_열_이름과_다르게_답하면_다시_시킨다():
+    body = v08(load_request(), fields_with_table(columnNames=["안건", "", "담당자", ""]))
+    llm = ScriptLLM(GOOD, TODO_TABLE, dict(TODO_TABLE, columns=["안건", "할 일", "담당자", "기한"]))
+    result = make_draft(body, llm)
+    assert result["status"] == SUCCEEDED and result["sections"][3]["columns"] == ["안건", "할 일", "담당자", "기한"]
+    assert '3번째 열 이름은 정해진 대로 "담당자"여야 함' in llm.calls[2][1]
+
+
+@pytest.mark.parametrize("names, expected", [
+    ("안건", "columnNames는 문자열 목록"),
+    (["안건", 3, "", ""], "columnNames는 문자열 목록"),
+    (["안건", "담당"], "columnNames는 columns와 같은 개수"),
+    (["안건", "", "", "", ""], "columnNames는 columns와 같은 개수"),
+    (["안건", "가" * 31, "", ""], "columnNames[1]는 30자 이하"),
+    (["안건", "담당|기한", "", ""], "columnNames[1]에 | 나 줄바꿈"),
+    (["안건", "담\n당", "", ""], "columnNames[1]에 | 나 줄바꿈"),
+    (["안건", "", " 안건", ""], "columnNames[2]가 앞의 열 이름과 겹침"),
+])
+def test_열_이름이_틀리면_400(names, expected):
+    with pytest.raises(InvalidInput, match=re.escape(f"template.fields[3].{expected}")):
+        validate_request(v08(load_request(), fields_with_table(columnNames=names)))
+
+
+def test_열_수가_없는데_열_이름이_있으면_400():
+    with pytest.raises(InvalidInput, match="columns와 같은 개수"):
+        validate_request(v08(load_request(), fields_with_table(columns=None, columnNames=["안건"])))
+
+
+def test_사용자가_채우는_표와_글_필드의_열_이름은_읽지_않는다():
+    user_table = dict(table_field(), aiFill=False, content="| 가 |\n|---|", columnNames="아무 값")
+    fields = [text_field(ITEMS[0]), dict(text_field(ITEMS[1]), columnNames=[1]), text_field(ITEMS[2]), user_table]
+    validate_request(v08(load_request(), fields))

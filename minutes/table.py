@@ -1,9 +1,11 @@
 """AI 가 채우는 표 필드 (명세 7.6). 배치가 끝난 뒤 표 필드마다 AI 를 한 번 더 불러 열 이름과 칸 값을 정한다.
 
-  AI 에게 주는 글   <필드> 이름, <설명>(있으면), <열 개수>, <재료> m 번호마다 이름 붙은 조각 (materials.py 의 parts)
+  AI 에게 주는 글   <필드> 이름, <설명>(있으면), <열 개수> 또는 <열>(사용자가 열 이름을 정했을 때. 열마다 이름 또는 "AI가 정함"),
+                    <재료> m 번호마다 이름 붙은 조각 (materials.py 의 parts)
   AI 의 답          {"columns": [...], "rows": [{"m", "cells": [...]}]}
-  검사              모양, 열 수·이름, 재료마다 한 행, 칸 수, 칸 값이 그 재료의 조각에 있는지, STT 표시, 빈 행,
-                    내용 없는 행(안건·종류뿐), | 와 줄바꿈
+  검사              모양, 열 수·이름(정해진 열은 받은 이름 그대로), 재료마다 한 행, 칸 수, 칸 값이 그 재료의 조각에 있는지,
+                    STT 표시, 빈 행, 내용 없는 행(안건·종류뿐), | 와 줄바꿈.
+                    열 이름을 사용자가 모두 정한 표는 빈 행·내용 없는 행을 허용한다 (열이 재료와 맞지 않으면 AI 가 채울 수 없으므로)
   다시 시키기       배치와 같다 (placement.ask)
 
 배치와 한 번에 하지 않는 것은 실제 요약으로 맞춰 둔 배치 품질을 흔들지 않기 위해서다.
@@ -28,8 +30,13 @@ def build_user(field: Field, materials: list[Material], problems: list[str] = ()
     parts = [f"<필드>{_quote(field.title)}</필드>"]
     if field.description.strip():
         parts.append(f"<설명>{_quote(_one_line(field.description.strip()))}</설명>")
-    count = str(field.columns) if field.columns else f"1~{MAX_COLUMNS} 중에서 정함"
-    parts += [f"<열 개수>{count}</열 개수>", "<재료>"]
+    if field.column_names:
+        parts += ["<열>", *(f"{i}번 열: " + (f"{_quote(name)} (정해짐)" if name else "(AI가 정함)")
+                            for i, name in enumerate(field.column_names, 1)), "</열>"]
+    else:
+        count = str(field.columns) if field.columns else f"1~{MAX_COLUMNS} 중에서 정함"
+        parts.append(f"<열 개수>{count}</열 개수>")
+    parts.append("<재료>")
     for m in materials:
         parts.append(m.ref)
         parts += [f"  {name}: {_quote(_one_line(value))}" for name, value in m.parts]
@@ -39,12 +46,14 @@ def build_user(field: Field, materials: list[Material], problems: list[str] = ()
     return "\n".join(parts)
 
 
-def check(data, materials: list[Material], columns: int | None) -> tuple[Table | None, list[str]]:
-    """(표, 문제 목록). 문제가 하나라도 있으면 표는 None."""
+def check(data, materials: list[Material], columns: int | None,
+          fixed: tuple[str, ...] = ()) -> tuple[Table | None, list[str]]:
+    """(표, 문제 목록). 문제가 하나라도 있으면 표는 None. fixed 는 사용자가 정한 열 이름 ("" 는 AI 가 정함)."""
     if not isinstance(data, dict) or not isinstance(data.get("columns"), list) or not isinstance(data.get("rows"), list):
         return None, ['답이 {"columns": [...], "rows": [...]} 모양의 JSON이 아님']
     names = data["columns"]
-    problems = _column_problems(names, columns)
+    problems = _column_problems(names, columns, fixed)
+    all_fixed = bool(fixed) and all(fixed)
     by_ref = {m.ref: m for m in materials}
     rows, seen = {}, {}
     for row in data["rows"]:
@@ -56,7 +65,7 @@ def check(data, materials: list[Material], columns: int | None) -> tuple[Table |
             problems.append(f"없는 재료 번호 {ref}")
             continue
         seen[ref] = seen.get(ref, 0) + 1
-        found = _row_problems(by_ref[ref], cells, names)
+        found = _row_problems(by_ref[ref], cells, names, allow_empty=all_fixed)
         problems += found
         if not found:
             rows[ref] = tuple(c.strip() for c in cells)
@@ -71,7 +80,7 @@ def fill(field: Field, materials: list[Material], llm, timeout_s: float, max_ret
          prompt: Prompt | None = None, call_retries: int = 1) -> Outcome:
     """그 표 필드에 놓인 재료(1개 이상)로 표를 채운다. 성공하면 Outcome.placement 가 Table 이다."""
     return ask(prompt or load_prompt(kind=TABLE_KIND), lambda problems: build_user(field, materials, problems),
-               lambda data: check(data, materials, field.columns), llm, timeout_s, max_retries, call_retries)
+               lambda data: check(data, materials, field.columns, field.column_names), llm, timeout_s, max_retries, call_retries)
 
 
 def markdown(table: Table, rows: list[tuple[str, ...]]) -> str:
@@ -84,10 +93,14 @@ def _md_row(cells) -> str:
     return "| " + " | ".join(cells) + " |"
 
 
-def _column_problems(names, columns) -> list[str]:
+def _column_problems(names, columns, fixed=()) -> list[str]:
     problems = []
     if columns and len(names) != columns:
         problems.append(f"열이 {columns}개가 아니라 {len(names)}개임")
+    elif fixed:
+        for i, (want, name) in enumerate(zip(fixed, names), 1):
+            if want and (not isinstance(name, str) or name.strip() != want):
+                problems.append(f'{i}번째 열 이름은 정해진 대로 "{want}"여야 함')
     elif not columns and not 1 <= len(names) <= MAX_COLUMNS:
         problems.append(f"열이 1~{MAX_COLUMNS}개가 아님 ({len(names)}개)")
     seen = set()
@@ -105,12 +118,13 @@ def _column_problems(names, columns) -> list[str]:
     return problems
 
 
-def _row_problems(m: Material, cells: list, names: list) -> list[str]:
+def _row_problems(m: Material, cells: list, names: list, allow_empty: bool = False) -> list[str]:
+    """allow_empty: 열 이름을 사용자가 모두 정한 표. 빈 행과 내용 없는 행을 허용한다."""
     if len(cells) != len(names):
         return [f"{m.ref}의 칸이 {len(names)}개가 아니라 {len(cells)}개임"]
     if any(not isinstance(c, str) for c in cells):
         return [f"{m.ref}의 칸 값이 모두 글이어야 함"]
-    if not any(c.strip() for c in cells):
+    if not allow_empty and not any(c.strip() for c in cells):
         return [f"{m.ref}의 칸이 모두 비었음"]
     problems = []
     for name, cell in zip(names, cells):
@@ -126,7 +140,7 @@ def _row_problems(m: Material, cells: list, names: list) -> list[str]:
         elif all(_drops_mark(cell, value) for value in holders):
             problems.append(f'{m.ref}의 "{column}" 칸에서 「」 표시가 빠짐 (표시까지 함께 써야 함)')
     contents = [value for name, value in m.parts if name not in LABEL_PARTS]
-    if not problems and not any(c.strip() and _norm(c) in _norm(v) for c in cells for v in contents):
+    if not problems and not allow_empty and not any(c.strip() and _norm(c) in _norm(v) for c in cells for v in contents):
         # 실제 측정 (2026-10-29, gpt-5.6-luna): 종류가 섞인 표에서 공통 조각인 안건·종류만 열로 삼아 "예산 | 미결" 같은 표가 나옴
         problems.append(f"{m.ref}의 행에 안건·종류·표시 말고 내용이 없음 ({_content_names(m)} 중 하나를 칸에 넣어야 함)")
     return problems

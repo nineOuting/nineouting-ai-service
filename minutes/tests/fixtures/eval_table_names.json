@@ -1,0 +1,105 @@
+{
+ "about": "표 열 이름을 사용자가 정한 경우 (합성, 2026-11-26 columnNames). 요청은 eval_table_mixed 와 같고 양식만 바꾼다. 일부만 정함(정한 자리가 자연스러운 순서와 다름), 모두 정함(재료와 맞는 이름), 모두 정함(재료와 맞지 않는 이름 → 빈 칸 허용), 10열(이름 없음). 배치 정답은 eval_table_mixed 와 같다",
+ "tasks": [
+  {
+   "name": "일부정함",
+   "request": "eval_table_mixed_request.json",
+   "template": {"header": "운영팀 주간 회의", "footer": null, "fields": [
+    {"title": "논의 내용", "description": "", "type": "list", "aiFill": true},
+    {"title": "결정·미결 현황", "description": "안건마다 결정됐는지와 그 내용", "type": "table", "columns": 3, "columnNames": ["안건", "", ""], "aiFill": true},
+    {"title": "할 일", "description": "누가 무엇을 언제까지", "type": "table", "columns": 4, "columnNames": ["담당", "", "", "기한"], "aiFill": true}]},
+   "expect": [
+    {"source": [501, "decision", 5001], "in": ["결정·미결 현황"]},
+    {"source": [501, "undecided", 5002], "in": ["결정·미결 현황"]},
+    {"source": [501, "summary", "c1-s1"], "in": ["논의 내용"]},
+    {"source": [501, "summary", "c1-s2"], "in": ["논의 내용"], "serious": ["결정·미결 현황"]},
+    {"source": [501, "todo", "c1-t1"], "in": ["할 일"]},
+    {"source": [502, "decisionCheck", 5003], "in": ["결정·미결 현황", "논의 내용"]},
+    {"source": [502, "opinion", "c2-o1"], "in": ["논의 내용"]},
+    {"source": [502, "todo", "c2-t1"], "in": ["할 일"]},
+    {"source": [503, "decision", 5004], "in": ["결정·미결 현황"]},
+    {"source": [503, "summary", "c3-s1"], "in": ["논의 내용"]},
+    {"source": [503, "todo", "c3-t1"], "in": ["할 일"]}
+   ],
+   "tables": [
+    {"field": "결정·미결 현황", "columns": 3, "rows": null},
+    {"field": "할 일", "columns": 4, "rows": 3}
+   ]
+  },
+  {
+   "name": "모두정함",
+   "request": "eval_table_mixed_request.json",
+   "template": {"header": "운영팀 주간 회의", "footer": null, "fields": [
+    {"title": "논의 내용", "description": "", "type": "list", "aiFill": true},
+    {"title": "결정·미결 현황", "description": "안건마다 결정됐는지와 그 내용", "type": "table", "columns": 3, "columnNames": ["안건", "상태", "내용"], "aiFill": true},
+    {"title": "할 일", "description": "누가 무엇을 언제까지", "type": "table", "columns": 3, "columnNames": ["할 일", "담당", "기한"], "aiFill": true}]},
+   "expect": [
+    {"source": [501, "decision", 5001], "in": ["결정·미결 현황"]},
+    {"source": [501, "undecided", 5002], "in": ["결정·미결 현황"]},
+    {"source": [501, "summary", "c1-s1"], "in": ["논의 내용"]},
+    {"source": [501, "summary", "c1-s2"], "in": ["논의 내용"], "serious": ["결정·미결 현황"]},
+    {"source": [501, "todo", "c1-t1"], "in": ["할 일"]},
+    {"source": [502, "decisionCheck", 5003], "in": ["결정·미결 현황", "논의 내용"]},
+    {"source": [502, "opinion", "c2-o1"], "in": ["논의 내용"]},
+    {"source": [502, "todo", "c2-t1"], "in": ["할 일"]},
+    {"source": [503, "decision", 5004], "in": ["결정·미결 현황"]},
+    {"source": [503, "summary", "c3-s1"], "in": ["논의 내용"]},
+    {"source": [503, "todo", "c3-t1"], "in": ["할 일"]}
+   ],
+   "tables": [
+    {"field": "결정·미결 현황", "columns": 3, "rows": null},
+    {"field": "할 일", "columns": 3, "rows": 3}
+   ]
+  },
+  {
+   "name": "안맞는이름",
+   "request": "eval_table_mixed_request.json",
+   "template": {"header": "운영팀 주간 회의", "footer": null, "fields": [
+    {"title": "논의 내용", "description": "", "type": "list", "aiFill": true},
+    {"title": "결정·미결 현황", "description": "안건마다 결정됐는지와 그 내용", "type": "table", "columns": null, "aiFill": true},
+    {"title": "할 일", "description": "누가 무엇을 언제까지", "type": "table", "columns": 2, "columnNames": ["예산", "비고"], "aiFill": true}]},
+   "expect": [
+    {"source": [501, "decision", 5001], "in": ["결정·미결 현황"]},
+    {"source": [501, "undecided", 5002], "in": ["결정·미결 현황"]},
+    {"source": [501, "summary", "c1-s1"], "in": ["논의 내용"]},
+    {"source": [501, "summary", "c1-s2"], "in": ["논의 내용"], "serious": ["결정·미결 현황"]},
+    {"source": [501, "todo", "c1-t1"], "in": ["할 일"]},
+    {"source": [502, "decisionCheck", 5003], "in": ["결정·미결 현황", "논의 내용"]},
+    {"source": [502, "opinion", "c2-o1"], "in": ["논의 내용"]},
+    {"source": [502, "todo", "c2-t1"], "in": ["할 일"]},
+    {"source": [503, "decision", 5004], "in": ["결정·미결 현황"]},
+    {"source": [503, "summary", "c3-s1"], "in": ["논의 내용"]},
+    {"source": [503, "todo", "c3-t1"], "in": ["할 일"]}
+   ],
+   "tables": [
+    {"field": "결정·미결 현황", "columns": null, "rows": null},
+    {"field": "할 일", "columns": 2, "rows": 3}
+   ]
+  },
+  {
+   "name": "10열",
+   "request": "eval_table_mixed_request.json",
+   "template": {"header": "운영팀 주간 회의", "footer": null, "fields": [
+    {"title": "논의 내용", "description": "", "type": "list", "aiFill": true},
+    {"title": "결정·미결 현황", "description": "안건마다 결정됐는지와 그 내용", "type": "table", "columns": 10, "aiFill": true},
+    {"title": "할 일", "description": "누가 무엇을 언제까지", "type": "table", "columns": 10, "aiFill": true}]},
+   "expect": [
+    {"source": [501, "decision", 5001], "in": ["결정·미결 현황"]},
+    {"source": [501, "undecided", 5002], "in": ["결정·미결 현황"]},
+    {"source": [501, "summary", "c1-s1"], "in": ["논의 내용"]},
+    {"source": [501, "summary", "c1-s2"], "in": ["논의 내용"], "serious": ["결정·미결 현황"]},
+    {"source": [501, "todo", "c1-t1"], "in": ["할 일"]},
+    {"source": [502, "decisionCheck", 5003], "in": ["결정·미결 현황", "논의 내용"]},
+    {"source": [502, "opinion", "c2-o1"], "in": ["논의 내용"]},
+    {"source": [502, "todo", "c2-t1"], "in": ["할 일"]},
+    {"source": [503, "decision", 5004], "in": ["결정·미결 현황"]},
+    {"source": [503, "summary", "c3-s1"], "in": ["논의 내용"]},
+    {"source": [503, "todo", "c3-t1"], "in": ["할 일"]}
+   ],
+   "tables": [
+    {"field": "결정·미결 현황", "columns": 10, "rows": null},
+    {"field": "할 일", "columns": 10, "rows": 3}
+   ]
+  }
+ ]
+}

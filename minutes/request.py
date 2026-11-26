@@ -1,7 +1,8 @@
 """초안 생성 요청 검사. 명세 2.1·5장. 틀리면 InvalidInput — API 가 접수 전에 400 INVALID_INPUT 으로 바꾼다.
 
 오류 글에는 칸 위치만 쓰고 값은 쓰지 않는다 (응답·로그에 회의 내용이 새지 않게).
-엄격하게: 번호·타입, 양식 필드(1~20개, 이름 1~100자·중복 없음, 종류, AI 채움 설정, 글 20,000자, 설명 2,000자, 표 열 개수 1~8), 요약의 안건이 agendas 에 있는지,
+엄격하게: 번호·타입, 양식 필드(1~20개, 이름 1~100자·중복 없음, 종류, AI 채움 설정, 글 20,000자, 설명 2,000자, 표 열 개수 1~10,
+          AI 가 채우는 표의 열 이름 columnNames: columns 와 같은 개수·30자·| 와 줄바꿈 없음·겹치지 않음), 요약의 안건이 agendas 에 있는지,
           항목 id 중복, 근거 줄 번호, 결정할 사항(안건 목록 1개 이상·번호 중복 없음, 요약의 사항별 결과는 필수),
           이전 줄(previousLines, 600개·글 2,000자 이하)의 칸 타입과 draftEdited
 너그럽게: 모르는 의견 kind(그대로 "의견"으로 보임), 빠진 edited·needsCheck(false), 빠진 summary·opinions·todos(빈 목록),
@@ -12,12 +13,13 @@
 """
 
 from .models import CHECKLIST, FREE, KIND_RANK, LIST, TABLE, TEXT, Field
+from .table import MAX_COLUMN_NAME
 
 MAX_ITEMS = 20
 MAX_ITEM_NAME = 100
 MAX_USER_TEXT = 20_000                  # 사용자가 채우는 필드의 글, 머리글·바닥글 (명세 7.5)
 MAX_DESCRIPTION = 2000                  # 필드 설명 (명세 7.5)
-MAX_TABLE_COLUMNS = 8                   # 표 필드의 열 개수 (명세 5.8). 양식 편집 화면의 열 수 상한(8)과 같다. 글 필드의 columns 는 읽지 않는다
+MAX_TABLE_COLUMNS = 10                  # 표 필드의 열 개수 (명세 5.8). 양식 편집 화면의 열 수 상한(10)과 같다. 글 필드의 columns 는 읽지 않는다
 FIELD_TYPES = (FREE, LIST, CHECKLIST, TABLE, TEXT)   # text 는 전환 기간 (명세 v0.9)
 MAX_REQUEST_ID = 200
 MAX_PREVIOUS_LINES = 600
@@ -48,7 +50,7 @@ def template_fields(template: dict) -> tuple[list[Field], bool]:
     v0.7 은 template.fields, v0.6 은 template.items(이름 목록 → 모두 글·AI 채움). 둘 다 있으면 fields."""
     if "fields" in template:
         return [Field(f["title"], f["type"], f["aiFill"], f.get("content") or "", f.get("description") or "",
-                      f.get("columns") if f["type"] == TABLE else None)
+                      f.get("columns") if f["type"] == TABLE else None, _column_names(f))
                 for f in template["fields"]], True
     return [Field(name) for name in template["items"]], False
 
@@ -94,12 +96,47 @@ def _fields(fields):
         if f["type"] == TABLE and columns is not None and (
                 isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= MAX_TABLE_COLUMNS):
             raise InvalidInput(f"{where}.columns는 1~{MAX_TABLE_COLUMNS} 사이의 정수여야 함")
+        if f["type"] == TABLE and f["aiFill"]:
+            _check_column_names(f.get("columnNames"), columns, f"{where}.columnNames")
         _optional_str(f.get("description"), f"{where}.description")
         if f.get("description") and len(f["description"]) > MAX_DESCRIPTION:
             raise InvalidInput(f"{where}.description은 {MAX_DESCRIPTION}자 이하여야 함")
         _optional_str(f.get("content"), f"{where}.content")
         if f.get("content") and len(f["content"]) > MAX_USER_TEXT:
             raise InvalidInput(f"{where}.content는 {MAX_USER_TEXT}자 이하여야 함")
+
+
+def _check_column_names(names, columns, where):
+    """사용자가 정한 표 열 이름 (명세 5.8). 없거나 null·[]·모두 빈 글이면 모든 열을 AI 가 정한다.
+    하나라도 이름이 있으면 자리가 중요하므로 columns 와 같은 개수여야 한다. 오류 글에는 자리만 쓴다."""
+    if names is None:
+        return
+    if not isinstance(names, list) or any(not isinstance(n, str) for n in names):
+        raise InvalidInput(f"{where}는 문자열 목록이어야 함")
+    if not any(n.strip() for n in names):
+        return
+    if columns is None or len(names) != columns:
+        raise InvalidInput(f"{where}는 columns와 같은 개수여야 함 (AI가 정할 열은 빈 글)")
+    seen = set()
+    for i, name in enumerate(names):
+        name = name.strip()
+        if not name:
+            continue
+        if len(name) > MAX_COLUMN_NAME:
+            raise InvalidInput(f"{where}[{i}]는 {MAX_COLUMN_NAME}자 이하여야 함")
+        if "|" in name or "\n" in name or "\r" in name:
+            raise InvalidInput(f"{where}[{i}]에 | 나 줄바꿈이 있음")
+        if name in seen:
+            raise InvalidInput(f"{where}[{i}]가 앞의 열 이름과 겹침")
+        seen.add(name)
+
+
+def _column_names(f: dict) -> tuple[str, ...]:
+    """검사를 통과한 필드의 열 이름. 이름이 하나도 없으면 빈 튜플 (모든 열을 AI 가 정함)."""
+    names = f.get("columnNames") if f["type"] == TABLE and f["aiFill"] else None
+    if not names or not any(n.strip() for n in names):
+        return ()
+    return tuple(n.strip() for n in names)
 
 
 def _agendas(agendas) -> set:

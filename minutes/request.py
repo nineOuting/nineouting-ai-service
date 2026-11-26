@@ -1,7 +1,7 @@
 """초안 생성 요청 검사. 명세 2.1·5장. 틀리면 InvalidInput — API 가 접수 전에 400 INVALID_INPUT 으로 바꾼다.
 
 오류 글에는 칸 위치만 쓰고 값은 쓰지 않는다 (응답·로그에 회의 내용이 새지 않게).
-엄격하게: 번호·타입, 양식 필드(1~20개, 이름 1~100자·중복 없음, 종류, AI 채움 설정, 글 20,000자, 설명 2,000자, 표 열 개수 1~8), 요약의 안건이 agendas 에 있는지,
+엄격하게: 번호·타입, 양식 필드(1~20개, 이름 1~100자·중복 없음, 종류, AI 채움 설정, 글 20,000자, 설명 2,000자, 표 열 개수 1~10), 요약의 안건이 agendas 에 있는지,
           항목 id 중복, 근거 줄 번호, 결정할 사항(안건 목록 1개 이상·번호 중복 없음, 요약의 사항별 결과는 필수),
           이전 줄(previousLines, 600개·글 2,000자 이하)의 칸 타입과 draftEdited
 너그럽게: 모르는 의견 kind(그대로 "의견"으로 보임), 빠진 edited·needsCheck(false), 빠진 summary·opinions·todos(빈 목록),
@@ -17,7 +17,7 @@ MAX_ITEMS = 20
 MAX_ITEM_NAME = 100
 MAX_USER_TEXT = 20_000                  # 사용자가 채우는 필드의 글, 머리글·바닥글 (명세 7.5)
 MAX_DESCRIPTION = 2000                  # 필드 설명 (명세 7.5)
-MAX_TABLE_COLUMNS = 8                   # 표 필드의 열 개수 (명세 5.8). 양식 편집 화면의 열 수 상한(8)과 같다. 글 필드의 columns 는 읽지 않는다
+MAX_TABLE_COLUMNS = 10                  # 표 필드의 열 개수 (명세 5.8). 양식 편집 화면의 열 수 상한(10)과 같다. 글 필드의 columns 는 읽지 않는다
 FIELD_TYPES = (FREE, LIST, CHECKLIST, TABLE, TEXT)   # text 는 전환 기간 (명세 v0.9)
 MAX_REQUEST_ID = 200
 MAX_PREVIOUS_LINES = 600

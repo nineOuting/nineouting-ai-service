@@ -16,7 +16,7 @@ from .models import Field, Material, Table
 from .placement import Outcome, Prompt, _one_line, _quote, ask, load_prompt
 
 TABLE_KIND = "table"
-MAX_COLUMNS = 6                 # columns 를 받지 못했을 때 AI 가 스스로 정하는 열 수의 상한 (columns 를 받으면 그 개수 그대로, 요청 검사의 상한은 request.py 의 8)
+MAX_COLUMNS = 6                 # columns 를 받지 못했을 때 AI 가 스스로 정하는 열 수의 상한 (columns 를 받으면 그 개수 그대로, 요청 검사의 상한은 request.py 의 10)
 MAX_COLUMN_NAME = 30
 _SPACE = re.compile(r"\s+")
 _QUOTED = re.compile(r"「([^」]*)」")

@@ -7,12 +7,12 @@
                     옛 doc·xls, hwp·hwpx, pptx, 이미지는 unsupported_format
   2. AI 에게 묻기   줄 번호가 붙은 글을 주고 항목 제목의 줄 번호(ref), 기록 방식, 표의 열 개수, 설명 줄, 머리글·바닥글 줄을 받는다
   3. 코드 검사      제목이 그 줄에 실제로 있는지(한 줄에 "회의명 일시"처럼 칸 이름이 여럿이면 줄에 나온 순서대로 같은 줄 번호),
-                    줄 번호가 있는지, 순서·중복·개수(1~20), 기록 방식, 표의 열 개수(1~8),
+                    줄 번호가 있는지, 순서·중복·개수(1~20), 기록 방식, 표의 열 개수(센 값 1~12),
                     머리글은 첫 쪽의 위쪽 줄·바닥글은 마지막 쪽의 아래쪽 줄인지. 걸리면 이유를 붙여 다시 시킨다 (placement.ask)
   4. 글은 코드가 정함  설명·머리글·바닥글은 AI 가 쓴 글이 아니라 AI 가 고른 줄의 원문을 코드가 이어 붙인 것이다
                     체크리스트인데 체크박스 글자(☐ □ [ ])가 그 항목 안에 없으면 종류는 그대로 두고 경고(CHECKLIST_NO_BOX)를 남긴다.
                     설명 줄에 빈칸(____)이 있으면 서식 문장이라 설명에서 빼고 경고(DESCRIPTION_DROPPED)를 남긴다.
-                    표의 열이 8보다 많으면 8로 자르고 센 값을 경고(COLUMNS_CAPPED, detected)로 남긴다 (명세 5.8 의 상한)
+                    표의 열이 10보다 많으면 10으로 자르고 센 값을 경고(COLUMNS_CAPPED, detected)로 남긴다 (명세 5.8 의 상한)
 
 결과 모양은 회의록 초안 명세 5.8 TemplateField 와 같다: {"title", "type", "columns"?, "description"?, "aiFill": true}.
 `aiFill` 은 모두 true 로 둔다 (가져온 항목을 AI 가 채울지는 아직 정하지 않았다. docs/api/template-import-contract.md).
@@ -37,7 +37,7 @@ MAX_CHARS = 20_000                    # 제안값. 한 번에 AI 에 보내는 �
 MAX_FIELDS = 20                       # 회의록 초안 명세 5.1 template.fields 1~20개
 MAX_TITLE = 100                       # 명세 5.8 title 1~100자
 MAX_DESCRIPTION = 2000                # 명세 5.8 description
-MAX_COLUMNS = 8                       # 명세 5.8 columns 1~8 (양식 편집 화면 상한과 같다). 이보다 많은 표는 8로 자르고 경고(COLUMNS_CAPPED)로 센 값을 알린다
+MAX_COLUMNS = 10                      # 명세 5.8 columns 1~10 (양식 편집 화면 상한과 같다). 이보다 많은 표는 10으로 자르고 경고(COLUMNS_CAPPED)로 센 값을 알린다
 MAX_COUNTED_COLUMNS = 12              # AI 가 셀 수 있는 열 개수 (상한보다 넉넉히). 넘으면 다시 시킨다
 EDGE_LINES = 5                        # 머리글은 쪽의 위 5줄, 바닥글은 아래 5줄 안에서만 받는다
 TYPES = ("free", "list", "checklist", "table")
@@ -47,7 +47,7 @@ _SPACE = re.compile(r"\s+")
 
 CHECKLIST_NO_BOX = "CHECKLIST_NO_BOX"      # 체크리스트인데 그 항목 안에서 체크박스 글자를 못 찾음 (종류는 AI 가 고른 대로 둔다)
 DESCRIPTION_DROPPED = "DESCRIPTION_DROPPED"  # 빈칸(____)이 든 서식 문장은 쓰는 방법 안내가 아니라 양식 본문이라 설명으로 쓰지 않고 뺐다
-COLUMNS_CAPPED = "COLUMNS_CAPPED"          # 표의 열이 상한(8)보다 많아 8로 잘랐다. detected 에 센 값
+COLUMNS_CAPPED = "COLUMNS_CAPPED"          # 표의 열이 상한(10)보다 많아 10으로 잘랐다. detected 에 센 값
 
 
 @dataclass(frozen=True)

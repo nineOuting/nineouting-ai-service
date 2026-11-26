@@ -189,13 +189,13 @@ def test_체크박스가_없는_체크리스트는_종류를_두고_경고만_�
     assert got.warnings == [{"code": ti.CHECKLIST_NO_BOX, "title": "결정 사항"}]       # 체크박스가 있는 칸은 경고 없음
 
 
-def test_열이_8보다_많은_표는_8로_자르고_센_값을_경고로_남긴다(lines):
+def test_열이_10보다_많은_표는_10으로_자르고_센_값을_경고로_남긴다(lines):
     data = good(lines)
-    data["fields"][4]["columns"] = 10
+    data["fields"][4]["columns"] = 12
     got, problems = ti.check(data, lines)
-    assert problems == [] and got.fields[4]["columns"] == 8
-    assert got.warnings == [{"code": ti.COLUMNS_CAPPED, "title": "할 일", "detected": 10}]
-    data["fields"][4]["columns"] = 8
+    assert problems == [] and got.fields[4]["columns"] == 10
+    assert got.warnings == [{"code": ti.COLUMNS_CAPPED, "title": "할 일", "detected": 12}]
+    data["fields"][4]["columns"] = 10
     assert ti.check(data, lines)[0].warnings == []
 
 

@@ -23,7 +23,6 @@ jobs:
         env:
           TRIVY_CONFIG: /dev/null
           TRIVY_IGNOREFILE: /dev/null
-          TRIVY_SECRET_CONFIG: /dev/null
         with:
           version: v0.76.2
           scan-type: config
@@ -109,7 +108,6 @@ jobs:
         env:
           TRIVY_CONFIG: /dev/null
           TRIVY_IGNOREFILE: /dev/null
-          TRIVY_SECRET_CONFIG: /dev/null
         with:
           version: v0.76.2
           image-ref: nineouting-verified:local
@@ -139,7 +137,6 @@ jobs:
         env:
           TRIVY_CONFIG: /dev/null
           TRIVY_IGNOREFILE: /dev/null
-          TRIVY_SECRET_CONFIG: /dev/null
         with:
           version: v0.76.2
           skip-setup-trivy: true

@@ -9,13 +9,15 @@ import unittest
 import io
 import shutil
 import tarfile
+import sys
+import time
 
 SCRIPT = Path(__file__).with_name('publish-dev-ecr.sh').resolve()
 CONFIG = b'{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}'
 CONFIG_DIGEST = 'sha256:' + hashlib.sha256(CONFIG).hexdigest()
 MANIFEST_DIGEST = 'sha256:' + 'e' * 64
 MOCK = r'''#!/usr/bin/env python3
-import hashlib, io, json, os, sys, tarfile
+import hashlib, io, json, os, sys, tarfile, time
 a = sys.argv[1:]
 case = os.environ['CASE']
 config = b'{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}'
@@ -37,7 +39,13 @@ elif a[:2] == ['image', 'save']:
     remote = 'amazonaws.com/' in a[-1]
     if os.environ.get('REAL_DOCKER_BIN'):
         import subprocess
-        sys.exit(subprocess.call([os.environ['REAL_DOCKER_BIN'], 'image', 'save', '--output', a[a.index('--output') + 1], os.environ['REAL_DOCKER_IMAGE']]))
+        label = 'pulled-image' if remote else 'local-image'
+        started = time.perf_counter()
+        print(f'CI_IMAGE_SAVE label={label} event=start', file=sys.stderr, flush=True)
+        status = subprocess.call([os.environ['REAL_DOCKER_BIN'], 'image', 'save', '--output', a[a.index('--output') + 1], os.environ['REAL_DOCKER_IMAGE']])
+        elapsed = time.perf_counter() - started
+        print(f'CI_IMAGE_SAVE label={label} event=complete seconds={elapsed:.3f} exit_code={status}', file=sys.stderr, flush=True)
+        sys.exit(status)
     if case == 'save-fails' or (case == 'pulled-save-fails' and remote):
         sys.exit(1)
     if case == 'wrong-pulled-config' and remote:
@@ -93,8 +101,20 @@ class Publish(unittest.TestCase):
                 GITHUB_OUTPUT=str(root / 'output'), GITHUB_STEP_SUMMARY=str(root / 'summary'),
             )
             env.update(overrides or {})
-            result = subprocess.run(['bash', str(SCRIPT)], cwd=root, env=env,
-                                    capture_output=True, text=True, timeout=30)
+            started = time.perf_counter()
+            try:
+                result = subprocess.run(['bash', str(SCRIPT)], cwd=root, env=env,
+                                        capture_output=True, text=True, timeout=120)
+            except subprocess.TimeoutExpired as error:
+                elapsed = time.perf_counter() - started
+                print(f'CI_PUBLISH_SCRIPT event=timeout seconds={elapsed:.3f} limit_seconds=120',
+                      file=sys.stderr, flush=True)
+                for captured in (error.stdout, error.stderr):
+                    if captured:
+                        sys.stderr.write(captured if isinstance(captured, str)
+                                         else captured.decode(errors='replace'))
+                sys.stderr.flush()
+                raise
             calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()] if (root / 'calls').exists() else []
             read = lambda name: (root / name).read_text() if (root / name).exists() else ''
             return result, calls, read('image-result.txt'), read('output'), read('summary')
@@ -115,7 +135,19 @@ class Publish(unittest.TestCase):
         docker = shutil.which('docker')
         self.assertIsNotNone(docker)
         image = os.environ['REAL_DOCKER_TEST_IMAGE']
-        saved = subprocess.run([docker, 'image', 'save', image], check=True, capture_output=True).stdout
+        started = time.perf_counter()
+        print('CI_IMAGE_SAVE label=precheck-local-image event=start', file=sys.stderr, flush=True)
+        try:
+            saved = subprocess.run([docker, 'image', 'save', image], check=True,
+                                   capture_output=True).stdout
+        except subprocess.CalledProcessError as error:
+            elapsed = time.perf_counter() - started
+            print(f'CI_IMAGE_SAVE label=precheck-local-image event=failed seconds={elapsed:.3f} exit_code={error.returncode}',
+                  file=sys.stderr, flush=True)
+            raise
+        elapsed = time.perf_counter() - started
+        print(f'CI_IMAGE_SAVE label=precheck-local-image event=complete seconds={elapsed:.3f} exit_code=0',
+              file=sys.stderr, flush=True)
         with tarfile.open(fileobj=io.BytesIO(saved)) as archive:
             manifest = json.load(archive.extractfile('manifest.json'))
             config_bytes = archive.extractfile(manifest[0]['Config']).read()
@@ -124,6 +156,8 @@ class Publish(unittest.TestCase):
             'REAL_DOCKER_BIN': docker, 'REAL_DOCKER_IMAGE': image,
             'REAL_CONFIG_DIGEST': config_digest,
         })
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, end='')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('image.digest=' + MANIFEST_DIGEST, evidence)
         self.assertIn('image_digest=' + MANIFEST_DIGEST, output)

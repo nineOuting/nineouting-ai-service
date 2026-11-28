@@ -1,5 +1,6 @@
 """대기열·작업자 시험 (시험 DB 필요). 임베더와 백엔드는 가짜를 쓴다."""
 import copy
+import dataclasses
 import json
 import threading
 import time
@@ -218,6 +219,17 @@ def test_업로드_실패는_다시_시도하지_않고_바로_알린다(conn, f
     make_worker(conn, fake_embedder, backend, upload=storage.settings()).process_one()
     assert backend.bodies[0]["status"] == "failed" and backend.bodies[0]["errorCode"] == code
     assert job_rows(conn)[0][3:5] == ("failed", 1)
+
+
+def test_받지_않는_형식은_unsupported_format(conn, fake_embedder, storage):
+    """RAG_UPLOAD_FORMATS 에서 뺀 형식은 읽을 수 있어도 받지 않는다"""
+    backend = FakeBackend()
+    storage.files["/ws/1/notes"] = (Path(__file__).parent / "fixtures" / "upload_notes_cp949.txt").read_bytes()
+    submit(conn, request(source="upload", version="sha256:off", file_url=storage.url("/ws/1/notes")))
+    upload = dataclasses.replace(storage.settings(), formats=frozenset({"pdf", "docx"}))
+    make_worker(conn, fake_embedder, backend, upload=upload).process_one()
+    assert backend.bodies[0]["status"] == "failed" and backend.bodies[0]["errorCode"] == "unsupported_format"
+    assert chunk_count(conn, 1) == 0
 
 
 def test_일시_실패는_뒤로_미뤄_다시_처리(conn, fake_embedder):

@@ -106,6 +106,8 @@ class Worker:
         elif source == "upload":
             data = fetch(job.payload.get("fileUrl"), self.upload)
             kind = detect(data)
+            if kind not in self.upload.formats:
+                raise IngestError(UNSUPPORTED_FORMAT, f"{kind} 형식은 받지 않음 (RAG_UPLOAD_FORMATS)")
             loaders = {PDF: load_pdf, DOCX: load_docx, XLSX: load_xlsx, TEXT: load_text}
             if kind not in loaders:
                 raise IngestError(UNSUPPORTED_FORMAT, f"{UPLOAD_NOT_READY} ({kind})")

@@ -333,6 +333,7 @@ set -a; . ./.env; set +a                 # DB 시험을 돌리려면 (없으면 
 | `RAG_UPLOAD_ALLOWED_HOSTS` | 업로드 문서를 받을 저장소 호스트 (S3 버킷 주소 등, 쉼표로). **비어 있으면 업로드 문서를 받지 않음** (콜백과 달리 모두 허용이 없음) |
 | `RAG_UPLOAD_MAX_MB` | 업로드 파일 최대 크기(MB). 백엔드의 사전 자료 상한과 같게 둔다. 이보다 작은 파일도 글이 많으면 `RAG_MAX_DOC_TOKENS` 로 `too_large` 가 난다. 기본 50 |
 | `RAG_UPLOAD_TIMEOUT_S` | 파일 받기 시간 제한(초). 기본 30 |
+| `RAG_UPLOAD_FORMATS` | 받는 파일 형식 (쉼표로: `pdf`, `docx`, `xlsx`, `text`. `text` 는 txt·md·csv 같은 글 파일). 형식은 확장자가 아니라 내용으로 판단하고, 목록에 없으면 `unsupported_format`. 모르는 이름이 있으면 서버가 뜨지 않는다. 기본은 넷 다 |
 | `RAG_MAX_DOC_TOKENS` | 문서 하나의 조각 토큰 합계 상한. 넘으면 임베딩 전에 `too_large`. 임베딩 시간이 토큰 수에 비례해서 둔다 (기본 100000, 합성 문서로 PDF 약 145쪽·엑셀 약 2,000행). 처리 완료 로그의 `tokens`·`걸린시간`으로 서버 속도를 보고 조정 |
 | `RAG_TORCH_THREADS` | 임베딩 스레드 수 (작업자·답변이 같이 씀) (기본 2). 같은 노드의 STT 와 CPU 를 나눠 쓰려고 |
 | `RAG_DB_STATEMENT_TIMEOUT_MS`, `RAG_DB_IDLE_TX_TIMEOUT_MS` | 작업자 DB 연결의 시간 제한 (기본 30000, 60000) |

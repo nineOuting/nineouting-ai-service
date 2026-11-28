@@ -28,6 +28,17 @@ def test_설정값을_읽는다():
     assert s.allowed_hosts == {"bucket.s3.test", "other:9000"} and s.max_bytes == 5 * 1024 * 1024 and s.timeout_s == 7
 
 
+def test_받는_형식은_기본이_넷이고_환경변수로_줄인다():
+    assert settings_from_env({}).formats == {PDF, DOCX, XLSX, TEXT}
+    assert settings_from_env({"RAG_UPLOAD_FORMATS": " PDF, docx ,"}).formats == {PDF, DOCX}
+
+
+@pytest.mark.parametrize("raw", ["pdf,csv", ",", "hwp"])
+def test_모르는_형식_이름이면_ValueError(raw):
+    with pytest.raises(ValueError, match="RAG_UPLOAD_FORMATS"):
+        settings_from_env({"RAG_UPLOAD_FORMATS": raw})
+
+
 @pytest.mark.parametrize("url, word", [
     (None, "fileUrl 이 없음"),
     ("", "fileUrl 이 없음"),

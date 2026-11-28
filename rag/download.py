@@ -17,9 +17,11 @@ from urllib.parse import urlsplit
 
 from shared.callback import allowed_hosts_from_env
 from .errors import DOWNLOAD_FAILED, TOO_LARGE, URL_EXPIRED, IngestError
+from .filetype import DOCX, PDF, TEXT, XLSX
 
 DEFAULT_MAX_MB = 50               # 백엔드 사전 자료 상한과 같게 (2026-11-12). 처리 시간은 RAG_MAX_DOC_TOKENS 가 막는다
 DEFAULT_TIMEOUT_S = 30.0
+ALL_FORMATS = frozenset({PDF, DOCX, XLSX, TEXT})   # 읽을 수 있는 형식 (TEXT 는 txt·md·csv 같은 글 파일). 기본은 모두 받는다
 _READ_BLOCK = 64 * 1024
 _EXPIRED_MARK = b"Request has expired"   # 서명 주소가 만료되면 S3 가 403 본문에 담는 글
 
@@ -33,6 +35,7 @@ class UploadSettings:
     allowed_hosts: frozenset | None       # None 이면 업로드 문서를 받지 않는다
     max_bytes: int
     timeout_s: float
+    formats: frozenset = ALL_FORMATS      # 받는 형식. 파일 내용으로 알아낸 형식이 여기 없으면 unsupported_format
 
     @property
     def enabled(self) -> bool:
@@ -46,7 +49,19 @@ def settings_from_env(env) -> UploadSettings:
     max_mb = float(env.get("RAG_UPLOAD_MAX_MB") or DEFAULT_MAX_MB)
     return UploadSettings(allowed_hosts=allowed_hosts_from_env(env, key="RAG_UPLOAD_ALLOWED_HOSTS"),
                           max_bytes=int(max_mb * 1024 * 1024),
-                          timeout_s=float(env.get("RAG_UPLOAD_TIMEOUT_S") or DEFAULT_TIMEOUT_S))
+                          timeout_s=float(env.get("RAG_UPLOAD_TIMEOUT_S") or DEFAULT_TIMEOUT_S),
+                          formats=_formats_from_env(env))
+
+
+def _formats_from_env(env) -> frozenset:
+    """RAG_UPLOAD_FORMATS (쉼표로 구분: pdf, docx, xlsx, text). 비면 모두. 모르는 이름이 있으면 ValueError."""
+    raw = (env.get("RAG_UPLOAD_FORMATS") or "").strip()
+    if not raw:
+        return ALL_FORMATS
+    names = {x.strip().lower() for x in raw.split(",") if x.strip()}
+    if not names or names - ALL_FORMATS:
+        raise ValueError(f"RAG_UPLOAD_FORMATS 는 {', '.join(sorted(ALL_FORMATS))} 중에서 고른다")
+    return frozenset(names)
 
 
 def check_file_url(url, settings: UploadSettings) -> None:
